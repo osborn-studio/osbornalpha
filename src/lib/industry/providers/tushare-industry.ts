@@ -192,9 +192,21 @@ export interface DailyBasicRow{ts_code:string;trade_date:string;close:string|nul
 
 const asText=<T>(f:string[],items:unknown[][])=>decodeText(f,items) as unknown as T[];
 
-/** stock_basic for one list_status ('L' listed, 'D' delisted, 'P' paused). */
-export function fetchStockBasic(call:TushareCall,q:{listStatus:'L'|'D'|'P'},opts:FetchOptions={}):Promise<TusharePage<StockBasicRow>[]>{
- return fetchPaged(call,'stock_basic',{list_status:q.listStatus},STOCK_BASIC_FIELDS,asText<StockBasicRow>,opts);
+/** stock_basic for one list_status ('L' listed, 'D' delisted, 'P' paused) and optionally one exact ticker. */
+export function fetchStockBasic(call:TushareCall,q:{listStatus:'L'|'D'|'P';tsCode?:string},opts:FetchOptions={}):Promise<TusharePage<StockBasicRow>[]>{
+ const params={list_status:q.listStatus};
+ if(q.tsCode===undefined)return fetchPaged(call,'stock_basic',params,STOCK_BASIC_FIELDS,asText<StockBasicRow>,opts);
+ const tsCode=q.tsCode;
+ const scopedCall:TushareCall=async(api,request,fields)=>{
+  const response=await call(api,request,fields);
+  const tickerColumn=response.fields.indexOf('ts_code');
+  const statusColumn=response.fields.indexOf('list_status');
+  // Refuse an ignored filter or ambiguous result before the paging layer stores its raw response.
+  if(response.has_more||response.items.length>1||response.items.some(row=>row[tickerColumn]!==tsCode||row[statusColumn]!==q.listStatus))
+   throw new IndustryProviderError('row_shape',`stock_basic_scope_mismatch:${tsCode}:${q.listStatus}`);
+  return response;
+ };
+ return fetchPaged(scopedCall,'stock_basic',{...params,ts_code:tsCode},STOCK_BASIC_FIELDS,asText<StockBasicRow>,opts);
 }
 /** index_classify for one level of SW2021 (src defaults to SW2014 upstream, so it is always passed). */
 export function fetchIndexClassify(call:TushareCall,q:{level:'L1'|'L2'|'L3';src?:'SW2021'},opts:FetchOptions={}):Promise<TusharePage<IndexClassifyRow>[]>{

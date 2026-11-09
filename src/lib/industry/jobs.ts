@@ -19,6 +19,7 @@ import {runClassificationsSw} from './classifications';
 import {supabaseIndustryDb} from './db';
 import {industryCnUniverse} from './facts-scope';
 import {runLoadAShare} from './load-a-share';
+import {validateAShareTickers} from './a-share-selection';
 import {supabaseManifestStore} from './manifest';
 import {runMarks} from './marks';
 import type {DailyBasicFetch} from './marks';
@@ -40,7 +41,7 @@ export const isIndustryJob=(s:string):s is IndustryJob=>(INDUSTRY_JOBS as readon
 
 /** What every job answers. The runners of Tasks 5–13 keep their own receipts; runIndustryJob maps them here. */
 export interface RunnerReceipt{batchId:string|null;status:'success'|'partial'|'failed'|'dry_run';counts:Record<string,number>;errors:{code:string;key?:string;message?:string}[]}
-export interface IndustryJobOptions{dryRun:boolean;triggeredBy:'cron'|'script';limit?:number;factsAsOf?:string;tradeDates?:string[];l1Codes?:string[];today?:string}
+export interface IndustryJobOptions{dryRun:boolean;triggeredBy:'cron'|'script';limit?:number;tickers?:string[];factsAsOf?:string;tradeDates?:string[];l1Codes?:string[];today?:string}
 export type IndustryJobResult={job:IndustryJob;skipped:'deferred_i3'}|{job:IndustryJob;receipt:RunnerReceipt};
 /** IndustryDeps plus the full plan-2 FactsDb surface facts-scope needs (reconcileScope; IndustryDeps.facts is read-only). */
 /** `snapshots`: plan-2 raw-bytes store (bucket disclosure-raw). When set, every Tushare page the jobs fetch is stored before its rows are used (spec §4.4 evidence). */
@@ -77,12 +78,16 @@ export function marksFetcher(call:TushareCall,snapshots?:SnapshotCapture):(trade
 }
 
 export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:IndustryJobOptions):Promise<IndustryJobResult>{
+ if(opts.tickers!==undefined){
+  if(job!=='load-a-share')throw new Error('--ticker is only supported by load-a-share');
+  validateAShareTickers(opts.tickers);
+ }
  if(DEFERRED_JOBS.has(job))return {job,skipped:'deferred_i3'};
  const triggeredBy=opts.triggeredBy;
  switch(job){
   case 'load-a-share':{
    // --limit caps the cninfo org-id lookups of one run (Task 5 maxLookups)
-   const r=await runLoadAShare(deps,{apply:!opts.dryRun,triggeredBy,today:opts.today,maxLookups:opts.limit,...captureOf(deps)});
+   const r=await runLoadAShare(deps,{apply:!opts.dryRun,triggeredBy,today:opts.today,maxLookups:opts.limit,...(opts.tickers===undefined?{}:{tickers:opts.tickers}),...captureOf(deps)});
    return {job,receipt:{batchId:r.batchId,status:receiptStatus(r.status),counts:r.apply?countsOf(r.apply.counts):{candidates:r.plan.candidates,...prefixed(r.plan.skipped,'skipped.'),...prefixed(r.plan.rejected,'rejected.')},errors:r.apply?.errors??[]}};
   }
   case 'facts-scope':{
@@ -151,10 +156,10 @@ export function productionIndustryDeps(opts:ProductionIndustryDepsOptions):Indus
  return {tables:supabaseTableClient(sb),db,facts,scopeDb:facts,manifests:supabaseManifestStore(sb,db),snapshots:supabaseSnapshotStore(sb),now:opts.now??(()=>new Date()),codeVersion:opts.codeVersion,fetch:globalThis.fetch};
 }
 
-export interface SyncArgs{job:IndustryJob;apply:boolean;limit?:number;factsAsOf?:string;tradeDates:string[];l1Codes:string[];recomputeFrom?:string}
-export const SYNC_USAGE='usage: sync.ts --job <load-a-share|facts-scope|memberships-sw|memberships-sic|marks|official|aggregate|valuation> [--apply] [--limit n] [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]';
+export interface SyncArgs{job:IndustryJob;apply:boolean;limit?:number;tickers?:string[];factsAsOf?:string;tradeDates:string[];l1Codes:string[];recomputeFrom?:string}
+export const SYNC_USAGE='usage: sync.ts --job <load-a-share|facts-scope|memberships-sw|memberships-sic|marks|official|aggregate|valuation> [--apply] [--limit n] [--ticker <canonical-CN-ticker>]... [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]';
 const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
-const VALUE_FLAGS=new Set(['--job','--limit','--facts-as-of','--trade-date','--l1','--recompute-from']);
+const VALUE_FLAGS=new Set(['--job','--limit','--ticker','--facts-as-of','--trade-date','--l1','--recompute-from']);
 /** Pure argv parser of scripts/industry/sync.ts; errors carry the message printed before exit 2. */
 export function parseSyncArgs(argv:string[]):{ok:true;args:SyncArgs}|{ok:false;error:string}{
  let job:string|undefined;const a:Omit<SyncArgs,'job'>={apply:false,tradeDates:[],l1Codes:[]};
@@ -167,12 +172,17 @@ export function parseSyncArgs(argv:string[]):{ok:true;args:SyncArgs}|{ok:false;e
   i++;
   if(x==='--job')job=val;
   else if(x==='--limit'){const n=Number(val);if(!Number.isInteger(n)||n<1||n>5000)return {ok:false,error:'--limit must be 1..5000'};a.limit=n;}
+  else if(x==='--ticker'){(a.tickers??=[]).push(val);}
   else if(x==='--facts-as-of'){if(!DATE_RE.test(val))return {ok:false,error:'--facts-as-of must be YYYY-MM-DD'};a.factsAsOf=val;}
   else if(x==='--trade-date'){if(!DATE_RE.test(val))return {ok:false,error:'--trade-date must be YYYY-MM-DD'};a.tradeDates.push(val);}
   else if(x==='--l1'){if(!/^[0-9]{6}\.SI$/.test(val))return {ok:false,error:'--l1 must look like 801120.SI'};a.l1Codes.push(val);}
   else{if(!DATE_RE.test(val))return {ok:false,error:'--recompute-from must be YYYY-MM-DD'};a.recomputeFrom=val;}
  }
  if(job===undefined||!isIndustryJob(job))return {ok:false,error:SYNC_USAGE};
+ if(a.tickers!==undefined){
+  if(job!=='load-a-share')return {ok:false,error:'--ticker is only supported by load-a-share'};
+  try{validateAShareTickers(a.tickers);}catch(e){return {ok:false,error:(e as Error).message};}
+ }
  if(a.limit!==undefined&&job!=='load-a-share'&&job!=='memberships-sic')return {ok:false,error:'--limit is only supported by load-a-share (cninfo lookups) and memberships-sic (issuer processing); it does not bound the whole job'};
  if(a.recomputeFrom!==undefined&&job!=='valuation')return {ok:false,error:'--recompute-from belongs to the (deferred) valuation job'};
  return {ok:true,args:{job,...a}};

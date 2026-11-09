@@ -265,6 +265,110 @@ describe('runLoadAShare (real stock_basic recordings: 10 listed, 2 delisted)',()
   expect((await d.db.delistings()).find(r=>r.ts_code==='002770.SZ')).toMatchObject({delist_date:'2022-07-01',batch_id:third.batchId});
   expect(t.rows('dq_quarantine').map(q=>[q.reason_code,q.natural_key,q.detail])).toEqual([['delist_date_changed','stock_basic:002770.SZ',{old_date:'2022-06-23',new_date:'2022-07-01'}]]);
  });
+ it('explicit selection bounds inserts, fast-path duplicate claims, and delistings even with a lookup limit',async()=>{
+  const t=tablesFor();const d=depsFor(t);await seedUniverse(d);
+  for(const [id,ticker] of [['selected','600519.SH'],['unrelated','000858.SZ']]){
+   await t.insert('issuers',{issuer_id:id,cninfo_org_id:`org${ticker.slice(0,6)}`,status:'active'});
+   await t.insert('issuer_securities',{issuer_id:id,ticker,valid_from:'2026-01-05',valid_to:null,source:'seed',provenance:{}});
+  }
+  const lookup=vi.fn(async(symbol:string)=>({orgId:`org${symbol}`,name:symbol,category:'A股'}));
+  const tushare=vi.fn(d.tushare!);d.tushare=tushare;
+  const result=await runLoadAShare(d,{apply:true,tickers:['600519.SH','600036.SH'],maxLookups:1,sleep:noSleep,lookupOrgId:lookup});
+  expect(result).toMatchObject({status:'success',exitCode:0});
+  expect(result.apply!.counts).toMatchObject({fetched:2,duplicates:1,inserted:1});
+  expect(tushare.mock.calls.map(([,params])=>[params.list_status,params.ts_code])).toEqual([
+   ['L','600519.SH'],['L','600036.SH'],['P','600519.SH'],['P','600036.SH'],['D','600519.SH'],['D','600036.SH'],
+  ]);
+  expect(t.rows('ingest_batches')).toEqual([expect.objectContaining({dataset:'issuers.a_stock.targeted',tool_versions:{tickers:'600519.SH,600036.SH'}})]);
+  expect(t.rows('dq_freshness')).toEqual([]);
+  expect(lookup.mock.calls.map(c=>c[0])).toEqual(['600036']);
+  expect(t.rows('issuer_securities').map(r=>r.ticker).sort()).toEqual(['000858.SZ','600036.SH','600519.SH']);
+  expect(t.rows('issuer_identifier_claims').map(r=>r.value)).toEqual(['600519.SH']);
+  expect(await d.db.delistings()).toEqual([]);
+  expect(t.rows('dq_quarantine')).toEqual([]);
+  const dry=await runLoadAShare(d,{apply:false,tickers:['600036.SH'],sleep:noSleep});
+  expect(dry.plan).toEqual({candidates:1,skipped:{},rejected:{}});
+ });
+ it('fails before snapshots or issuer writes when Tushare ignores the explicit filter',async()=>{
+  const t=tablesFor();const d=depsFor(t);await seedUniverse(d);
+  const call=d.tushare!;
+  d.tushare=(api,params,fields)=>call(api,{list_status:params.list_status},fields);
+  const put=vi.fn();
+  await expect(runLoadAShare(d,{apply:true,tickers:['600519.SH'],sleep:noSleep,snapshots:{store:{put}}}))
+   .rejects.toThrow('stock_basic_scope_mismatch:600519.SH:L');
+  expect(put).not.toHaveBeenCalled();
+  expect(t.rows('issuers')).toEqual([]);
+  expect(t.rows('dq_freshness')).toEqual([]);
+ });
+ it('reports partial when a selected security exceeds the lookup limit',async()=>{
+  const t=tablesFor();const d=depsFor(t);await seedUniverse(d);
+  const result=await runLoadAShare(d,{apply:true,tickers:['600519.SH','600036.SH'],maxLookups:1,sleep:noSleep,lookupOrgId:realLookup});
+  expect(result).toMatchObject({status:'partial',exitCode:1,apply:{skippedSummary:{lookup_deferred:1}}});
+  expect(result.apply!.errors).toContainEqual(expect.objectContaining({code:'explicit_ticker_unresolved'}));
+  expect(t.rows('dq_freshness')).toEqual([]);
+ });
+ it('explicit recheck keeps duplicate claims scoped and preserves unrelated changed delisting evidence',async()=>{
+  const t=tablesFor();const d=depsFor(t);await seedUniverse(d);
+  for(const ticker of ['600519.SH','000858.SZ']){
+   const id=`i-${ticker}`;
+   await t.insert('issuers',{issuer_id:id,cninfo_org_id:`org${ticker.slice(0,6)}`,status:'active'});
+   await t.insert('issuer_securities',{issuer_id:id,ticker,valid_from:'2026-01-05',valid_to:null,source:'seed',provenance:{}});
+  }
+  await d.db.upsertDelistings(BATCH,[{ts_code:'002770.SZ',delist_date:'2022-01-01',list_status:'D',observed_at:NOW,raw_hash:PAGE_SHA}]);
+  const before=await d.db.delistings();
+  const r=await runLoadAShare(d,{apply:true,tickers:['600519.SH'],recheckOrgIds:true,sleep:noSleep,lookupOrgId:realLookup});
+  expect(r.apply!.counts).toMatchObject({duplicates:1,inserted:0});
+  expect(t.rows('issuer_identifier_claims').map(r=>r.value)).toEqual(['600519.SH']);
+  expect(await d.db.delistings()).toEqual(before);
+  expect(r.apply!.errors.map(e=>e.code)).not.toContain('delist_date_changed');
+  expect(t.rows('dq_quarantine')).toEqual([]);
+ });
+ it('explicit selection retains org identity mismatch handling without rewriting the owner',async()=>{
+  const t=tablesFor();const d=depsFor(t);await seedUniverse(d);
+  await t.insert('issuers',{issuer_id:'owner',cninfo_org_id:'original-org',status:'active'});
+  await t.insert('issuer_securities',{issuer_id:'owner',ticker:'600519.SH',valid_from:'2026-01-05',valid_to:null,source:'seed',provenance:{}});
+  const before=t.rows('issuer_securities');
+  const r=await runLoadAShare(d,{apply:true,tickers:['600519.SH'],recheckOrgIds:true,sleep:noSleep,lookupOrgId:realLookup});
+  expect(r.apply!.skippedSummary).toEqual({org_id_mismatch:1});
+  expect(t.rows('issuers').map(r=>r.cninfo_org_id)).toEqual(['original-org']);
+  expect(t.rows('issuer_securities')).toEqual(before);
+  expect(t.rows('issuer_identifier_claims').map(r=>[r.issuer_id,r.op,r.value])).toEqual([['owner','correct_identifier','org600519']]);
+  expect(await d.db.delistings()).toEqual([]);
+ });
+ it('explicit selection retains row eligibility checks in dry run and apply',async()=>{
+  for(const over of [{fullname:'',name:''},{list_date:'20230230'},{ts_code:'900901.SH',symbol:'900901'}]){
+   for(const apply of [false,true]){
+    const t=tablesFor();const d=depsFor(t);const row=sb(over);
+    await t.insert('security_universe_memberships',{ticker:row.ts_code,universe:'a_stock',is_active:true});
+    const call:TushareCall=async(_api,params)=>{
+     const body={fields:Object.keys(row),items:params.list_status==='L'?[Object.values(row)]:[]};
+     return {...body,has_more:false,raw:new TextEncoder().encode(JSON.stringify(body))};
+    };
+    await expect(runLoadAShare({...d,tushare:call},{apply,tickers:[row.ts_code!],sleep:noSleep,lookupOrgId:realLookup})).rejects.toThrow('explicit_ticker_not_eligible');
+    expect(t.rows('issuers')).toEqual([]);expect(t.rows('issuer_identifier_claims')).toEqual([]);
+    expect(await d.db.delistings()).toEqual([]);
+   }
+  }
+ });
+ it('fails the entire explicit selection before business writes for absent or ineligible targets',async()=>{
+  for(const target of ['999999.SH','002770.SZ','000858.SZ']){
+   const t=tablesFor();const d=depsFor(t);await seedUniverse(d);
+   if(target==='000858.SZ')await t.update('security_universe_memberships',{ticker:target},{is_active:false});
+   const lookup=vi.fn(async(symbol:string)=>({orgId:`org${symbol}`,name:symbol,category:'A股'}));
+   await expect(runLoadAShare(d,{apply:true,tickers:['600519.SH',target],sleep:noSleep,lookupOrgId:lookup})).rejects.toThrow('explicit_ticker_not_eligible');
+   expect(lookup).not.toHaveBeenCalled();
+   for(const table of ['issuers','issuer_securities','issuer_identifier_claims','dq_quarantine'])expect(t.rows(table),table).toEqual([]);
+   expect(await d.db.delistings()).toEqual([]);
+  }
+ });
+ it('validates direct loader selection before any I/O, including empty, duplicate and oversized lists',async()=>{
+  for(const tickers of [[],['600519'],['600519.sh'],['600519.SH','600519.SH'],Array.from({length:11},(_,i)=>`${String(i).padStart(6,'0')}.SZ`)]){
+   const d=depsFor();const provider=vi.fn(d.tushare!);d.tushare=provider;
+   await expect(runLoadAShare(d,{apply:true,tickers,sleep:noSleep})).rejects.toThrow('explicit_tickers');
+   expect(provider).not.toHaveBeenCalled();
+   expect((d.tables as ReturnType<typeof tablesFor>).rows('ingest_batches')).toEqual([]);
+  }
+ });
  it('refuses to apply without a code version',async()=>{
   const d={...depsFor(),codeVersion:null};await seedUniverse(d);
   await expect(runLoadAShare(d,{apply:true,sleep:noSleep,lookupOrgId:realLookup})).rejects.toThrow('code_version_missing');

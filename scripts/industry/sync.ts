@@ -2,10 +2,13 @@
  * Industry jobs from the command line (spec §10). Dry run by default.
  *
  *   node --env-file="$HOME/.config/osbornalpha/secrets.env" --import tsx scripts/industry/sync.ts --job <job> [--apply]   (Tushare jobs; never print the token)
- *        [--limit n] [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]
+ *        [--limit n] [--ticker <canonical CN ticker>]... [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]
  *
  * --limit is accepted only for load-a-share (cninfo lookups) and memberships-sic (issuer processing).
- * Neither is a whole-job budget. For memberships-sw, --l1 limits source fetch only: apply loads all
+ * Neither use of --limit is a whole-job budget. --ticker is load-a-share only: repeat for
+ * 1..10 distinct exact canonical CN tickers. It scopes stock_basic reads, snapshots and
+ * issuer/claim writes to those tickers, skips delisting writes and records a targeted receipt.
+ * For memberships-sw, --l1 limits source fetch only: apply loads all
  * SW2021 classifications and runs the global resolver, in separate batches, with no job deadline.
  * Its dry run plans sources from stored classifications; it does not preview the full apply scope.
  * Jobs: load-a-share | facts-scope | memberships-sw | memberships-sic | marks | aggregate, plus the
@@ -34,8 +37,8 @@ async function main(){
  if(gate){console.error(`${gate.code}: ${gate.message}`);process.exit(2);}
  const codeVersion=resolveCodeVersion({allowGit:true})??(args.apply?null:'dry-run');
  if(!codeVersion){console.error('code version unavailable (set VERCEL_GIT_COMMIT_SHA or run inside a git checkout); refusing --apply');process.exit(2);}
- const result=await runIndustryJob(args.job,productionIndustryDeps({codeVersion}),{dryRun:!args.apply,triggeredBy:'script',limit:args.limit,factsAsOf:args.factsAsOf,tradeDates:args.tradeDates.length?args.tradeDates:undefined,l1Codes:args.l1Codes.length?args.l1Codes:undefined});
- console.log(JSON.stringify({mode:args.apply?'apply':'dry-run (nothing written; pass --apply to write)',codeVersion,...result},null,1));
+ const result=await runIndustryJob(args.job,productionIndustryDeps({codeVersion}),{dryRun:!args.apply,triggeredBy:'script',limit:args.limit,tickers:args.tickers,factsAsOf:args.factsAsOf,tradeDates:args.tradeDates.length?args.tradeDates:undefined,l1Codes:args.l1Codes.length?args.l1Codes:undefined});
+ console.log(JSON.stringify({mode:args.apply?'apply':'dry-run (nothing written; pass --apply to write)',codeVersion,tickers:args.tickers,...result},null,1));
  if('skipped' in result)process.exit(0);
  const ok=args.apply?result.receipt.status==='success':result.receipt.status!=='failed';
  process.exit(ok?0:1);
