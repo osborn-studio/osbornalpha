@@ -10,6 +10,7 @@ import type {MemoryFactsDb} from '@/lib/facts/memory-facts-db';
 import type {Market} from '@/lib/facts/types';
 import {DigestError,interleave,runCompanyDigest,selectStreams} from './digest';
 import type {DigestDeps} from './digest';
+import {coverageInput} from './db-contract';
 import {deriveIssuerEvents} from './events';
 import {memorySnapshotObjectStore} from './evidence-index';
 import {memoryCompanyDb} from './memory-company-db';
@@ -73,6 +74,33 @@ describe('selection',()=>{
   const plan=await selectStreams(deps,{mode:'incremental',limit:200},new Date('2026-11-06T12:00:00.000Z'));
   expect(plan).toHaveLength(160);expect(plan.slice(0,20).filter(p=>p.sweep)).toHaveLength(4);
   expect(plan.filter(p=>p.sweep).map(p=>p.issuerId)).toEqual(sw.map(d=>d.issuerId));
+ });
+ it('real retry selection shares the oldest-sweep quota, deduplicates overlap and keeps the 4:1 order',async()=>{
+  const h=harness();const now=new Date('2030-01-10T12:00:00.000Z');
+  const seed=async(sweptAt:string)=>{
+   const id=await stream(h);await disclose(h.facts,id,'2024-02-01','100');
+   h.db.setNow(sweptAt);
+   await h.db.replaceDigest(id,'US',randomUUID(),await h.db.beginAttempt(id,'US',new Date(sweptAt)),randomUUID(),1,true,[],coverageInput());
+   return id;
+  };
+  const old=await seed('2030-01-01T00:00:00.000Z');
+  const inc=[];
+  for(let n=0;n<8;n++){
+   const id=await seed('2030-01-09T00:00:00.000Z');await disclose(h.facts,id,'2024-05-01','110');inc.push(id);
+  }
+  const equal=await seed('2030-01-09T01:00:00.000Z');
+  for(const id of [inc[0],equal]){
+   const at=new Date('2030-01-10T10:00:00.000Z');
+   await h.db.markDigestFailed(id,'US',await h.db.beginAttempt(id,'US',at),at);
+  }
+  const plan=await selectStreams(h.deps,{mode:'incremental',market:'US',limit:10},now);
+  const remaining=inc.slice(1).sort();
+  expect(plan.map(p=>p.issuerId)).toEqual([...remaining.slice(0,4),old,...remaining.slice(4),inc[0]]);
+  expect(plan.filter(p=>p.sweep).map(p=>p.issuerId)).toEqual([old,inc[0]]);
+  expect(new Set(plan.map(p=>p.issuerId)).size).toBe(plan.length);
+  expect(plan).toHaveLength(9); // overlap consumes one of the two sweep slots
+  const wider=await selectStreams(h.deps,{mode:'incremental',market:'US',limit:15},now);
+  expect(wider.filter(p=>p.sweep).map(p=>p.issuerId)).toEqual([old,inc[0],equal]);
  });
  it('full mode: explicit issuers via scopeRows per market, otherwise scopeAll; all sweep; issuerIds without full is rejected',async()=>{
   const h=harness();const a=await stream(h),b=await stream(h),c=await stream(h,'CN');
