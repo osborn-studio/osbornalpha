@@ -178,3 +178,19 @@ until their stream is successfully digested again; deployment alone does not rew
 The owner can use the existing scoped/full digest procedure above after its normal dry-run
 and single-producer checks. This change performs no refresh or production write and does
 not repair upstream date errors in financial observations.
+
+## Current company cache freshness
+
+Nonempty successful public `GET /api/companies/[ticker]/overview` responses for UTC
+today (default or explicit `asOf`) and populated `GET /api/companies` coverage directory
+responses use `Cache-Control: public, max-age=0, s-maxage=60`, without stale-while-revalidate.
+This follows the short shared-cache policy used for fresh materialized metrics. Empty
+responses and errors remain `no-store`; admin overview responses remain `private, no-store`.
+Historical overview `asOf` responses retain `public, max-age=600, s-maxage=3600`, even
+though their coverage decoration is current. The facts cutoff and request keys are unchanged.
+
+The recorded AAPL propagation check observed a default overview cache HIT at age 474
+with pre-rebuild coverage, while an explicit UTC-today MISS returned rebuilt coverage.
+The 60-second policy governs newly served responses; it does not purge existing cache
+entries or prove deployed CDN propagation. Release behavior requires separate authorized
+verification after deployment.

@@ -1,5 +1,5 @@
 // src/app/api/companies/[ticker]/overview/route.test.ts
-import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import type {KitDeps} from '@/lib/company/route-test-kit';
 
 const mocks=vi.hoisted(()=>({deps:null as unknown as KitDeps,requireAdmin:vi.fn(),derive:vi.fn()}));
@@ -26,10 +26,50 @@ describe('GET /api/companies/[ticker]/overview',()=>{
  const ocf=fact({concept:'operating_cash_flow',statement:'CF',value:'110543000000',value_text:'110543000000'});
  const gp=fact({concept:'gross_profit',value:'169148000000',value_text:'169148000000'});
  beforeEach(async()=>{
+  vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-11-09T00:00:01Z'));
   vi.clearAllMocks();mocks.deps=makeDeps(await seededTables());mocks.requireAdmin.mockResolvedValue({id:'u'});
   fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot({stateRev:6,rows:[rev22,rev23,q4,ni,ocf,gp],filings:[summary(),summary({filingId:'f0000000-0000-4000-8000-000000000008',availableDate:'2022-10-28'})]}));
   fn(mocks.deps.publicCompany.coverageOf).mockResolvedValue([cov('US')]);
   fn(mocks.deps.company.eventsOfIssuer).mockResolvedValue({rows:[eventRow()],nextCursor:null});
+ });
+ afterEach(()=>vi.useRealTimers());
+ it.each(['','asOf=2026-11-09'])('current nonempty overview uses a 60s shared cache without SWR (%s)',async(qs)=>{
+  mocks.derive.mockReturnValue([]);
+  const res=await get(GET,'AAPL',qs);
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('public, max-age=0, s-maxage=60');
+  expect(await res.json()).toMatchObject({asOf:'2026-11-09',coverage:cov('US'),eventsComputed:qs?'live':'materialized'});
+ });
+ it('prior UTC day preserves historical cache and current coverage decoration',async()=>{
+  mocks.derive.mockReturnValue([]);
+  const res=await get(GET,'AAPL','asOf=2026-11-08');
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('public, max-age=600, s-maxage=3600');
+  expect(await res.json()).toMatchObject({asOf:'2026-11-08',coverage:cov('US'),eventsComputed:'live'});
+ });
+ it.each(['','asOf=2026-11-09','asOf=2026-11-08'])('empty overview stays no-store (%s)',async(qs)=>{
+  fn(mocks.deps.snapshot).mockResolvedValue(emptySnapshot());
+  fn(mocks.deps.publicCompany.coverageOf).mockResolvedValue([]);
+  fn(mocks.deps.company.eventsOfIssuer).mockResolvedValue({rows:[],nextCursor:null});
+  mocks.derive.mockReturnValue([]);
+  const res=await get(GET,'AAPL',qs);
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('no-store');
+  expect(await res.json()).toMatchObject({latest:null,coverage:null,recentEvents:[]});
+ });
+ it.each(['','asOf=2026-11-09'])('admin current success overrides the public cache policy (%s)',async(qs)=>{
+  mocks.derive.mockReturnValue([]);
+  const res=await get(ADMIN_GET,'AAPL',qs);
+  expect(res.status).toBe(200);
+  expect(res.headers.get('cache-control')).toBe('private, no-store');
+  expect(await res.json()).toMatchObject({coverage:cov('US')});
+  expect(mocks.requireAdmin).toHaveBeenCalledTimes(1);
+ });
+ it('current read failure stays no-store',async()=>{
+  fn(mocks.deps.snapshot).mockRejectedValue(new Error('snapshot_failed'));
+  const res=await get(GET,'AAPL');
+  expect(res.status).toBe(500);
+  expect(res.headers.get('cache-control')).toBe('no-store');
  });
  it('latest block from ONE history envelope (12M wins over the 3M of the same end), derived gross_margin + revenue_yoy, latestFiling from the same snapshot, coverage, 3 materialized events',async()=>{
   const body=await (await get(GET,'AAPL')).json();

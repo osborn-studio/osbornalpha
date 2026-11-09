@@ -8,6 +8,7 @@ import {resolveIssuer} from '@/lib/entities/resolve';
 import type {ResolvedIssuer} from '@/lib/entities/resolve';
 import {DERIVE_CONCEPTS,deriveMetrics} from '@/lib/facts/derive';
 import type {FactRow,Market,MetricRow} from '@/lib/facts/types';
+import {CURRENT_COMPANY_CACHE_CONTROL} from '../cache-policy';
 import {eventIdOf} from '../canonical';
 import {eventFactIds,toPublicEvent} from '../event-dto';
 import type {PublicEvent} from '../event-dto';
@@ -84,5 +85,6 @@ export const overviewHandler:Handler=async(ctx)=>{
   coverage:coverage.find(c=>c.market===issuer.market)??null,coverageOtherMarket:coverage.find(c=>c.market!==issuer.market)??null,
   latestFiling,latest:gatedLatest,recentEvents,eventsComputed:live?'live':'materialized',evidence:Object.fromEntries(Object.entries(g.evidence).filter(([id])=>visibleIds.has(id))),
   withheld:countWithheld([...(gatedLatest?[...Object.values(gatedLatest.facts),...Object.values(gatedLatest.derived)]:[]),...eventIds.map(id=>g.withheld(id))])};
- return {body,empty:!latest&&recentEvents.length===0&&coverage.length===0};
+ const empty=!latest&&recentEvents.length===0&&coverage.length===0;
+ return {body,empty,cacheControl:!empty&&asOf===ctx.today?CURRENT_COMPANY_CACHE_CONTROL:undefined};
 };
