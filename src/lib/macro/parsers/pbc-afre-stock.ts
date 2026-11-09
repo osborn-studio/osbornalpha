@@ -3,12 +3,14 @@ import {createHash} from 'node:crypto';
 import {canonical} from '../decimal';
 import {isIsoDate,monthEnd} from '../periods';
 
-export const PBC_AFRE_STOCK_PARSER_VERSION='pbc-afre-stock-article/3';
+export const PBC_AFRE_STOCK_PARSER_VERSION='pbc-afre-stock-article/4';
 export const PBC_AFRE_STOCK_SOURCE_URL='https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/5837468/index.html';
 // Exact live-verified publications only; URL timestamps can reflect site migration.
-const VERIFIED_ARTICLES=new Map([
+const VERIFIED_ARTICLES=new Map<string,{year:string;month:string;publishedOn:string;title?:string}>([
  [PBC_AFRE_STOCK_SOURCE_URL,{year:'2025',month:'8',publishedOn:'2025-09-12'}],
  ['https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/2025092212554883949/index.html',{year:'2025',month:'7',publishedOn:'2025-08-13'}],
+ ['https://www.pbc.gov.cn/diaochatongjisi/116219/116225/2026101417073743604/index.html',
+  {year:'2026',month:'9',publishedOn:'2026-10-14',title:'2026年前三季度金融统计数据报告'}],
 ]);
 export class PbcAfreStockParseError extends Error{
  constructor(readonly code:string){super(code);this.name='PbcAfreStockParseError';}
@@ -37,21 +39,24 @@ export function parsePbcAfreStockArticle(bytes:Uint8Array,receipt:{sourceUrl:str
   if(!value)fail('pbc_metadata');
   return value[1];
  };
- const title=/^(\d{4})年([1-9]|1[0-2])月社会融资规模存量统计数据报告$/.exec(meta('ArticleTitle'));
- if(!title||title[1]!==source.year||title[2]!==source.month)fail('pbc_title');
- const periodEnd=monthEnd(Number(title[1]),Number(title[2]));
+ const expectedTitle=source.title??`${source.year}年${source.month}月社会融资规模存量统计数据报告`;
+ if(meta('ArticleTitle')!==expectedTitle)fail('pbc_title');
+ const periodEnd=monthEnd(Number(source.year),Number(source.month));
  const publishedOn=meta('PubDate');
  if(publishedOn!==source.publishedOn||!isIsoDate(publishedOn)||publishedOn<=periodEnd||publishedOn>receipt.retrievedAt.slice(0,10))fail('pbc_publication');
  // Require exactly one stock headline paragraph, even when an alternative value is malformed.
  const allParagraphs=[...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p\s*>/gi)];
- // This verified article has plain paragraph bodies. Reject alternate renderings
- // rather than overlooking an entity-encoded or inline-markup duplicate headline.
- if(allParagraphs.some(m=>/[<&]/.test(m[1])))fail('pbc_unsupported_markup');
+ // The combined report adds plain strong section headings. Never unwrap inline
+ // markup or a stock headline: concealed/encoded duplicate candidates must fail.
+ const sectionHeading=(body:string)=>source.title!==undefined
+  &&/^<strong>[一二三四五六七八九十]+、[^<&]*<\/strong>$/.test(body)
+  &&!body.includes('社会融资规模存量为');
+ if(allParagraphs.some(m=>/[<&]/.test(m[1])&&!sectionHeading(m[1])))fail('pbc_unsupported_markup');
  const paragraphs=allParagraphs.filter(m=>/社会融资规模存量为/.test(m[1]));
  if(paragraphs.length!==1)fail('pbc_headline_count');
  const paragraph=paragraphs[0];
  const headline=/^初步统计，(\d{4})年([1-9]|1[0-2])月末社会融资规模存量为[0-9]+(?:\.[0-9]+)?万亿元，同比(增长|下降)([0-9]+(?:\.[0-9]+)?)%。(?:其中，[\s\S]*)?$/.exec(paragraph[1]);
- if(!headline||headline[1]!==title[1]||headline[2]!==title[2])fail('pbc_headline');
+ if(!headline||headline[1]!==source.year||headline[2]!==source.month)fail('pbc_headline');
  const valueText=canonical((headline[3]==='下降'?'-':'')+headline[4]);
  const relative=paragraph[0].indexOf('>')+1+paragraph[1].indexOf('同比'+headline[3])+('同比'+headline[3]).length;
  const start=paragraph.index!+relative;
