@@ -22,6 +22,22 @@ const PAGE_SIZE = 100;
 const fmtAt = (s: string | null) => (s ? s.replace('T', ' ').slice(0, 16) : null);
 const FIELD = 'rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-2 py-1.5 text-sm text-[var(--text)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]';
 
+export function DirectorySyncCell({ row }: { row: Pick<DirectoryRow, 'scopeLastSuccessAt' | 'scopeLastStatus'> }) {
+  const t = useTranslations('company.directory');
+  const { scopeLastSuccessAt, scopeLastStatus } = row;
+  return (
+    <td className="px-3 py-2 text-[var(--text-muted)]">
+      <div>
+        {t('lastSuccessfulSync')}{' '}
+        {scopeLastSuccessAt
+          ? <time className="font-mono" dateTime={scopeLastSuccessAt}>{fmtAt(scopeLastSuccessAt)}</time>
+          : t('never')}
+      </div>
+      {scopeLastStatus && <div>{t('lastAttempt', { status: t(`status_${scopeLastStatus}`) })}</div>}
+    </td>
+  );
+}
+
 export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   const t = useTranslations('company.directory');
   const tf = useTranslations('company.header.freshness');
@@ -168,11 +184,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
                     <td className="px-3 py-2 font-mono">{r.latestAvailableDate ?? '—'}</td>
                     <td className="px-3 py-2 font-mono">{t('conceptsOf', { covered: r.conceptsCovered, total: data.conceptsTotal })}</td>
                     <td className="px-3 py-2 text-[var(--text-muted)]">{citationParts(r.market, r.citationSummary).map((c) => `${c.key} ${c.n}`).join(' · ')}</td>
-                    <td className="px-3 py-2 font-mono text-[var(--text-muted)]">
-                      {r.scopeLastSuccessAt || r.scopeLastStatus
-                        ? t('lastSync', { at: fmtAt(r.scopeLastSuccessAt) ?? t('never'), status: r.scopeLastStatus ? t(`status_${r.scopeLastStatus}`) : t('never') })
-                        : t('never')}
-                    </td>
+                    <DirectorySyncCell row={r} />
                   </tr>
                 );
               })}
