@@ -29,7 +29,7 @@ for (const { locale, successLabel, failed, succeeded } of [
     it('labels the retained successful timestamp and separately states the latest failure', () => {
       const html = render(locale, { scopeLastSuccessAt: lastSuccess, scopeLastStatus: 'failed' });
       expect(visibleText(html)).toBe(`${successLabel} 2026-11-02 03:04 ${failed}`);
-      expect(html).toContain(`dateTime="${lastSuccess}"`);
+      expect(html.match(/\bdatetime="([^"]+)"/i)?.[1]).toBe(lastSuccess);
     });
 
     it('keeps the missing success timestamp unavailable after a failed attempt', () => {
