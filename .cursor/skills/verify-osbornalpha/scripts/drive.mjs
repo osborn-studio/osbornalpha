@@ -172,6 +172,14 @@ const journeys = {
       check('1Y button pressed', clicked && (await oneYear.getAttribute('aria-pressed')) === 'true');
       await page.waitForTimeout(1500);
       await shot(page, 'stock-2-1y');
+      // Company Research entry without public-read Supabase config (#205): fail closed with the
+      // issuer-unavailable state; never a 500, and never an invented issuer, quote or K-line.
+      const cr = await page.goto(`${BASE}/stock/600519.SH`, { waitUntil: 'domcontentloaded' });
+      const unavailable = page.getByText(/Issuer lookup failed \(internal\)|发行人信息读取失败（internal）/).first();
+      await unavailable.waitFor({ timeout: 30_000 }).catch(() => {});
+      check('guest /stock/600519.SH → 200 issuer-unavailable state (internal)', cr?.status() === 200 && await unavailable.isVisible(), `${cr?.status()} ${page.url()}`);
+      check('unavailable Company Research shows no K-line fallback', (await page.getByTestId('kline-chart').count()) === 0);
+      await shot(page, 'stock-3-company-unavailable');
     } finally {
       save('stock-kline-requests.json', klines);
       await ctx.close();
@@ -216,7 +224,12 @@ const journeys = {
       check(`${from} → 308 /macro`, response.status === 308 && response.location === '/macro', `${response.status} ${response.location}`);
     }
     if (MODE === 'gate') {
-      for (const [from, next] of [['/portfolio', '/portfolio'], ['/macro', '/macro'], ['/today', '/macro'], ['/dashboard', '/macro'], ['/en/portfolio', '/portfolio'], ['/watchlist', '/watchlist']]) {
+      for (const [from, next] of [['/portfolio', '/portfolio'], ['/macro', '/macro'], ['/today', '/macro'], ['/dashboard', '/macro'], ['/en/portfolio', '/portfolio'], ['/watchlist', '/watchlist'],
+        // #208 return-destination sanitizing: arbitrary queries are dropped; only allowlisted
+        // /intel/industries selectors survive (in fixed key order), also through the /en prefix.
+        ['/portfolio?s=00700.HK&token=x', '/portfolio'],
+        ['/intel/industries?metric=roe&scheme=sw2021&token=x', '/intel/industries?scheme=sw2021&metric=roe'],
+        ['/en/intel/industries?view=table&level=9', '/intel/industries?view=table']]) {
         await page.goto(BASE + from, { waitUntil: 'networkidle' });
         const u = new URL(page.url());
         check(`${from} → /login?next=${next}`, u.pathname === '/login' && u.searchParams.get('next') === next, page.url());
