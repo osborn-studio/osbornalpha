@@ -7,11 +7,40 @@ import {parsePbcAfreStockArticle} from './pbc-afre-stock';
 
 const html=readFileSync(new URL('./fixtures/pbc-afre-stock-2025-08.html',import.meta.url),'utf8');
 const julyHtml=readFileSync(new URL('./fixtures/pbc-afre-stock-2025-07.html',import.meta.url),'utf8');
+const septemberHtml=readFileSync(new URL('./fixtures/pbc-afre-stock-2026-09.html',import.meta.url),'utf8');
+const septemberUrl='https://www.pbc.gov.cn/diaochatongjisi/116219/116225/2026101417073743604/index.html';
 const julyUrl='https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/2025092212554883949/index.html';
 const receipt={sourceUrl:'https://www.pbc.gov.cn/goutongjiaoliu/113456/113469/5837468/index.html',retrievedAt:'2026-11-08T13:00:00.000Z'};
 const bytes=(s:string)=>new TextEncoder().encode(s);
 const parse=(s=html,r=receipt)=>parsePbcAfreStockArticle(bytes(s),r);
 describe('offline PBOC AFRE stock article candidate',()=>{
+ it('reads September month-end stock from the exact verified 2026 combined report',()=>{
+  const result=parse(septemberHtml,{sourceUrl:septemberUrl,retrievedAt:'2026-11-09T04:44:45.829Z'});
+  expect(result).toMatchObject({seriesId:'CN_AFRE_STOCK_YOY',periodEnd:'2026-09-30',publishedOn:'2026-10-14',
+   valueText:'7.1',unit:'percent',revisable:true,sourceUrl:septemberUrl,
+   sha256:createHash('sha256').update(bytes(septemberHtml)).digest('hex')});
+  expect(septemberHtml.slice(result.valueRange.start,result.valueRange.end)).toBe('7.1');
+ });
+ it.each([
+  ['flow substituted for stock',septemberHtml.replaceAll('社会融资规模存量为','社会融资规模增量为')],
+  ['flow heading only',septemberHtml.replace(/<p>初步统计[^<]*<\/p>/,'')],
+  ['changed title',septemberHtml.replace('2026年前三季度金融统计数据报告','2026年9月金融统计数据报告')],
+  ['changed publication',septemberHtml.replace('2026-10-14','2026-10-15')],
+  ['changed month',septemberHtml.replace('2026年9月末','2026年8月末')],
+  ['inline stock headline',septemberHtml.replace('同比增长7.1%。','同比<strong>增长</strong>7.1%。')],
+  ['strong duplicate stock headline',septemberHtml+'<p><strong>初步统计，2026年9月末社会融资规模存量为468.17万亿元，同比增长7.2%。</strong></p>'],
+  ['section-prefixed stock duplicate',septemberHtml+'<p><strong>三、初步统计，2026年9月末社会融资规模存量为468.17万亿元，同比增长7.2%。</strong></p>'],
+  ['encoded strong duplicate',septemberHtml+'<p><strong>&#31038;会融资规模存量为468.17万亿元</strong></p>'],
+ ])('rejects 2026 %s',(_label,s)=>expect(()=>parse(s,{...receipt,sourceUrl:septemberUrl})).toThrow());
+ it('binds the combined report to its exact URL and ignores conflicting receipt metadata',()=>{
+  expect(()=>parse(septemberHtml)).toThrow();
+  expect(()=>parse(html,{...receipt,sourceUrl:septemberUrl})).toThrow();
+  expect(()=>parse(septemberHtml,{...receipt,sourceUrl:septemberUrl+'?alias=1'})).toThrow();
+  const result=parsePbcAfreStockArticle(bytes(septemberHtml),{...receipt,sourceUrl:septemberUrl,
+   periodEnd:'2026-08-31',valueText:'27.46',unit:'trillion',seriesId:'CN_M2_YOY',available_at:'2026-10-14'} as typeof receipt);
+  expect(result).toMatchObject({periodEnd:'2026-09-30',valueText:'7.1',unit:'percent',seriesId:'CN_AFRE_STOCK_YOY'});
+  expect(result).not.toHaveProperty('available_at');
+ });
  it('reads publisher stock YoY in percent, with month end and separate publication/retrieval provenance',()=>{
   const result=parse();
   expect(result).toMatchObject({seriesId:'CN_AFRE_STOCK_YOY',periodEnd:'2025-08-31',valueText:'8.8',unit:'percent',revisable:true,publishedOn:'2025-09-12',...receipt,sha256:createHash('sha256').update(bytes(html)).digest('hex')});
@@ -33,7 +62,7 @@ describe('offline PBOC AFRE stock article candidate',()=>{
   const result=parsePbcAfreStockArticle(bytes(s),widerReceipt);
   expect(result).toEqual({seriesId:'CN_AFRE_STOCK_YOY',periodEnd,valueText,unit:'percent',revisable:true,
    publishedOn,sourceUrl,retrievedAt:receipt.retrievedAt,
-   sha256:createHash('sha256').update(bytes(s)).digest('hex'),parserVersion:'pbc-afre-stock-article/3',
+   sha256:createHash('sha256').update(bytes(s)).digest('hex'),parserVersion:'pbc-afre-stock-article/4',
    valueRange:{start:s.indexOf('同比增长')+'同比增长'.length,end:s.indexOf('同比增长')+'同比增长'.length+valueText.length}});
  });
  it.each([
