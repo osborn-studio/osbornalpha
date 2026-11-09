@@ -21,7 +21,7 @@ stdout 仅输出汇总 JSON，错误只返回固定消息。退出码 0 表示�
 | `currentRowsWithoutClassification` | 当前 membership 找不到分类码；计入 currentRows，但单独提示完整性缺口 |
 | `schedule` | 仅 eligible scope 的调度状态。missing 无调度行；retired 是退休哨兵；leased 是未过期 lease（等于观察时间仍占用）；dueUnleased 已到期且无 lease；futureUnleased 未到期且非退休。retired 与 leased 可重叠，不能直接相加。missing/retired 在下一次真实同步时可能由现有 scope reconciliation 修复 |
 | `schedule.lastFailed` | 最近调度结果为 failed，可与上述状态重叠；不能等同于 SEC provider 失败 |
-| `latestMembershipBatch` | 最近启动的 SIC membership 批次，可能仍 running。providerUnavailableEntries 只统计保存回执中的 sec_unavailable 条目；otherErrorEntries 不含 skipped_summary/truncated。errorsTruncated 为真表示错误被截断，条目数是下界，不是失败发行人总数。skippedSummaryPresent 不推断具体公司没有 SIC，也不输出 skip 原始消息 |
+| `latestMembershipBatch` | 最近启动的 SIC membership 批次，可能仍 running。startedAt/finishedAt 是该批次记录的开始/结束时间（含时区偏移）；finishedAt 可为 null。结合 asOf 判断回执时间，避免把历史 partial 当成本次观察的新失败；null 不证明 worker 仍存活。本工具不推断过期阈值，也不表示覆盖已刷新。providerUnavailableEntries 只统计保存回执中的 sec_unavailable 条目；otherErrorEntries 不含 skipped_summary/truncated。errorsTruncated 为真表示错误被截断，条目数是下界，不是失败发行人总数。skippedSummaryPresent 不推断具体公司没有 SIC，也不输出 skip 原始消息 |
 | `license` | 读取实际 SIC scheme 授权：public/internal/missing/unknown；public 只描述该授权行 |
 
 本报告不查询财务事实、证据可发布性、SW 完整性或聚合 run，也不检查分类抓取批次；`financialFactsCoverage=not_measured`、`publicationReadiness=not_evaluated`、`i3=not_evaluated`。例如 300/801 个 eligible 发行人有 membership，不等于 300 家公司的财务数据可发布。无 membership 不能归因于 SEC 没返回 SIC：未尝试、无 CIK、404、空 SIC、未知分类码及失败均可能导致缺口；需要操作员结合现有批次/隔离记录继续调查。

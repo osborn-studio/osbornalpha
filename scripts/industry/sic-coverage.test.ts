@@ -14,6 +14,7 @@ if (!target || !['localhost', '127.0.0.1'].includes(target.hostname) ||
 const client = new Client({connectionString: url});
 before(async () => {
   await client.connect();
+  await client.query("set time zone 'UTC'");
   await client.query(`
     create table fact_sync_scope(issuer_id text, market text, priority integer);
     create table issuers(issuer_id text, cik text);
@@ -57,7 +58,7 @@ test('separates eligible issuer backlog from rows, financial facts, leases and r
   assert.deepEqual(report.memberships, {currentRows:2, currentIssuers:2, eligibleWithMembership:1, eligibleWithoutMembership:5, currentRowsWithoutClassification:0});
   assert.equal(report.classificationCodes, 1);
   assert.deepEqual(report.schedule, {missing:1, retired:1, leased:1, dueUnleased:2, futureUnleased:1, lastFailed:2});
-  assert.deepEqual(report.latestMembershipBatch, {status:'partial', providerUnavailableEntries:1, otherErrorEntries:3, skippedSummaryPresent:true, errorsTruncated:true});
+  assert.deepEqual(report.latestMembershipBatch, {startedAt:'2026-11-08T00:00:00+00:00',finishedAt:'2026-11-08T00:00:00+00:00',status:'partial', providerUnavailableEntries:1, otherErrorEntries:3, skippedSummaryPresent:true, errorsTruncated:true});
   assert.equal(report.license, 'internal');
   assert.equal(report.financialFactsCoverage, 'not_measured');
   assert.equal(report.publicationReadiness, 'not_evaluated');
@@ -67,6 +68,32 @@ test('separates eligible issuer backlog from rows, financial facts, leases and r
   });
   assert.equal(cli.status,0,cli.stderr);
   assert.equal(JSON.parse(cli.stdout).financialFactsCoverage,'not_measured');
+});
+
+test('receipt timing distinguishes old partial results from recent attempts and unfinished batches', async () => {
+  const at = new Date('2026-11-08T12:00:00Z');
+  const original = await readSicCoverage(client, at);
+  try {
+    await client.query(`update ingest_batches set started_at=started_at-interval '38 days',
+      finished_at=finished_at-interval '38 days' where dataset='industry.sic.memberships'`);
+    const old = await readSicCoverage(client, at);
+    assert.notDeepEqual(old.latestMembershipBatch, original.latestMembershipBatch,
+      'an old partial receipt must be distinguishable from a recent partial receipt');
+    assert.equal(Date.parse(String(old.latestMembershipBatch?.startedAt)), Date.parse('2026-10-01T00:00:00Z'));
+    assert.equal(Date.parse(String(old.latestMembershipBatch?.finishedAt)), Date.parse('2026-10-01T00:00:00Z'));
+    await client.query(`update ingest_batches set started_at='2026-11-08T11:00:00Z',
+      finished_at=null, status='running' where batch_id='new'`);
+    const running = await readSicCoverage(client, at);
+    assert.equal(running.latestMembershipBatch?.status, 'running');
+    assert.equal(Date.parse(String(running.latestMembershipBatch?.startedAt)), Date.parse('2026-11-08T11:00:00Z'));
+    assert.equal(running.latestMembershipBatch?.finishedAt, null);
+    assert.equal(running.publicationReadiness, 'not_evaluated');
+  } finally {
+    await client.query(`update ingest_batches set started_at='2026-11-07', finished_at='2026-11-07'
+      where batch_id='old';
+      update ingest_batches set started_at='2026-11-08', finished_at='2026-11-08', status='partial'
+      where batch_id='new'`);
+  }
 });
 
 test('read transaction rejects writes and rolls back on failure', async () => {
