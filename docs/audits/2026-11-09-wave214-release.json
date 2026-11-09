@@ -1,0 +1,371 @@
+{
+  "commit": "15b60533d093946f976c96b1e1f9846ca161226d",
+  "deployment": {
+    "id": "dpl_FiYUKy7wT7StSqQegGmJDropHdgv",
+    "state": "READY",
+    "target": "production"
+  },
+  "rollback": {
+    "id": "dpl_62Jmj8goWaUpP2wHemoRUUkqhF8x",
+    "state": "READY",
+    "executed": false
+  },
+  "ci": [
+    {
+      "name": "Application checks",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42566015785",
+      "headSha": "15b60533d093946f976c96b1e1f9846ca161226d",
+      "conclusion": "success"
+    },
+    {
+      "name": "Macro source fixture checks",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42566015818",
+      "headSha": "15b60533d093946f976c96b1e1f9846ca161226d",
+      "conclusion": "success"
+    }
+  ],
+  "anonymousProbes": [
+    {
+      "base": "https://osbornalpha.com",
+      "timestamp": "2026-11-09T09:45:51.717Z",
+      "requestMode": "anonymous; no cookies or bearer; Cache-Control: no-cache",
+      "pass": true,
+      "checks": [
+        {
+          "path": "/api/methodologies",
+          "timestamp": "2026-11-09T09:45:48.398Z",
+          "status": 200,
+          "codeVersion": "15b60533d093946f976c96b1e1f9846ca161226d",
+          "cacheControl": "public, max-age=300",
+          "setCookiePresent": false,
+          "responseSha256": "54f707121d1304535c3bfa92432b013fd66eb52a17cce8dab7c129931a111786",
+          "pass": true,
+          "v2": {
+            "status": "active",
+            "publishable": true,
+            "formula_hash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+            "registrationCodeVersion": "01308b44347421f061cc03cef36a0f172df41bc6"
+          }
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+          "timestamp": "2026-11-09T09:45:48.886Z",
+          "status": 200,
+          "codeVersion": "15b60533d093946f976c96b1e1f9846ca161226d",
+          "cacheControl": "public, max-age=300",
+          "setCookiePresent": false,
+          "responseSha256": "9ce246faf453f87f7e6914ffec287dadf428ce3c938b6a230df1fd1d8ebd6cd6",
+          "pass": true
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+          "timestamp": "2026-11-09T09:45:49.363Z",
+          "status": 200,
+          "codeVersion": "15b60533d093946f976c96b1e1f9846ca161226d",
+          "cacheControl": "public, max-age=300",
+          "setCookiePresent": false,
+          "responseSha256": "a741d9c0830dca3f24acd53fe47567d196a3166905bcf8661face2363fb07900",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-09T09:45:49.767Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-09T09:45:50.417Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-09T09:45:50.740Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-09T09:45:51.066Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-09T09:45:51.385Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-09T09:45:51.716Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        }
+      ]
+    },
+    {
+      "base": "https://www.osbornalpha.com",
+      "timestamp": "2026-11-09T09:45:51.671Z",
+      "requestMode": "anonymous; no cookies or bearer; Cache-Control: no-cache",
+      "pass": true,
+      "checks": [
+        {
+          "path": "/api/methodologies",
+          "timestamp": "2026-11-09T09:45:48.402Z",
+          "status": 200,
+          "codeVersion": "15b60533d093946f976c96b1e1f9846ca161226d",
+          "cacheControl": "public, max-age=300",
+          "setCookiePresent": false,
+          "responseSha256": "54f707121d1304535c3bfa92432b013fd66eb52a17cce8dab7c129931a111786",
+          "pass": true,
+          "v2": {
+            "status": "active",
+            "publishable": true,
+            "formula_hash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+            "registrationCodeVersion": "01308b44347421f061cc03cef36a0f172df41bc6"
+          }
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+          "timestamp": "2026-11-09T09:45:48.872Z",
+          "status": 200,
+          "codeVersion": "15b60533d093946f976c96b1e1f9846ca161226d",
+          "cacheControl": "public, max-age=300",
+          "setCookiePresent": false,
+          "responseSha256": "9ce246faf453f87f7e6914ffec287dadf428ce3c938b6a230df1fd1d8ebd6cd6",
+          "pass": true
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+          "timestamp": "2026-11-09T09:45:49.292Z",
+          "status": 200,
+          "codeVersion": "15b60533d093946f976c96b1e1f9846ca161226d",
+          "cacheControl": "public, max-age=300",
+          "setCookiePresent": false,
+          "responseSha256": "a741d9c0830dca3f24acd53fe47567d196a3166905bcf8661face2363fb07900",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-09T09:45:49.699Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-09T09:45:50.366Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-09T09:45:50.694Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-09T09:45:51.013Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-09T09:45:51.331Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-09T09:45:51.670Z",
+          "status": 401,
+          "codeVersion": null,
+          "cacheControl": "no-store",
+          "setCookiePresent": false,
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "pass": true,
+          "errorCode": "unauthorized"
+        }
+      ]
+    }
+  ],
+  "publicQuoteMonitor": {
+    "before": {
+      "availability": "stale",
+      "preferred_source": "degraded",
+      "reason": "classified"
+    },
+    "after": {
+      "availability": "stale",
+      "preferred_source": "degraded",
+      "reason": "classified"
+    },
+    "runtimeSample": {
+      "levelCounts": {
+        "info": 26,
+        "warn": 1,
+        "error": 0,
+        "fatal": 0
+      },
+      "configuredGatewayMiss": {
+        "requestedCount": 2,
+        "usableCount": 0,
+        "missingCount": 2,
+        "attempts": 1,
+        "failureKind": "empty",
+        "httpStatus": null,
+        "durationMs": 2561
+      }
+    }
+  },
+  "databaseSettings": {
+    "observedAt": "2026-11-09T09:46:27.655059+00:00",
+    "transactionReadOnly": true,
+    "roleDefaults": {
+      "authenticated": {
+        "statement_timeout": "8s"
+      },
+      "anon": {
+        "statement_timeout": "3s"
+      },
+      "authenticator": {
+        "statement_timeout": "8s",
+        "lock_timeout": "8s"
+      }
+    },
+    "serviceRoleExplicitTimeoutRows": 0,
+    "activeRequestRows": 0,
+    "scope": "Current configured defaults and one activity sample. No effective historical request settings or causal attribution.",
+    "inspectedFunctionCount": 4,
+    "functionLocalTimeoutsPresent": false,
+    "migration187ValidatorMatchesPriorReadback": true
+  },
+  "signedInResearch": {
+    "recordedAt": "2026-11-09T09:51:58.208823+00:00",
+    "commit": "15b60533d093946f976c96b1e1f9846ca161226d",
+    "host": "https://osbornalpha.com",
+    "method": "Native Chrome with an existing signed-in session, confirmed in hydrated Settings.",
+    "desktop": [
+      1592,
+      809
+    ],
+    "englishChecks": [
+      "Directory displayed separate success and attempt labels.",
+      "AAL directory search, overview, statements, filings and EDGAR disclosure history rendered.",
+      "SIC list, SIC 3571 constituents and SMCI membership and disclosed revenue evidence rendered.",
+      "Research entry exposed separate SIC, SW and company links.",
+      "SW displayed admin-only internal preview without an active run or records."
+    ],
+    "observedOpenIssues": [
+      "AAPL header period 2026-10-23 remained stale while the overview 12-month period ended 2026-09-26.",
+      "NOAH overview displayed five missing values while filings showed a 2025 20-F with 81 facts.",
+      "Company events freshness showed an error.",
+      "600519.SH showed unregistered issuer and no disclosure facts. The A-share directory filter returned no matches with search empty, while facts.cn freshness showed fresh."
+    ],
+    "scope": "Selected signed-in desktop paths on apex. Real predecessor lineage, broader account/locale coverage, public SW entitlement, valuation and judgment remain separately gated."
+  },
+  "researchFollowUps": {
+    "noah": {
+      "scope": "Bounded anonymous GETs and offline replay of unchanged Overview and metric functions.",
+      "multiUnitCandidates": [
+        "revenue",
+        "net_income_parent",
+        "operating_cash_flow",
+        "revenue_yoy"
+      ],
+      "observedUnits": [
+        "CNY",
+        "USD"
+      ],
+      "grossMarginMappedInputsPresent": false,
+      "openDecision": "Overview currency-selection policy."
+    },
+    "cnAnonymousGets": [
+      {
+        "utc": "2026-11-09T09:57:24.878573+00:00",
+        "request": "/api/companies/600519.SH/overview",
+        "status": 404,
+        "errorCode": "unknown_ticker"
+      },
+      {
+        "utc": "2026-11-09T09:57:25.638359+00:00",
+        "request": "/api/companies/600519/overview",
+        "status": 404,
+        "errorCode": "unknown_ticker"
+      },
+      {
+        "utc": "2026-11-09T09:57:26.501177+00:00",
+        "request": "/api/companies?market=CN&pageSize=1",
+        "status": 200,
+        "total": 0
+      },
+      {
+        "utc": "2026-11-09T09:57:27.035259+00:00",
+        "request": "/api/companies/freshness",
+        "status": 200,
+        "datasets": {
+          "facts.us": "fresh",
+          "facts.cn": "fresh",
+          "company.events": "error"
+        }
+      }
+    ]
+  }
+}
