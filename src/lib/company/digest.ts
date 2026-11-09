@@ -20,6 +20,7 @@ import {FORMULA_VERSION} from '@/lib/facts/derive';
 import type {FactsDb,Market,ScopeRow} from '@/lib/facts/types';
 import {summarizeCoverage} from './coverage';
 import {companyDbFailureCategory} from './db';
+import {evidenceRequestId,withEvidenceRequest} from './evidence-request';
 import {EVENTS_VERSION,deriveIssuerEvents} from './events';
 import {buildEvidenceIndex} from './evidence-index';
 import type {ParsedSnapshotCache,SnapshotObjectStore} from './evidence-index';
@@ -86,17 +87,22 @@ function streamObserver(){
   const stageStarted=performance.now();
   const log=(outcome:'ok'|'failed',category?:string)=>{
    // Only application-visible boundaries. RPC internals / backend CONTEXT are unavailable here.
-   // No identifiers, payloads, raw codes or error text; logging cannot change the workflow result.
+   // Only the allowlisted upstream request UUID on evidence failure; no row identifiers,
+   // payloads, raw codes or error text. Logging cannot change the workflow result.
    try{
     const now=performance.now();
-    const event={operation_id,stage,outcome,stage_ms:now-stageStarted,elapsed_ms:now-started,...(category?{category}:{})};
+    const id=stage==='evidence_replace'&&outcome==='failed'?evidenceRequestId():undefined;
+    const event={operation_id,stage,outcome,stage_ms:now-stageStarted,elapsed_ms:now-started,...(category?{category}:{}),...(id?{upstream_request_id:id}:{})};
     const logged=outcome==='failed'?console.error('[company-digest]',event):console.info('[company-digest]',event);
     // Also tolerate a sink replaced by an async logger; never await logging on the write path.
     void Promise.resolve(logged).catch(()=>{});
    }catch{}
   };
-  try{const value=await run();if(storageFailed?.(value))log('failed','storage_error');else log('ok');return value;}
-  catch(e){log('failed',companyDbFailureCategory(e));throw e;}
+  const execute=async()=>{
+   try{const value=await run();if(storageFailed?.(value))log('failed','storage_error');else log('ok');return value;}
+   catch(e){log('failed',companyDbFailureCategory(e));throw e;}
+  };
+  return stage==='evidence_replace'?withEvidenceRequest(execute):execute();
  };
 }
 async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<StreamOutcome>{
