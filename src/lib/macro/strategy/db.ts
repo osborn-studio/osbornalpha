@@ -11,6 +11,7 @@
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {canonicalJson,sha256Hex} from './hash';
+import {manifestRequestId,withManifestRequest} from './manifest-request';
 import type {ExplanationProjection,ExplanationState,Region,RenderedExplanation,ReviewFacts,ReviewResult,ReviewStatus,StoredManifest,StrategyManifest} from './contract';
 
 /** A run row as completion recovery reads it (service role). */
@@ -88,7 +89,7 @@ export function projectionFrom(r:Record<string,unknown>):ExplanationProjection{
   prompt_version:str(r.prompt_version)??'',validator_version:str(r.validator_version)??'',created_at:iso(r.created_at),finished_at:isoOrNull(r.finished_at)};
 }
 
-// Fixed labels only: upstream messages/details/headers and frozen evidence never enter logs.
+// Fixed labels plus an optional validated response UUID: no upstream messages/details or frozen evidence.
 // RPC timing includes client/network/gateway/SQL; it cannot isolate server JSON parsing or waits.
 type ManifestStage='payload_prepare'|'rpc'|'readback';
 function manifestFailureCategory(stage:ManifestStage,e:unknown):string{
@@ -105,7 +106,7 @@ function manifestFailureCategory(stage:ManifestStage,e:unknown):string{
  }
  return 'unknown';
 }
-function logManifest(event:{operation_id:string;stage:ManifestStage;outcome:'ok'|'failed';stage_ms:number;elapsed_ms:number;category?:string}){
+function logManifest(event:{operation_id:string;stage:ManifestStage;outcome:'ok'|'failed';stage_ms:number;elapsed_ms:number;category?:string;upstream_request_id?:string}){
  // Diagnostics must never turn a committed write into an apparent failure, or mask an error.
  try{if(event.outcome==='failed')console.error('[macro-manifest]',event);else console.info('[macro-manifest]',event);}catch{}
 }
@@ -120,6 +121,7 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
  };
  return {
   async putManifest(body){
+   return withManifestRequest(async()=>{
    const operation_id=randomUUID(),started=performance.now();
    let stage:ManifestStage='payload_prepare',stageStarted=started,transportCategory:string|undefined;
    // Observe raw codes before normalization; retain the existing thrown errors.
@@ -151,9 +153,12 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
     completed();return stored;
    }catch(e){
     const now=performance.now();
-    logManifest({operation_id,stage,outcome:'failed',category:transportCategory??manifestFailureCategory(stage,e),stage_ms:now-stageStarted,elapsed_ms:now-started});
+    const upstream_request_id=stage==='rpc'?manifestRequestId():undefined;
+    logManifest({operation_id,stage,outcome:'failed',category:transportCategory??manifestFailureCategory(stage,e),stage_ms:now-stageStarted,elapsed_ms:now-started,
+     ...(upstream_request_id?{upstream_request_id}:{})});
     throw e;
    }
+   });
   },
   manifest:id=>manifestById('anon',id),
   async reviewCurrent(region,month){

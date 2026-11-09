@@ -15,6 +15,7 @@ import {getServerSupabase} from '@/lib/supabase/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import type {Bilingual,Boundary,DeviationCase,F4Summary,JudgmentStatus,Region,ReviewResult,ReviewStatus} from './contract';
 import {supabaseStrategyDb,type StrategyDb} from './db';
+import {manifestFetch} from './manifest-request';
 import {createF4Client,type F4Client} from './f4-client';
 import {judgmentsEnabled,strategyEnabled} from './flags';
 import {monthCutoff,prevMonth} from './manifest';
@@ -106,7 +107,7 @@ export async function readGate():Promise<ReadGate>{
 }
 // ---- dependencies
 export function strategyDb(session?:SupabaseClient):StrategyDb{
- return supabaseStrategyDb({admin:getAdminSupabase() as unknown as SupabaseClient,anon:getAnonSupabase() as unknown as SupabaseClient,session});
+ return supabaseStrategyDb({admin:getAdminSupabase(manifestFetch()) as unknown as SupabaseClient,anon:getAnonSupabase() as unknown as SupabaseClient,session});
 }
 export const codeVersionOrNull=():string|null=>resolveCodeVersion({allowGit:false});
 export type JudgmentSection<T>={judgment_status:'disabled'}|{judgment_status:'unavailable'}|{judgment_status:'ok';value:T};
