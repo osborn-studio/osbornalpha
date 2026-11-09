@@ -1,0 +1,189 @@
+name: Wave 206 live guest and gate verification
+
+on:
+  push:
+    branches: [codex/wave206-liveverification]
+
+permissions:
+  contents: read
+
+env:
+  VERIFIER_SHA: 99d86fbdc83b7a1b41385f0348100e613314dde2
+  # Exact tree of .cursor/skills/verify-osbornalpha at VERIFIER_SHA.
+  VERIFIER_TREE: a32cc612da3642586c617ffecead359a2ec9c9e8
+
+jobs:
+  baseline:
+    name: ${{ matrix.target }} / ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [guest, gate]
+        target: [baseline-204]
+        include:
+          - target: baseline-204
+            product_sha: 99d86fbdc83b7a1b41385f0348100e613314dde2
+    env:
+      OSB_MODE: ${{ matrix.mode }}
+      PRODUCT_SHA: ${{ matrix.product_sha }}
+    steps:
+      - name: Initialize isolated evidence paths
+        run: |
+          evidence_root="$RUNNER_TEMP/osb-evidence"
+          mkdir -p "$evidence_root"
+          printf 'OSB_EVIDENCE_ROOT=%s\nOSB_RUN_DIR=%s\n' \
+            "$evidence_root" "$RUNNER_TEMP/osb-run" >> "$GITHUB_ENV"
+          jq -n --arg product "$PRODUCT_SHA" --arg verifier "$VERIFIER_SHA" \
+            --arg tree "$VERIFIER_TREE" --arg mode "$OSB_MODE" --arg workflow "$GITHUB_SHA" \
+            '{productSha:$product,verifierSha:$verifier,verifierTree:$tree,mode:$mode,workflowSha:$workflow}' \
+            > "$evidence_root/run-manifest.json"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.product_sha }}
+          persist-credentials: false
+
+      - name: Verify product commit and verifier tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          test "$(git rev-parse HEAD:.cursor/skills/verify-osbornalpha)" = "$VERIFIER_TREE"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Select Chromium
+        run: |
+          if chrome="$(command -v google-chrome)"; then
+            :
+          else
+            npx --no-install playwright install --with-deps chromium
+            chrome="$(node -p 'require("@playwright/test").chromium.executablePath()')"
+          fi
+          test -x "$chrome"
+          printf 'OSB_CHROME=%s\n' "$chrome" >> "$GITHUB_ENV"
+          {
+            node --version
+            "$chrome" --version
+          } > "$OSB_EVIDENCE_ROOT/runtime.txt"
+
+      - name: Run repository verifier
+        run: |
+          status=0
+          timeout --signal=TERM --kill-after=20s 12m \
+            .cursor/skills/verify-osbornalpha/scripts/verify.sh all \
+            > "$OSB_EVIDENCE_ROOT/verify.log" 2>&1 || status=$?
+          printf '{"exitCode":%s}\n' "$status" > "$OSB_EVIDENCE_ROOT/verify-exit.json"
+          exit "$status"
+
+      - name: Clean up verifier processes
+        if: always()
+        run: |
+          if [[ -d "${OSB_RUN_DIR:-}" ]]; then
+            timeout --kill-after=10s 45s \
+              .cursor/skills/verify-osbornalpha/scripts/cleanup.sh \
+              > "$OSB_EVIDENCE_ROOT/cleanup.log" 2>&1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wave206-${{ matrix.target }}-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/osb-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
+  comparison:
+    needs: baseline
+    name: ${{ matrix.target }} / ${{ matrix.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [guest, gate]
+        target: [main-aa344, pr205-b9d039]
+        include:
+          - target: main-aa344
+            product_sha: aa3443624869ad583527ed2c540585689f2e2f85
+          - target: pr205-b9d039
+            product_sha: b9d039d5e6d727f24214ebc1db771fb01226f8f4
+    env:
+      OSB_MODE: ${{ matrix.mode }}
+      PRODUCT_SHA: ${{ matrix.product_sha }}
+    steps:
+      - name: Initialize isolated evidence paths
+        run: |
+          evidence_root="$RUNNER_TEMP/osb-evidence"
+          mkdir -p "$evidence_root"
+          printf 'OSB_EVIDENCE_ROOT=%s\nOSB_RUN_DIR=%s\n' \
+            "$evidence_root" "$RUNNER_TEMP/osb-run" >> "$GITHUB_ENV"
+          jq -n --arg product "$PRODUCT_SHA" --arg verifier "$VERIFIER_SHA" \
+            --arg tree "$VERIFIER_TREE" --arg mode "$OSB_MODE" --arg workflow "$GITHUB_SHA" \
+            '{productSha:$product,verifierSha:$verifier,verifierTree:$tree,mode:$mode,workflowSha:$workflow}' \
+            > "$evidence_root/run-manifest.json"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.product_sha }}
+          persist-credentials: false
+
+      - name: Verify product commit and verifier tree
+        run: |
+          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          test "$(git rev-parse HEAD:.cursor/skills/verify-osbornalpha)" = "$VERIFIER_TREE"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Select Chromium
+        run: |
+          if chrome="$(command -v google-chrome)"; then
+            :
+          else
+            npx --no-install playwright install --with-deps chromium
+            chrome="$(node -p 'require("@playwright/test").chromium.executablePath()')"
+          fi
+          test -x "$chrome"
+          printf 'OSB_CHROME=%s\n' "$chrome" >> "$GITHUB_ENV"
+          {
+            node --version
+            "$chrome" --version
+          } > "$OSB_EVIDENCE_ROOT/runtime.txt"
+
+      - name: Run repository verifier
+        run: |
+          status=0
+          timeout --signal=TERM --kill-after=20s 12m \
+            .cursor/skills/verify-osbornalpha/scripts/verify.sh all \
+            > "$OSB_EVIDENCE_ROOT/verify.log" 2>&1 || status=$?
+          printf '{"exitCode":%s}\n' "$status" > "$OSB_EVIDENCE_ROOT/verify-exit.json"
+          exit "$status"
+
+      - name: Clean up verifier processes
+        if: always()
+        run: |
+          if [[ -d "${OSB_RUN_DIR:-}" ]]; then
+            timeout --kill-after=10s 45s \
+              .cursor/skills/verify-osbornalpha/scripts/cleanup.sh \
+              > "$OSB_EVIDENCE_ROOT/cleanup.log" 2>&1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wave206-${{ matrix.target }}-${{ matrix.mode }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/osb-evidence/
+          if-no-files-found: error
+          retention-days: 7
