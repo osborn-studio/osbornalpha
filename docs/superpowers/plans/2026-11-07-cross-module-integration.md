@@ -2,7 +2,28 @@
 
 Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. Tooling: code by Codex CLI gpt-6-sol (medium); audits by mmx MiniMax-M3; PG17 tests run by the commander (`LC_ALL=C`, `.claude/scratch/db-one.ts` for single files, `npm run test:db` for the gate). Logs: `docs/audits/2026-11-07-integration/`.
 
-## Current release and remaining priorities — wave214
+## Current release and remaining priorities — wave215
+
+Eight independent GPT-6.1-Sol CLIs were launched, plus three coordinating subagents, including later industry-spacing and CI-diagnostic lanes. This does not mean all remained continuously active. MiniMax-M3 audits are separate evidence from production checks.
+
+Production verification at 2026-11-09 10:34 UTC found `e0ec530f9b9956948e1ebe713b114840feb1988b` on READY deployment `dpl_BmiAm9qVoxrdGQfgCmuUKsFEYFJs` at both domains. Exact-SHA CI and 18 anonymous probes passed. This deployment contains only documentation PR #213 and adds no company/industry implementation. Preferred quote-source recovery remains open. See the [wave215 release record](../../audits/2026-11-09-wave215-release.md) and [machine receipt](../../audits/2026-11-09-wave215-release.json).
+
+After the initial `cgWindowNotFound` failure, the parent restored native Chrome and reverified production NOAH annual Statements CNY/USD revenue drawers and SIC3571 constituents/SMCI revenue evidence. This post-release signed-in evidence is separate from the deployment gate and anonymous probes, and establishes scoped route/drawer acceptance. The proposed NOAH Overview explanation remains undeployed, CN initialization has not run, and SIC3571's net-income/Company-column spacing defect remains open at 1592×809. Open PR #217 proposes a locally checked correction, pending remote CI, independent review and production acceptance. Earlier `15b60533` login/AAL checks retain their historical scope.
+
+Exact retained AAPL, original-manifest and wrapper-manifest log events now confirm `statement_timeout` cancellation. Separate 31-second same-session production read-only windows each returned only the known incident and no matched lock/temp/duration candidates. The failed combined manifest query was a retrieval error, not a zero result; both narrower retries succeeded. Unlogged activity cannot be excluded. Historical effective budgets, time-consumption cause, failed-request/backend joins and successful production writer/persistence recovery remain open. Offline AAPL correlation feasibility and 121 manifest benchmark blocks remain synthetic/local evidence, not production causal proof.
+
+| Current task | Delivery and remaining gate |
+|---|---|
+| Targeted CN bootstrap [#214](https://github.com/osborn-studio/osbornalpha/pull/214), `afd2d980` | Open, undeployed. Three live read-only candidates and separate CNInfo identity preflight passed; production apply and coverage acceptance pending. Original Application CI failed with a PostgreSQL deadlock in unchanged `dq-extensions.integration.test.ts:839` (9,128 pass, 7 skipped). Rerun in progress at receipt cutoff; separate diagnosis ongoing, not cleared or dismissed as flake. |
+| Overview ambiguity [#215](https://github.com/osborn-studio/osbornalpha/pull/215), `bb5964f3` | Open, undeployed. Evidence-gated reasons and one Statements link preserve financial semantics and asOf. Local replay/browser, lint/typecheck and focused tests passed. Remote Application CI failed at `dq-extensions.integration.test.ts:571` (`set_merge`) with a deadlock. The fixture-isolation fix is pushed in `bb5964f3`, with 9,119 full local tests and 112 final-branch PostgreSQL tests passing. New full CI is running; production SQL is unchanged. Original CI server graph was not retained. Independent account review remains pending. |
+| AAPL private request correlation [#216](https://github.com/osborn-studio/osbornalpha/pull/216), `65f02a0e` | Open, undeployed. Failed evidence-stage UUID capture through default client wiring, no body reads/retries. Final exact-dependency TypeScript and 77 targeted tests passed. Full remote CI passed at `65f02a0e`; independent account review, deployed capture and real writer recovery remain open. |
+| Industry spacing [#217](https://github.com/osborn-studio/osbornalpha/pull/217), `c3fc6b8b` | Open, undeployed. Parent reports two-class correction, local CLI/MiniMax review and local 1592px gap 2→17px, 844/390px unchanged; local measurement receipts and six passing Playwright tests inspected by parent. Exact production SIC acceptance remains pending. Industry/Macro fixture checks succeeded, Application CI in progress; independent account review and production acceptance pending. Production defect remains open. |
+
+Consult the exact-head check snapshot in the receipt; a new check cycle started for #215 after the repair. No GitHub-submitted reviews or approvals at the recorded cutoff; local CLI/MiniMax review is not independent-account approval; no implementation merges or deployments. Keep I-3/SW rights and pipeline gates, CN master apply/PDF provenance, financial/event gold, multi-member lineage, issuer methodology, F6 disabled kinds and foreign runtime decisions open as detailed in the historical priorities below. See the wave215 receipt for the exact CI snapshot and cutoff.
+
+### Historical wave214 priorities and acceptance snapshot
+
+The following table preserves the wave214 delivery and browser boundaries; use the wave215 summary above for the current deployment. The three missing CN master samples were exactly `600519.SH`, `000333.SZ` and `300750.SZ`, not the entire universe. NOAH's CNY statement rows existed despite Overview currency ambiguity and missing gross-margin inputs.
 
 Wave214 used five independent Codex CLI investigations with GPT-6.1-Sol and MiniMax-M3 audits.
 
