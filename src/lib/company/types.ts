@@ -100,3 +100,9 @@ export interface CompanyDb{
  markRead(userId:string,issuerId:string,eventIds:string[]):Promise<{inserted:number}>;
  readEventIds(userId:string,eventIds:string[]):Promise<Set<string>>;
 }
+
+/** Optional overview-only explanation for null cells at the exact selected period.
+ * Emitted only for multiple distinct units with one candidate per unit and all inputs gated eligible.
+ * Absence makes no claim about why a cell is null. No candidate IDs, values or unit names are exposed.
+ */
+export interface OverviewUnavailableReasons{facts:Record<string,'multiple_units'>;derived:Record<string,'multiple_units'>}

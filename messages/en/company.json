@@ -264,6 +264,8 @@
   "overview": {
     "latestTitle": "Latest period",
     "envelope": "Figures use a consistent data revision ({rev})",
+    "multipleUnits": "Multiple units",
+    "multipleUnitsExplanation": "Overview omits figures with multiple units for this period.",
     "derived": "derived",
     "noLatest": "No period to summarize yet.",
     "eventsTitle": "Recent events",

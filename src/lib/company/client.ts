@@ -3,7 +3,7 @@
 // view/asOf parsing, hrefs, api urls, one fetch wrapper, and the client view of every route DTO
 // the page consumes. Only `import type` from ./types and ./event-dto (erased at build), so client
 // components may import this file.
-import type {Market,Cell,DerivedCell,WithheldCell,WithheldReason,WithheldCounts,PeriodCol,GridRow,FilingSummary,EvidenceDto,CoverageRow,StatementKind,Basis} from './types';
+import type {Market,Cell,OverviewUnavailableReasons,DerivedCell,WithheldCell,WithheldReason,WithheldCounts,PeriodCol,GridRow,FilingSummary,EvidenceDto,CoverageRow,StatementKind,Basis} from './types';
 import type {LineageRev,LineageConflict} from '@/lib/facts/types';
 import type {PublicEvent} from './event-dto';
 
@@ -67,7 +67,7 @@ export interface FactSeriesResponse{lineage?:string[];stateRevs?:LineageRev[];co
  otherUnits:string[];series:SeriesEntry[];otherUnitSeries:SeriesEntry[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type {PublicEvent} from './event-dto';
 export interface OverviewResponse{ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;
- latest:{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean}|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+ latest:{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean;unavailableReasons?:OverviewUnavailableReasons}|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 // inputUnit / basis mirror MetricDto (计划第 3 轮审计 R6): grid rows key on (metric, inputUnit, basis).
 export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;inputUnit:string;basis:string;basedOnRev:number;basedOnLineage?:LineageRev[];computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
 export interface MetricsResponse{lineage?:string[];resolution?:{tickerAsOf:string;issuerId:string;validFromMethod:string|null};conflicts?:{key:LineageConflict['key'];availableDate:string;factIds:string[]}[];issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;formulaVersion:string;stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}

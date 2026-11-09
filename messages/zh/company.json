@@ -264,6 +264,8 @@
   "overview": {
     "latestTitle": "最新财期速览",
     "envelope": "各项数据采用同一修订版本（{rev}）",
+    "multipleUnits": "多个单位",
+    "multipleUnitsExplanation": "该期存在多个单位的指标未在概览中显示。",
     "derived": "派生",
     "noLatest": "尚无可速览的财期。",
     "eventsTitle": "最近事件",
