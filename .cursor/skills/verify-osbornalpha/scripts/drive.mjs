@@ -129,32 +129,48 @@ const journeys = {
     const ctx = await newCtx('en-US'); const page = await ctx.newPage();
     const T = '00700.HK';
     const klines = [];
+    let liveQuote = null;
     page.on('response', async (r) => {
-      if (r.url().includes(`/api/kline/${T}`)) {
-        const u = new URL(r.url()); let bars = null;
+      const u = new URL(r.url());
+      if (u.origin !== BASE) return;
+      if (u.pathname === '/api/quote/batch' && r.status() === 200) {
+        try {
+          const quote = (await r.json()).quotes?.[T];
+          if (typeof quote?.price === 'number' && quote.price > 0) liveQuote = quote;
+        } catch {}
+      }
+      if (u.pathname === `/api/kline/${T}`) {
+        let bars = null;
         try { bars = (await r.json()).bars?.length ?? null; } catch {}
         klines.push({ range: u.searchParams.get('range'), status: r.status(), bars });
       }
     });
-    const r = await page.goto(`${BASE}/en/stock/${T}`, { waitUntil: 'networkidle' });
-    check(`GET /en/stock/${T} → 200`, r?.status() === 200, r?.status());
-    const chart = page.getByTestId('kline-chart');
-    await chart.waitFor({ timeout: 30_000 }).catch(() => {});
-    check('kline chart visible', await chart.isVisible());
-    await chart.locator('canvas').first().waitFor({ timeout: 30_000 }).catch(() => {});
-    check('chart canvas drawn', await chart.locator('canvas').first().isVisible().catch(() => false));
-    check('live quote shown (no "Live quote unavailable")', await page.getByText('Live quote unavailable', { exact: true }).count() === 0);
-    check('page names the company (Tencent / 腾讯)', /Tencent|腾讯/.test(await page.locator('main').innerText()));
-    await shot(page, 'stock-1-default');
-    await chart.getByRole('button', { name: '1Y' }).click();
-    for (let i = 0; i < 30 && !klines.some((k) => k.range === '1y'); i++) await page.waitForTimeout(1000);
-    const y = klines.find((k) => k.range === '1y');
-    check('clicking 1Y requests /api/kline?range=1y → 200 with bars', y && y.status === 200 && y.bars > 0, JSON.stringify(y));
-    check('1Y button pressed', (await chart.getByRole('button', { name: '1Y' }).getAttribute('aria-pressed')) === 'true');
-    await page.waitForTimeout(1500);
-    await shot(page, 'stock-2-1y');
-    save('stock-kline-requests.json', klines);
-    await ctx.close();
+    const target = `${BASE}/portfolio?s=${T}`;
+    try {
+      const r = await page.goto(target, { waitUntil: 'domcontentloaded' });
+      check(`GET /portfolio?s=${T} → 200 at the focused portfolio URL`, r?.status() === 200 && page.url() === target, page.url());
+      const chart = page.getByTestId('kline-chart');
+      await chart.waitFor({ timeout: 30_000 }).catch(() => {});
+      check('kline chart visible', await chart.isVisible());
+      await chart.locator('canvas').first().waitFor({ timeout: 30_000 }).catch(() => {});
+      check('chart canvas drawn', await chart.locator('canvas').first().isVisible().catch(() => false));
+      const focus = page.locator('main').getByText(/Tencent|腾讯/).filter({ visible: true });
+      check('live Tencent quote received with a positive price', liveQuote !== null);
+      check('portfolio names the company (Tencent / 腾讯)', await focus.first().isVisible());
+      await shot(page, 'stock-1-default');
+      const oneYear = chart.getByRole('button', { name: '1Y', exact: true });
+      const beforeClick = klines.length;
+      const clicked = await oneYear.click({ timeout: 10_000 }).then(() => true, () => false);
+      for (let i = 0; clicked && i < 30 && !klines.slice(beforeClick).some((k) => k.range === '1y'); i++) await page.waitForTimeout(1000);
+      const y = klines.slice(beforeClick).find((k) => k.range === '1y');
+      check('clicking 1Y requests /api/kline?range=1y → 200 with bars', clicked && y?.status === 200 && y.bars > 0, clicked ? JSON.stringify(y) : '1Y click failed');
+      check('1Y button pressed', clicked && (await oneYear.getAttribute('aria-pressed')) === 'true');
+      await page.waitForTimeout(1500);
+      await shot(page, 'stock-2-1y');
+    } finally {
+      save('stock-kline-requests.json', klines);
+      await ctx.close();
+    }
   },
 
   async 'quote-api'() {
@@ -190,21 +206,24 @@ const journeys = {
     await page.goto(BASE + '/login', { waitUntil: 'networkidle' });
     check('/login shows email + password inputs', await page.locator('input[type="email"]').isVisible() && await page.locator('input[type="password"]').isVisible());
     await shot(page, `auth-login-${MODE}`);
+    for (const from of ['/today', '/dashboard']) {
+      const response = await getJson(from);
+      check(`${from} → 308 /macro`, response.status === 308 && response.location === '/macro', `${response.status} ${response.location}`);
+    }
     if (MODE === 'gate') {
-      for (const [from, next] of [['/portfolio', '/portfolio'], ['/today', '/today'], ['/en/portfolio', '/portfolio'], ['/watchlist', '/watchlist']]) {
+      for (const [from, next] of [['/portfolio', '/portfolio'], ['/macro', '/macro'], ['/today', '/macro'], ['/dashboard', '/macro'], ['/en/portfolio', '/portfolio'], ['/watchlist', '/watchlist']]) {
         await page.goto(BASE + from, { waitUntil: 'networkidle' });
         const u = new URL(page.url());
         check(`${from} → /login?next=${next}`, u.pathname === '/login' && u.searchParams.get('next') === next, page.url());
       }
-      await page.goto(BASE + '/dashboard', { waitUntil: 'networkidle' });
-      const u = new URL(page.url());
-      check('/dashboard → /login with next containing today', u.pathname === '/login' && (u.searchParams.get('next') ?? '').includes('today'), page.url());
       const home = await page.goto(BASE + '/', { waitUntil: 'networkidle' });
       check('public / stays 200 with gate on', home?.status() === 200 && new URL(page.url()).pathname === '/');
       await shot(page, 'auth-gate-redirect');
     } else {
       const r = await page.goto(BASE + '/today', { waitUntil: 'networkidle' });
-      check('guest mode (Supabase unset): /today renders without redirect (documented dev behavior)', r?.status() === 200 && new URL(page.url()).pathname === '/today', page.url());
+      check('guest /today reaches the Macro Workbench at /macro', r?.status() === 200
+        && new URL(page.url()).pathname === '/macro'
+        && await page.getByRole('heading', { name: '宏观工作台', exact: true }).isVisible(), page.url());
       await shot(page, 'auth-today-guest');
     }
     await ctx.close();

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch an isolated osbornalpha verification instance:
-#   - `next dev` on $OSB_PORT in guest mode (Supabase env stripped → auth gate off, search uses developer fallback)
+#   - `next dev` on $OSB_PORT in guest mode (Supabase env empty → auth gate off, search uses developer fallback)
 #   - headless Chrome with its own throwaway profile, CDP on $OSB_CDP_PORT
 #   - a fresh evidence dir $OSB_EVIDENCE_ROOT/verify-<timestamp>/
 # Usage: scripts/launch.sh            (guest mode, default)
@@ -32,14 +32,16 @@ if [ ! -d "$REPO_ROOT/node_modules/next" ]; then
   (cd "$REPO_ROOT" && npm ci --no-audit --no-fund) > "$OSB_RUN_DIR/npm-ci.log" 2>&1
 fi
 
-ENV_ARGS=(-u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SERVICE_ROLE_KEY NEXT_TELEMETRY_DISABLED=1)
+# An empty inherited value takes precedence over Next.js dotenv files.
+# Unsetting would allow a checkout's .env.local to configure a real Supabase.
+SB_URL=''
+SB_ANON_KEY=''
 if [ "$OSB_MODE" = gate ]; then
-  # Not a secret: a dummy anon key and a URL with nothing listening. getUser() fails → treated as signed out.
-  ENV_ARGS+=(NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54399 NEXT_PUBLIC_SUPABASE_ANON_KEY=verify-dummy-anon-key)
+  SB_URL=http://127.0.0.1:54399
+  SB_ANON_KEY=verify-dummy-anon-key
 fi
-if ls "$REPO_ROOT"/.env.local >/dev/null 2>&1; then
-  echo "launch: WARNING $REPO_ROOT/.env.local exists; Next will load it and may override guest mode" >&2
-fi
+ENV_ARGS=("NEXT_PUBLIC_SUPABASE_URL=$SB_URL" "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SB_ANON_KEY"
+  SUPABASE_SERVICE_ROLE_KEY= NEXT_TELEMETRY_DISABLED=1)
 
 cd "$REPO_ROOT"
 setsid env "${ENV_ARGS[@]}" npx next dev -p "$OSB_PORT" > "$OSB_RUN_DIR/next.log" 2>&1 < /dev/null &
