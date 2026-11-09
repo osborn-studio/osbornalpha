@@ -106,6 +106,7 @@ Restricted series (VIX, SP500 / NASDAQ / DJIA, CSI 300) stay `restricted` until 
 
 ## 6. Troubleshooting
 
+- Manifest persistence: private `[macro-manifest]` phase logs share an `operation_id`. A failed `rpc` phase may include `upstream_request_id`, captured from the unsuccessful manifest POST's UUID-shaped `sb-request-id` response header. Use that exact value to look up the gateway `requestId`; it is not a backend PID/session join. Missing/invalid headers, network failures, successful responses and readback failures omit it. Default strategy route/cron clients capture it; injected clients need the macro `manifestFetch` hook to supply it. Timings include client/network/gateway/SQL and do not locate database time consumption. Historical statement-timeout events remain unexplained; this correlation field does not establish their effective budget or repair the timeout. Do not replay a writer to generate diagnostic evidence.
 - Every fact route 503 `macro_foundation_unavailable`: `strategyPort()` returned `null`, i.e. `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing in that deployment.
 - Transmission 404 `no_published_snapshot`: neither region has an active P1 snapshot (run the checks of section 8.1 and 8.2).
 - A fact route 500 right after enabling: read the function log; a `truncated` thrown outside the routes' own handling means a bounded read ran past its cap (`snapshotsSince` paging in `wiring.ts`, or `HISTORY_MAX_ROWS`).
