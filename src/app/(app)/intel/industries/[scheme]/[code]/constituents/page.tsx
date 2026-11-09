@@ -81,7 +81,7 @@ export default async function ConstituentsPage({params,searchParams}:{params:Pro
                       <th className="hidden py-2 font-normal md:table-cell">{v.currentOnly?t('constituents.sic'):t('constituents.path')}</th>
                       <th className="py-2 text-right font-normal">{revenueFy?t('constituents.revenueFy',{fy:revenueFy}):t('constituents.revenue')}</th>
                       <th className="hidden py-2 text-right font-normal sm:table-cell">{t('constituents.netIncome')}</th>
-                      <th className="hidden py-2 pr-4 font-normal sm:table-cell">{t('constituents.company')}</th>
+                      <th className="hidden py-2 pr-4 font-normal sm:table-cell lg:pl-4">{t('constituents.company')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -98,7 +98,7 @@ export default async function ConstituentsPage({params,searchParams}:{params:Pro
                           <td className="hidden py-1.5 text-xs text-text-dim md:table-cell">{v.currentOnly?<span className="font-mono">{r.membership.code}</span>:r.path.slice(1).map(n=>nodeName(n,locale)).join(' / ')||'—'}</td>
                           <td className="py-1.5 text-right">{fact(r.revenue)}</td>
                           <td className="hidden py-1.5 text-right sm:table-cell">{fact(r.netIncome)}</td>
-                          <td className="hidden py-1.5 pr-4 sm:table-cell">{r.ticker&&<Link href={stockPath(r.ticker)} className="text-xs">{t('constituents.companyLink')} →</Link>}</td>
+                          <td className="hidden py-1.5 pr-4 sm:table-cell lg:pl-4">{r.ticker&&<Link href={stockPath(r.ticker)} className="text-xs">{t('constituents.companyLink')} →</Link>}</td>
                         </tr>
                       );
                     })}
