@@ -7,12 +7,13 @@ const mocks = vi.hoisted(() => ({
   twseQuoteRetentionStart: vi.fn(),
   sourceNames: ['public-fallback'],
   paidConfigured: false,
+  gatewayConfigured: true,
   paidDaily: vi.fn(),
   paidBasic: vi.fn(),
 }));
 
 vi.mock('@/lib/data/sources/datagateway-quote', () => ({
-  isDatagatewayConfigured: () => true,
+  isDatagatewayConfigured: () => mocks.gatewayConfigured,
   fetchDatagatewayRealtimeQuotes: mocks.fetchDatagatewayRealtimeQuotes,
 }));
 
@@ -32,6 +33,7 @@ vi.mock('@/lib/data/sources/tushare-cached', () => ({
 }));
 
 let GET: typeof import('./route')['GET'];
+let KlineProviderError: typeof import('@/lib/data/kline/types')['KlineProviderError'];
 
 function quote(ticker: string, source: string) {
   return {
@@ -64,11 +66,13 @@ function quote(ticker: string, source: string) {
 describe('GET /api/quote/batch DataGateway routing', () => {
   beforeEach(async () => {
     vi.resetModules();
+    ({ KlineProviderError } = await import('@/lib/data/kline/types'));
     ({ GET } = await import('./route'));
     vi.clearAllMocks();
     mocks.twseQuoteRetentionStart.mockReset();
     mocks.sourceNames = ['public-fallback'];
     mocks.paidConfigured = false;
+    mocks.gatewayConfigured = true;
     mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([
       ['AAPL', quote('AAPL', 'datagateway-wind')],
     ]));
@@ -233,6 +237,141 @@ describe('GET /api/quote/batch DataGateway routing', () => {
     mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map([['CACHETIME', quote('CACHETIME', 'datagateway-wind')]]));
     const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=CACHETIME'))).json();
     expect(body.meta.selected_sources.CACHETIME).toBe('datagateway-wind'); expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledTimes(2);
+  });
+
+  it('emits one bounded typed miss before successful fallbacks, with stage-only duration', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    vi.spyOn(Date, 'now').mockReturnValue(9000);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementationOnce(async () => {
+      clock.mockReturnValue(1125);
+      throw new KlineProviderError('protocol', 'Bearer SECRET https://private.invalid AAPL issuer-42', false, 403);
+    });
+    const logsAtFallback: number[] = [];
+    mocks.fallbackFetch.mockImplementation(async (ticker: string) => {
+      logsAtFallback.push(warn.mock.calls.length);
+      clock.mockReturnValue(4000); // fallback cost must not enter gateway duration
+      return quote(ticker, 'public-fallback');
+    });
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,MSFT&_=1'))).json();
+    expect(body.meta.failed).toBe(0);
+    expect(logsAtFallback).toEqual([1, 1]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('quote datagateway miss', {
+      requested_count: 2, usable_count: 0, missing_count: 2, attempts: 1,
+      failure_kind: 'protocol', http_status: 403, duration_ms: 125,
+    });
+    expect(body.meta.selected_sources).toEqual({ AAPL: 'public-fallback', MSFT: 'public-fallback' });
+    // Existing public counters remain per symbol, including the duration sum.
+    expect(body.meta.sources['datagateway-wind']).toEqual({ attempted: 2, succeeded: 0, failed: 2, retries: 0, duration_ms: 250 });
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/SECRET|private|AAPL|MSFT|issuer/);
+  });
+
+  it.each(['empty', 'partial'] as const)('reports a configured %s result once, before fallback', async outcome => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hits = outcome === 'partial' ? new Map([['AAPL', quote('AAPL', 'datagateway-wind')]]) : new Map();
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(hits);
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,MSFT&_=1'))).json();
+    expect(warn).toHaveBeenCalledExactlyOnceWith('quote datagateway miss', {
+      requested_count: 2, usable_count: hits.size, missing_count: 2 - hits.size, attempts: 1,
+      failure_kind: outcome, http_status: null, duration_ms: expect.any(Number),
+    });
+    expect(body.meta.failed).toBe(0);
+    expect(body.meta.sources['datagateway-wind'].succeeded).toBe(hits.size);
+  });
+
+  it('does not infer a category or status from untyped error text or properties', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mocks.fetchDatagatewayRealtimeQuotes.mockRejectedValue(Object.assign(new Error('HTTP 403 timeout SECRET'), { kind: 'protocol', status: 403 }));
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1'))).json();
+    expect(warn).toHaveBeenCalledExactlyOnceWith('quote datagateway miss', expect.objectContaining({ failure_kind: 'unknown', http_status: null }));
+    expect(body.meta.selected_sources.AAPL).toBe('public-fallback');
+  });
+
+  it.each(['throw', 'reject'] as const)('preserves fallback and fresh cache if diagnostic logging fails (%s)', async mode => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {
+      if (mode === 'throw') throw new Error('logger failed');
+      return Promise.reject(new Error('logger rejected')) as never;
+    });
+    mocks.fetchDatagatewayRealtimeQuotes.mockResolvedValue(new Map());
+    const first = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1'))).json();
+    const second = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL'))).json();
+    expect(first.meta.selected_sources.AAPL).toBe('public-fallback');
+    expect(second.meta.selected_sources.AAPL).toBe('cache');
+    expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledOnce();
+    expect(mocks.fallbackFetch).toHaveBeenCalledOnce();
+  });
+
+  it('emits no miss for a full hit, fresh cache, unconfigured gateway or empty request', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1'));
+    await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL'));
+    mocks.gatewayConfigured = false;
+    await GET(new Request('https://example.test/api/quote/batch?tickers=MSFT&_=1'));
+    await GET(new Request('https://example.test/api/quote/batch?tickers='));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('measures gateway duration before fallbacks and sums that stage once per requested symbol', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const wall = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementationOnce(async () => {
+      clock.mockReturnValue(1125);
+      wall.mockReturnValue(1125);
+      return new Map();
+    });
+    mocks.fallbackFetch.mockImplementation(async (ticker: string) => {
+      clock.mockReturnValue(6000);
+      wall.mockReturnValue(6000);
+      return quote(ticker, 'public-fallback');
+    });
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL,MSFT&_=1'))).json();
+    expect(body.meta.sources['datagateway-wind'].duration_ms).toBe(250);
+  });
+
+  it.each([
+    ['rate_limited', 429, 'rate_limited', 429],
+    ['transient', 503, 'transient', 503],
+    ['invalid_data', undefined, 'invalid_data', null],
+    ['SECRET', 403, 'unknown', 403],
+    ['protocol', 200, 'protocol', null],
+    ['protocol', 600, 'protocol', null],
+    ['protocol', 403.5, 'protocol', null],
+    ['protocol', Number.NaN, 'protocol', null],
+  ])('allowlists typed diagnostic kind/status (%s, %s)', async (kind, status, expectedKind, expectedStatus) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = new KlineProviderError('protocol', 'SECRET private payload', false, status as number | undefined);
+    Object.assign(error, { kind }); // runtime input can violate the TypeScript union
+    mocks.fetchDatagatewayRealtimeQuotes.mockRejectedValue(error);
+    const body = await (await GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1'))).json();
+    expect(body.meta.failed).toBe(0);
+    expect(warn).toHaveBeenCalledExactlyOnceWith('quote datagateway miss', {
+      requested_count: 1, usable_count: 0, missing_count: 1, attempts: 1,
+      failure_kind: expectedKind, http_status: expectedStatus, duration_ms: expect.any(Number),
+    });
+  });
+
+  it('reports the source deadline by its error name, without retrying the gateway', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementation(() => new Promise(() => {}));
+    const pending = GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1'));
+    await vi.advanceTimersByTimeAsync(5000);
+    const body = await (await pending).json();
+    expect(body.meta.selected_sources.AAPL).toBe('public-fallback');
+    expect(mocks.fetchDatagatewayRealtimeQuotes).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledExactlyOnceWith('quote datagateway miss', expect.objectContaining({ failure_kind: 'timeout', http_status: null }));
+  });
+
+  it('does not log a gateway miss or dispatch fallback after request cancellation', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mocks.fetchDatagatewayRealtimeQuotes.mockImplementation(() => new Promise(() => {}));
+    const controller = new AbortController();
+    const pending = GET(new Request('https://example.test/api/quote/batch?tickers=AAPL&_=1', { signal: controller.signal }));
+    controller.abort();
+    expect((await pending).status).toBe(503);
+    expect(warn).not.toHaveBeenCalled();
+    expect(mocks.fallbackFetch).not.toHaveBeenCalled();
   });
 
 });
