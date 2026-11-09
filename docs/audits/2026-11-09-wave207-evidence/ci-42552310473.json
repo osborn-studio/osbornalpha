@@ -1,0 +1,140 @@
+{
+  "conclusion": "success",
+  "headSha": "b7c21abd1c728d0415c18b4f57b9d623742f44f5",
+  "jobs": [
+    {
+      "completedAt": "2026-11-09T02:42:47Z",
+      "conclusion": "success",
+      "databaseId": 128950376388,
+      "name": "source-fixtures",
+      "startedAt": "2026-11-09T02:41:30Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-11-09T02:41:32Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-11-09T02:41:31Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:41:35Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@v4",
+          "number": 2,
+          "startedAt": "2026-11-09T02:41:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:41:41Z",
+          "conclusion": "success",
+          "name": "Run actions/setup-node@v4",
+          "number": 3,
+          "startedAt": "2026-11-09T02:41:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:41:56Z",
+          "conclusion": "success",
+          "name": "Run npm ci",
+          "number": 4,
+          "startedAt": "2026-11-09T02:41:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:17Z",
+          "conclusion": "success",
+          "name": "Install headless Chromium",
+          "number": 5,
+          "startedAt": "2026-11-09T02:41:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:19Z",
+          "conclusion": "success",
+          "name": "Actual handler contracts",
+          "number": 6,
+          "startedAt": "2026-11-09T02:42:17Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:22Z",
+          "conclusion": "success",
+          "name": "Registered transport contracts",
+          "number": 7,
+          "startedAt": "2026-11-09T02:42:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:23Z",
+          "conclusion": "success",
+          "name": "Fixture lineage consistency",
+          "number": 8,
+          "startedAt": "2026-11-09T02:42:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:35Z",
+          "conclusion": "success",
+          "name": "Source, destinations and registry rendering",
+          "number": 9,
+          "startedAt": "2026-11-09T02:42:23Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:40Z",
+          "conclusion": "success",
+          "name": "Scoped TypeScript",
+          "number": 10,
+          "startedAt": "2026-11-09T02:42:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:42Z",
+          "conclusion": "success",
+          "name": "Scoped lint",
+          "number": 11,
+          "startedAt": "2026-11-09T02:42:40Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:44Z",
+          "conclusion": "success",
+          "name": "Run actions/upload-artifact@v4",
+          "number": 12,
+          "startedAt": "2026-11-09T02:42:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:44Z",
+          "conclusion": "success",
+          "name": "Post Run actions/setup-node@v4",
+          "number": 23,
+          "startedAt": "2026-11-09T02:42:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:44Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@v4",
+          "number": 24,
+          "startedAt": "2026-11-09T02:42:44Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-11-09T02:42:44Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 25,
+          "startedAt": "2026-11-09T02:42:44Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42552310473/job/128950376388"
+    }
+  ],
+  "name": "Macro source fixture checks",
+  "status": "completed",
+  "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42552310473"
+}
