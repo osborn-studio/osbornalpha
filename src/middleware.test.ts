@@ -24,6 +24,23 @@ describe('middleware auth gate',()=>{
   expect(res.status).toBe(307);
   expect(res.headers.get('location')).toBe(`https://alpha.example/login?next=${encodeURIComponent(path)}`);
  });
+ it('keeps industry selectors in the login destination without forwarding credentials or nested returns',async()=>{
+  const res=await middleware(req('/intel/industries?scheme=sic&metric=member_count&access_token=private&next=https://evil.example'));
+  expect(res.status).toBe(307);
+  expect(new URL(res.headers.get('location')!).searchParams.get('next')).toBe('/intel/industries?scheme=sic&metric=member_count');
+ });
+ it('preserves selectors through the locale canonicalization and auth redirects',async()=>{
+  const first=await middleware(req('/en/intel/industries?scheme=sic&metric=member_count'));
+  expect(first.headers.get('location')).toBe('https://alpha.example/intel/industries?scheme=sic&metric=member_count');
+  const second=await middleware(new NextRequest(first.headers.get('location')!));
+  expect(new URL(second.headers.get('location')!).searchParams.get('next')).toBe('/intel/industries?scheme=sic&metric=member_count');
+ });
+ it('allows an authenticated industry request without redirecting',async()=>{
+  mocks.getUser.mockResolvedValue({data:{user:{id:'user-1'}}});
+  const res=await middleware(req('/intel/industries?scheme=sic&metric=member_count'));
+  expect(res.headers.get('location')).toBeNull();
+  expect(res.headers.get('x-middleware-next')).toBe('1');
+ });
  it.each(['/api/companies','/api/companies/AAPL/statements','/en/api/companies/AAPL/facts'])('%s: no client, no getUser, no Set-Cookie',async path=>{
   const res=await middleware(req(path));
   expect(mocks.create).not.toHaveBeenCalled();expect(mocks.getUser).not.toHaveBeenCalled();

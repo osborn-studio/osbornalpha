@@ -8,6 +8,7 @@ import { useToast } from '@/components/Toast';
 import { getAnonymousAnalyticsId, trackEvent } from '@/lib/analytics/client';
 import { authCallbackUrl } from '@/lib/analytics/auth-funnel';
 import { useEmailRequestCooldown } from '@/lib/hooks/useEmailRequestCooldown';
+import { loginReturnDestination } from '@/lib/auth/return-destination';
 import { stableAuthErrorCode } from '@/lib/auth/errors';
 import { configuredOAuthProviders, type OAuthProvider } from '@/lib/auth/providers';
 
@@ -57,7 +58,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
       }
       trackEvent('login_succeeded', { provider: 'email' });
       show(t('toasts.loginSuccess'));
-      window.location.href = '/macro';
+      window.location.href = loginReturnDestination(new URLSearchParams(window.location.search).get('next'));
     } else {
       const { error } = await sb.auth.signUp({
         email,
