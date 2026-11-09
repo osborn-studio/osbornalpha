@@ -41,6 +41,12 @@ describe('runIndustryJob (adapts each runner of Tasks 5–13 to a RunnerReceipt)
   expect(await runIndustryJob('load-a-share',deps,{dryRun:false,triggeredBy:'cron',limit:50})).toEqual({job:'load-a-share',receipt:{batchId:'b',status:'success',counts:C({inserted:3}),errors:[]}});
   expect(runners.loadAShare).toHaveBeenCalledWith(deps,{apply:true,triggeredBy:'cron',today:undefined,maxLookups:50});
  });
+ it('passes explicit CLI selection through dispatch to the loader',async()=>{
+  const parsed=parseSyncArgs(['--job','load-a-share','--ticker','600519.SH','--ticker','000333.SZ']);
+  expect(parsed.ok).toBe(true);if(!parsed.ok)throw new Error(parsed.error);
+  await runIndustryJob(parsed.args.job,deps,{...parsed.args,dryRun:!parsed.args.apply,triggeredBy:'script'});
+  expect(runners.loadAShare.mock.calls[0][1]).toMatchObject({apply:false,tickers:['600519.SH','000333.SZ']});
+ });
  it('snapshot store (plan-2 raw-bytes store) is handed to every Tushare page fetcher when deps carry one, and omitted otherwise',async()=>{
   const store={put:vi.fn()};const sd={...deps,snapshots:store} as unknown as IndustryJobDeps;
   await runIndustryJob('load-a-share',sd,{dryRun:false,triggeredBy:'script'});
@@ -145,6 +151,18 @@ describe('parseSyncArgs',()=>{
   expect(parseSyncArgs(['--job','marks','--apply','--trade-date','2026-10-30','--trade-date','2026-10-23'])).toEqual({ok:true,args:{job:'marks',apply:true,tradeDates:['2026-10-30','2026-10-23'],l1Codes:[]}});
   expect(parseSyncArgs(['--job','aggregate','--facts-as-of','2026-11-03'])).toMatchObject({ok:true,args:{job:'aggregate',apply:false,factsAsOf:'2026-11-03'}});
   expect(parseSyncArgs(['--job','memberships-sw','--l1','801120.SI'])).toMatchObject({ok:true,args:{l1Codes:['801120.SI']}});
+ });
+ it('accepts repeatable exact canonical tickers only for load-a-share, with a hard cap',()=>{
+  expect(parseSyncArgs(['--job','load-a-share','--ticker','600519.SH','--ticker','000333.SZ','--limit','1'])).toMatchObject({ok:true,args:{tickers:['600519.SH','000333.SZ'],limit:1}});
+  expect(parseSyncArgs(['--job','load-a-share',...Array.from({length:10},(_,i)=>['--ticker',`${String(i).padStart(6,'0')}.BJ`]).flat()]).ok).toBe(true);
+  for(const value of ['600519','600519.SS','sh600519','600519.sh','600519.SH\n',' 600519.SH','600519.SH,000333.SZ','AAPL',''])
+   expect(parseSyncArgs(['--job','load-a-share','--ticker',value]).ok,value).toBe(false);
+  for(const argv of [
+   ['--job','load-a-share','--ticker'],
+   ['--job','marks','--ticker','600519.SH'],
+   ['--job','load-a-share','--ticker','600519.SH','--ticker','600519.SH'],
+   ['--job','load-a-share',...Array.from({length:11},(_,i)=>['--ticker',`${String(i).padStart(6,'0')}.SZ`]).flat()],
+  ])expect(parseSyncArgs(argv).ok).toBe(false);
  });
  it('rejects --limit when the selected job does not consume it',()=>{
   for(const job of ['memberships-sw','facts-scope','marks','aggregate','official','valuation'])
