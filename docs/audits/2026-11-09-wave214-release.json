@@ -319,7 +319,18 @@
       "Company events freshness showed an error.",
       "600519.SH showed unregistered issuer and no disclosure facts. The A-share directory filter returned no matches with search empty, while facts.cn freshness showed fresh."
     ],
-    "scope": "Selected signed-in desktop paths on apex. Real predecessor lineage, broader account/locale coverage, public SW entitlement, valuation and judgment remain separately gated."
+    "scope": "Selected signed-in desktop paths on apex. Real predecessor lineage, broader account/locale coverage, public SW entitlement, valuation and judgment remain separately gated.",
+    "noahIncomeStatement": {
+      "path": "/stock/NOAH?view=statements",
+      "periodEnd": "2025-12-31",
+      "duration": "12M",
+      "displayUnit": "million CNY",
+      "displayValues": {
+        "revenue": 2610.24,
+        "net_income": 557.22,
+        "net_income_parent": 558.86
+      }
+    }
   },
   "researchFollowUps": {
     "noah": {
@@ -366,6 +377,46 @@
           "company.events": "error"
         }
       }
-    ]
+    ],
+    "cnProductionMasterSample": {
+      "observed_at_utc": "2026-11-09T10:05:02.163110+00:00",
+      "method": "native Chrome Supabase SQL editor, BEGIN READ ONLY, 5s statement timeout, 250ms lock timeout, ROLLBACK",
+      "samples": [
+        {
+          "ticker": "600519.SH",
+          "master_exists": false,
+          "active_universe": true
+        },
+        {
+          "ticker": "000333.SZ",
+          "master_exists": false,
+          "active_universe": true
+        },
+        {
+          "ticker": "300750.SZ",
+          "master_exists": false,
+          "active_universe": true
+        }
+      ],
+      "freshness": [
+        {
+          "dataset": "facts.cn",
+          "status": "fresh",
+          "last_ok_at": "2026-11-09T08:35:31.259Z"
+        },
+        {
+          "dataset": "company.events",
+          "status": "error",
+          "last_ok_at": "2026-11-07T15:20:34.118Z",
+          "last_attempt_at": "2026-11-09T09:20:34.201Z"
+        }
+      ],
+      "issuers_a_stock_freshness_row_returned": false,
+      "limits": [
+        "Three exact canonical ticker samples only; not whole-universe census",
+        "No data writes, ingestion, flag, RLS or privilege changes",
+        "Current metadata does not establish historical timeout cause"
+      ]
+    }
   }
 }
