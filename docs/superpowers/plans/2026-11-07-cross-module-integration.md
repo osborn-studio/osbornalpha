@@ -2,7 +2,19 @@
 
 Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. Tooling: code by Codex CLI gpt-6-sol (medium); audits by mmx MiniMax-M3; PG17 tests run by the commander (`LC_ALL=C`, `.claude/scratch/db-one.ts` for single files, `npm run test:db` for the gate). Logs: `docs/audits/2026-11-07-integration/`.
 
-## Current release and remaining priorities — wave215 closeout
+## Current production evidence and remaining priorities — wave219
+
+Both production domains returned runtime `bffe600b` at 12:06 UTC. Main `ff5cdb65` adds the Wave215 documentation. All 12 scoped public checks passed. The signed-in attempt stopped at `cgWindowNotFound`. [Wave219 closeout](../../audits/2026-11-09-wave219-recovery.md) · [Machine receipt](../../audits/2026-11-09-wave219-recovery.json)
+
+| Priority | Evidence and remaining gate |
+|---|---|
+| AAPL | One targeted writer recovery succeeded at revision 1. Database and explicit-as-of Overview now show September 26 coverage. Default Overview still served October 23 from cache at the cutoff. Company-events freshness remains in error with one other failed stream. The automatic retry change [#220](https://github.com/osborn-studio/osbornalpha/pull/220) and current-cache policy [#222](https://github.com/osborn-studio/osbornalpha/pull/222) are open. The source of the historical statement delay remains unknown. |
+| Manifest persistence | [#221](https://github.com/osborn-studio/osbornalpha/pull/221) adds private gateway request correlation for future failures. Production persistence recovery and historical backend timing remain open. |
+| Company and industry acceptance | Public NOAH reporting-unit reasons, NOAH Statements evidence and the SIC3571 SMCI evidence response passed. Authenticated NOAH Overview and SIC3571 layout checks remain open. |
+| CN issuers and facts | Three selected identities resolve. Publication, company coverage, PDF links and per-value locators remain open. The public CN directory is empty. |
+| Remaining launch gates | SW and I-3 rights and pipeline gates, independent financial/event gold, multi-member lineage, issuer methodology, disabled F6 kinds, foreign runtime and preferred quote-source recovery remain open. |
+
+## Historical release and remaining priorities — wave215 closeout
 
 Both production domains verified exact main `bffe600b` on Ready deployment `dpl_CmYBDBCjtGSZ5Hf9EEoj7KWJtEir` at 11:27 UTC. All 18 anonymous probes passed. The release includes merged #214–#218. The final signed-in browser retry stopped at `cgWindowNotFound`, leaving the deployed NOAH Overview explanation and SIC3571 desktop spacing pending authenticated production acceptance. Earlier signed-in Statements and evidence drawer observations retain their original scope. See the [wave215 closeout](../../audits/2026-11-09-wave215-closeout.md) and [machine receipt](../../audits/2026-11-09-wave215-closeout.json).
 
@@ -34,7 +46,7 @@ Consult the exact-head check snapshot in the receipt; a new check cycle started 
 
 ### Historical wave214 priorities and acceptance snapshot
 
-The following table preserves the wave214 delivery and browser boundaries; use the wave215 closeout above for the current deployment. The three missing CN master samples were exactly `600519.SH`, `000333.SZ` and `300750.SZ`, not the entire universe. NOAH's CNY statement rows existed despite Overview currency ambiguity and missing gross-margin inputs.
+The following table preserves the wave214 delivery and browser boundaries; use the current production evidence above for the latest observation. The three missing CN master samples were exactly `600519.SH`, `000333.SZ` and `300750.SZ`, not the entire universe. NOAH's CNY statement rows existed despite Overview currency ambiguity and missing gross-margin inputs.
 
 Wave214 used five independent Codex CLI investigations with GPT-6.1-Sol and MiniMax-M3 audits.
 
