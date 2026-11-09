@@ -26,7 +26,12 @@ html="$(curl -fsS -m 60 "$OSB_BASE_URL/" 2>/dev/null)"; [[ "$html" == *osbornalp
 s="$(curl -fsS -m 30 "$OSB_BASE_URL/api/search?q=00700" 2>/dev/null)"
 case "$mode" in
   guest) [[ "$s" == *'"developer-fallback"'* ]] && ok "search = developer-fallback (Supabase off, as intended)" || bad "search source unexpected: ${s:0:120}";;
-  gate)  code="$(curl -s -o /dev/null -w '%{http_code}' -m 30 "$OSB_BASE_URL/today")"; [ "$code" = 307 ] && ok "gate on: /today → 307" || bad "gate mode but /today returned $code";;
+  gate)  redirect="$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -m 30 "$OSB_BASE_URL/macro")"
+         case "$redirect" in
+           "307 $OSB_BASE_URL/login?next=%2Fmacro"|"307 http://localhost:$OSB_PORT/login?next=%2Fmacro")
+             ok "gate on: /macro → /login?next=/macro";;
+           *) bad "gate mode but /macro did not redirect to login with next=/macro";;
+         esac;;
 esac
 curl -fsS -m 3 "$OSB_CDP_URL/json/version" >/dev/null 2>&1 && ok "CDP answers on $OSB_CDP_PORT" || bad "CDP not answering"
 q="$(curl -s -m 30 -o /dev/null -w '%{http_code}' "$OSB_BASE_URL/api/quote/600519.SH")"

@@ -7,11 +7,11 @@ A proof that drives one entry point is incomplete when the file lists others.
 |---|---|---|---|---|
 | Landing page + zh/en i18n + design showcase | [landing-i18n.md](landing-i18n.md) | `landing` | guest, gate | no |
 | Guest watchlist: search, add, persist, de-dup | [watchlist.md](watchlist.md) | `watchlist` | guest | yes (quotes) |
-| Stock detail page + K-line chart | [stock-detail.md](stock-detail.md) | `stock` | guest | yes |
+| Portfolio quote + K-line chart | [stock-detail.md](stock-detail.md) | `stock` | guest | yes |
 | Public market-data & search API | [market-data-api.md](market-data-api.md) | `quote-api` | guest, gate | yes |
 | Auth gate (signed-out access control) | [auth-gate.md](auth-gate.md) | `auth-gate` | guest, gate | no |
 
-Not yet mapped (need real Supabase / credentials): sign-in and register, `/today`, `/portfolio`, `/research/*`, `/briefs`, `/settings`, `/copilot`, `/admin` (incl. `/admin/dq` data-quality dashboard — `src/app/(app)/admin/dq/`), Stripe billing, the Hermes / John Cameron CLI skills.
+Not yet mapped (need real Supabase / credentials): sign-in and register, Company Research at `/stock/[ticker]`, signed-in portfolio positions, `/research/*`, `/briefs`, `/settings`, `/copilot`, `/admin` (incl. `/admin/dq` data-quality dashboard — `src/app/(app)/admin/dq/`), Stripe billing, the Hermes / John Cameron CLI skills.
 
 Not yet mapped (public read APIs that need a migrated Supabase with issuers/facts data — guest/gate modes have no anon DB, so these cannot be driven locally without credentials):
 - Disclosure facts store (#102, CN path enabled in #104): `GET /api/facts/[ticker]` (`src/app/api/facts/[ticker]/route.ts`), `GET /api/facts/[ticker]/metrics` (`…/metrics/route.ts`), `GET /api/filings/[ticker]` (`src/app/api/filings/[ticker]/route.ts`). Spec: `docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md` §9; runbook: `docs/runbooks/data-foundation.md`. Without `NEXT_PUBLIC_SUPABASE_*` they 500 via `getAnonSupabase()`. #104 added real Tushare fixtures + §15 verification and turned CN sync on; it did **not** change these public read routes or make them driveable in guest/gate.
