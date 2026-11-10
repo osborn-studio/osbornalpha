@@ -1,0 +1,492 @@
+{
+  "candidateSha": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739",
+  "predeployRuntimeSha": "bffe600bca13b5f27b2ca2898f7dff7e4b4cb046",
+  "predeployBrowser": {
+    "recordedAt": "2026-11-10T00:55:13.910181+00:00",
+    "runtimeBoundary": "Observed before wave223 deployment; independent public checks reported bffe600b",
+    "method": "Native Chrome CUA in existing signed-in profile; new task window; screenshot/AX observations",
+    "observations": [
+      {
+        "route": "/stock/NOAH?view=overview&asOf=2026-11-10",
+        "result": "pass",
+        "details": "Four multiple-unit markers (revenue, parent net income, operating cash flow, revenue YoY), gross margin unavailable; one shared explanation link inside latest-period panel."
+      },
+      {
+        "action": "Click explanation Statements link",
+        "result": "pass",
+        "destination": "/stock/NOAH?view=statements&asOf=2026-11-10",
+        "details": "Destination preserved asOf; IS disclosed 12M 2025-12-31 revenue 2610.24 CNY million displayed; Admin: unredacted view checkbox present and unchecked."
+      }
+    ],
+    "unverified": [
+      "NOAH CNY/USD drawer interaction this wave",
+      "SIC3571 spacing and evidence drawer this wave",
+      "All observations after latest main deployment"
+    ],
+    "blocker": "Another session repeatedly changes active Chrome to GitHub settings and invalidates AX indexes; paused UI clicks awaiting exclusive access."
+  },
+  "predeployOperations": {
+    "sampledAt": "2026-11-10T00:55:17.546Z",
+    "aaplOverview": [
+      {
+        "observedAt": "2026-11-10T00:54:24.936877+00:00",
+        "completedAt": "2026-11-10T00:54:27.367838+00:00",
+        "host": "www.osbornalpha.com",
+        "pathKind": "overview",
+        "http": 200,
+        "bodySha256": "440fb387a07f2a1663215fbdd3754483f2308994978b3a1ace129a91efe9b367",
+        "cacheMetadata": {
+          "age": "0",
+          "cacheControl": "public",
+          "vercelCache": "MISS",
+          "upstreamDate": "Tue, 10 Nov 2026 00:54:29 GMT"
+        },
+        "mode": "default",
+        "asOf": null,
+        "coverage": {
+          "based_on_rev": 1,
+          "latest_period_end": "2026-09-26",
+          "latest_available_date": "2026-11-03",
+          "filings_count": 44,
+          "facts_count": 3000,
+          "rebuilt_at": "2026-11-09T12:13:33.638Z",
+          "rebuild_batch_id": "f0d5a671-59b2-468a-aa2b-9dbc1dfe2599"
+        },
+        "eventsComputed": "materialized",
+        "latestPeriodKey": "2025-09-28:2026-09-26:12M"
+      },
+      {
+        "observedAt": "2026-11-10T00:54:27.368007+00:00",
+        "completedAt": "2026-11-10T00:54:29.745008+00:00",
+        "host": "www.osbornalpha.com",
+        "pathKind": "overview",
+        "http": 200,
+        "bodySha256": "5a8e2681b2a95924e5b5913f6d75354e6ab664db6ea3cb42d0420538c1133b67",
+        "cacheMetadata": {
+          "age": "0",
+          "cacheControl": "public",
+          "vercelCache": "MISS",
+          "upstreamDate": "Tue, 10 Nov 2026 00:54:31 GMT"
+        },
+        "mode": "current-as-of",
+        "asOf": "2026-11-10",
+        "coverage": {
+          "based_on_rev": 1,
+          "latest_period_end": "2026-09-26",
+          "latest_available_date": "2026-11-03",
+          "filings_count": 44,
+          "facts_count": 3000,
+          "rebuilt_at": "2026-11-09T12:13:33.638Z",
+          "rebuild_batch_id": "f0d5a671-59b2-468a-aa2b-9dbc1dfe2599"
+        },
+        "eventsComputed": "live",
+        "latestPeriodKey": "2025-09-28:2026-09-26:12M"
+      }
+    ],
+    "aapl": {
+      "market": "US",
+      "scope": {
+        "state_rev": 1,
+        "last_status": "success",
+        "last_success_at": "2026-11-07T07:52:21.357753+00:00",
+        "next_due_at": "2026-11-14T07:52:20.221+00:00"
+      },
+      "digest": {
+        "digested_rev": 1,
+        "attempt_seq": 3,
+        "last_status": "success",
+        "last_attempt_at": "2026-11-09T12:13:13.703+00:00",
+        "last_success_attempt_id": 3,
+        "last_failed_attempt_id": 2,
+        "next_attempt_at": "2026-11-09T12:13:33.638183+00:00",
+        "swept_at": "2026-11-09T12:13:33.638183+00:00"
+      },
+      "coverage": {
+        "based_on_rev": 1,
+        "latest_period_end": "2026-09-26",
+        "latest_available_date": "2026-11-03",
+        "filings_count": 44,
+        "facts_count": 3000,
+        "concepts_covered": 26,
+        "rebuilt_at": "2026-11-09T12:13:33.638183+00:00",
+        "rebuild_batch_id": "f0d5a671-59b2-468a-aa2b-9dbc1dfe2599"
+      }
+    },
+    "pool": {
+      "market": "US",
+      "scope": {
+        "state_rev": 1,
+        "last_status": "success",
+        "last_success_at": "2026-11-09T08:06:03.865045+00:00",
+        "next_due_at": "2026-11-16T08:06:03.603+00:00"
+      },
+      "digest": {
+        "digested_rev": 1,
+        "attempt_seq": 3,
+        "last_status": "success",
+        "last_attempt_at": "2026-11-09T13:20:33.62+00:00",
+        "last_success_attempt_id": 3,
+        "last_failed_attempt_id": 2,
+        "next_attempt_at": "2026-11-09T13:20:47.466744+00:00",
+        "swept_at": "2026-11-09T13:20:47.466744+00:00"
+      },
+      "coverage": {
+        "based_on_rev": 1,
+        "latest_period_end": "2026-09-30",
+        "latest_available_date": "2026-10-28",
+        "filings_count": 44,
+        "facts_count": 3196,
+        "concepts_covered": 26,
+        "rebuilt_at": "2026-11-09T13:20:47.466744+00:00",
+        "rebuild_batch_id": "68cf7935-f6a5-40e5-84f3-b792869b26c7"
+      }
+    },
+    "failedBacklogRows": 5,
+    "companyEventsFreshness": {
+      "status": "error",
+      "last_ok_at": "2026-11-09T19:20:34.11+00:00",
+      "last_attempt_at": "2026-11-10T00:23:17.496+00:00",
+      "consecutive_errors": 5,
+      "detail": {
+        "idle": false,
+        "swept": 8,
+        "failed": 4,
+        "attempted": 12,
+        "succeeded": 8,
+        "skippedStale": 0,
+        "backlogFailed": 5,
+        "skippedUnknown": 0
+      }
+    },
+    "mostRecentNaturalDigestBatch": {
+      "batch_id": "db202666-4ae1-46bc-b77c-687658eecdf2",
+      "status": "partial",
+      "started_at": "2026-11-10T00:20:33.693+00:00",
+      "finished_at": "2026-11-10T00:23:16.437+00:00",
+      "code_version": "bffe600bca13b5f27b2ca2898f7dff7e4b4cb046",
+      "triggered_by": "cron",
+      "counts": {
+        "failed": 4,
+        "fetched": 12,
+        "inserted": 8,
+        "versioned": 0,
+        "duplicates": 0,
+        "quarantined": 0
+      },
+      "errorCount": 4,
+      "errorCodes": [
+        "evidence_index_failed",
+        "evidence_index_failed",
+        "evidence_index_failed",
+        "evidence_index_failed"
+      ]
+    },
+    "activeBatchCount": 0,
+    "evidenceReplaceCancellations": {
+      "count": 4,
+      "windowStart": "2026-11-10T00:20:00Z",
+      "windowEnd": "2026-11-10T00:24:00Z",
+      "requestIdsCaptured": 4,
+      "clientStageMs": [
+        8866.119,
+        14250.381,
+        17141.157,
+        9882.232
+      ],
+      "attribution": "Same cron request log only; no issuer, gateway log, or database backend joined."
+    }
+  },
+  "evidence": [
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/operations/public.json",
+      "sha256": "33a152a16c5f524b9cc4cb5bc877d4593949ccc36a8322b4d2399874721c025d"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/operations/database.json",
+      "sha256": "90ad977cd8d9cfb6158925429f7cf9e176c26f7f506a469db4da482cea82abfe"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/operations/logs.json",
+      "sha256": "2e92ea289a7198424d089369ef983abc7775771ad81f837b2176431dfb281435"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/operations/failed-evidence-window.json",
+      "sha256": "a2b78c03444de4ddc810e34e821bb87fac365780a07c47de6b18d063252f2178"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/browser/predeploy-observations.json",
+      "sha256": "32390ad385502dd38508d4eed30dd25c427290bd9734f16c7d05d88170c0fd4e"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/docs/verified-release-summary.json",
+      "sha256": "2c1a2f274b7378790a1fa91b4ae7d34eb414ae4138fb8fbff862b44a89674e1b"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/github-gates.json",
+      "sha256": "20472fe68848912dead2356b41cb74eb4211afca2f4f2a2ad64a42974d171902"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/ci-42731436874.json",
+      "sha256": "8cf5c6a8cdf262fcef065b6f55bb7e5877ec9545d4375875aea01e241ebc344e"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/ci-42731436678.json",
+      "sha256": "90f964d77b0ef460100aed0d56ff8f52e92a4a6891fd5996f5ec88ac90861fd6"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/production-verification-apex.json",
+      "sha256": "802dd7bbcf3de7eb846acae36bbd27691acdbbbdc2239e29045c0e5ec66c2868"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/production-verification-www.json",
+      "sha256": "1f1124cf6619ee89b61386c62aa29a3f32fe5d2af8ddc8f2780860dde4e42d4c"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/MIGRATION_PREFLIGHT.md",
+      "sha256": "01fb78ded17cfe77ad86d36a2eed7e07e0dccd3323e189bab46dd1f5e93e1ae7"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/company-cache-initial.json",
+      "sha256": "8111e475e117752e0801c97cd7669d8f34a7f3d9da7ba7a5feb3f56432720eb2"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/aapl-default-expiry-coverage.json",
+      "sha256": "0672ce7fd8d5d52ea0f701190b2ad5d43ca8ce35919bf96105bb9e88f2fb6d35"
+    },
+    {
+      "path": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave223/release/production-noah-overview.json",
+      "sha256": "c247f9b491519f9aacb34a433727a66abc37f820c63343c75bf7c6ff5b086060"
+    }
+  ],
+  "productionRelease": {
+    "timestamp": "2026-11-10T01:05:26.169057+00:00",
+    "sha": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739",
+    "remoteMainAfter": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739",
+    "remoteMainDriftAfterDeployment": false,
+    "deploymentId": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+    "aliasInspections": [
+      {
+        "host": "osbornalpha.com",
+        "exitCode": 0,
+        "ready": true,
+        "deploymentId": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+        "apexAliasListed": true,
+        "wwwAliasListed": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "exitCode": 0,
+        "ready": true,
+        "deploymentId": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+        "apexAliasListed": true,
+        "wwwAliasListed": true
+      }
+    ],
+    "probes": [
+      {
+        "host": "osbornalpha.com",
+        "pass": true,
+        "count": 9,
+        "runtimeShas": [
+          "bea837dbc25b8b78fe826a6ab837e9d6b9d81739"
+        ]
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "pass": true,
+        "count": 9,
+        "runtimeShas": [
+          "bea837dbc25b8b78fe826a6ab837e9d6b9d81739"
+        ]
+      }
+    ],
+    "anonymousProbesPassed": 18,
+    "rollbackDeploymentId": "dpl_CmYBDBCjtGSZ5Hf9EEoj7KWJtEir",
+    "authenticatedAcceptance": "parent handles browser",
+    "releaseScope": "APP ONLY",
+    "migrationStatus": "DEFERRED / PENDING UNVERIFIED; no SQL attempted",
+    "finalVerificationAt": "2026-11-10T01:08:02.352044+00:00",
+    "finalAliasRuntime": [
+      {
+        "host": "osbornalpha.com",
+        "deploymentId": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+        "ready": true,
+        "runtimeSha": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739"
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "deploymentId": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+        "ready": true,
+        "runtimeSha": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739"
+      }
+    ],
+    "remoteMainFinal": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739",
+    "remoteMainDriftFinal": false,
+    "companyChecksPassed": 24,
+    "cacheObservationMinimumElapsedSeconds": 91.08,
+    "rootStatusPreserved": true,
+    "temporaryEnvironmentRemoved": true,
+    "verdict": "APP DEPLOYED AND VERIFIED; SQL RETRY RELEASE DEFERRED"
+  },
+  "exactMainCI": {
+    "applicationRunId": 42731436874,
+    "macroRunId": 42731436678
+  },
+  "selectorMigration": {
+    "version": "20261124110000",
+    "sourceSha256": "ba3f2218e4f48c278f319e699df224046697bd84404ab2a89a0a9ca263831195",
+    "appliedByWave223": false,
+    "productionCatalogAndHistoryVerified": false
+  },
+  "postdeployCompanyCache": {
+    "timestamp": "2026-11-10T01:05:35.552570+00:00",
+    "utcDate": "2026-11-10",
+    "samples": 12,
+    "status": 200,
+    "downstreamCacheControl": "public, max-age=0",
+    "ageRangeSeconds": [
+      0,
+      1
+    ],
+    "cachePairs": "MISS then HIT for each route and alias",
+    "edgeExpiryVerified": false,
+    "limitations": [
+      "Observed safe downstream max-age and Age/cache headers only. Vercel may consume s-maxage=60; missing downstream s-maxage is not proof of missing edge policy.",
+      "Two bounded samples do not establish expiry timing, cache invalidation, writer recovery, digest success, coverage rebuild, or 60-second freshness SLO.",
+      "Current reads and explicitly-current asOf are read-only application APIs; no RPC replay/cron/provider request was invoked."
+    ]
+  },
+  "postdeployAaplDefaultExpiry": {
+    "deployment": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+    "revisionFromSeparateAliasProbes": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739",
+    "conditions": "Ordinary anonymous GETs; no forced revalidation, purge, or cache bust. Single expiry window sampled per domain.",
+    "receiptRecovery": "Restored from exact tool stdout after concurrent repeat sampler replaced a shared output filename. No requests repeated for recovery.",
+    "checks": [
+      {
+        "host": "osbornalpha.com",
+        "path": "/api/companies/AAPL/overview",
+        "initialMiss": "2026-11-10T01:05:23.451430+00:00",
+        "immediateHit": "2026-11-10T01:05:24.017423+00:00",
+        "sameInitialBody": true,
+        "secondsSinceHit": 71.388,
+        "followup": {
+          "timestamp": "2026-11-10T01:06:35.405559+00:00",
+          "status": 200,
+          "cache": "MISS",
+          "age": "0",
+          "cacheControl": "public, max-age=0",
+          "bodySha256": "440fb387a07f2a1663215fbdd3754483f2308994978b3a1ace129a91efe9b367",
+          "asOf": "2026-11-10",
+          "ticker": "AAPL",
+          "coveragePeriodEnd": "2026-09-26",
+          "coverageRebuiltAt": "2026-11-09T12:13:33.638Z",
+          "eventsComputed": "materialized",
+          "setCookie": false
+        },
+        "naturalExpiryObserved": true,
+        "coverageConfirmed": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/AAPL/overview",
+        "initialMiss": "2026-11-10T01:05:29.828295+00:00",
+        "immediateHit": "2026-11-10T01:05:30.396562+00:00",
+        "sameInitialBody": true,
+        "secondsSinceHit": 65.01,
+        "followup": {
+          "timestamp": "2026-11-10T01:06:35.406612+00:00",
+          "status": 200,
+          "cache": "MISS",
+          "age": "0",
+          "cacheControl": "public, max-age=0",
+          "bodySha256": "440fb387a07f2a1663215fbdd3754483f2308994978b3a1ace129a91efe9b367",
+          "asOf": "2026-11-10",
+          "ticker": "AAPL",
+          "coveragePeriodEnd": "2026-09-26",
+          "coverageRebuiltAt": "2026-11-09T12:13:33.638Z",
+          "eventsComputed": "materialized",
+          "setCookie": false
+        },
+        "naturalExpiryObserved": true,
+        "coverageConfirmed": true
+      }
+    ],
+    "coverageConfirmed": true,
+    "naturalExpiryObserved": true
+  },
+  "postdeployNoahPublicOverview": {
+    "timestamp": "2026-11-10T01:06:19.715183+00:00",
+    "request": "anonymous GET /api/companies/NOAH/overview, once per domain, no query, cookies or bearer",
+    "releaseShaFromSeparateAliasProbes": "bea837dbc25b8b78fe826a6ab837e9d6b9d81739",
+    "deploymentFromSeparateAliasInspections": "dpl_FL3gMVnED9CCngt4hjy1BtefWvsz",
+    "checks": [
+      {
+        "host": "osbornalpha.com",
+        "status": 200,
+        "bodySha256": "c9098d75ac8306f3c47be1c4779cd7cdc638e7bff7ac1a6e5531c71efaec0243",
+        "ticker": "NOAH",
+        "market": "US",
+        "asOf": "2026-11-10",
+        "reasons": {
+          "facts": {
+            "revenue": "multiple_units",
+            "net_income_parent": "multiple_units",
+            "operating_cash_flow": "multiple_units"
+          },
+          "derived": {
+            "revenue_yoy": "multiple_units"
+          }
+        },
+        "evidenceCount": 0,
+        "eventCount": 3,
+        "checks": {
+          "http200": true,
+          "originalHostAndPath": true,
+          "publicIdentity": true,
+          "reasonEnumOnly": true,
+          "ambiguousFactsNull": true,
+          "ambiguousYoyNull": true,
+          "grossMarginNullWithoutReason": true,
+          "allReturnedEvidenceReferencedByPublicCellsOrEvents": true,
+          "boundedEvents": true,
+          "noSetCookie": true
+        },
+        "pass": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "status": 200,
+        "bodySha256": "c9098d75ac8306f3c47be1c4779cd7cdc638e7bff7ac1a6e5531c71efaec0243",
+        "ticker": "NOAH",
+        "market": "US",
+        "asOf": "2026-11-10",
+        "reasons": {
+          "facts": {
+            "revenue": "multiple_units",
+            "net_income_parent": "multiple_units",
+            "operating_cash_flow": "multiple_units"
+          },
+          "derived": {
+            "revenue_yoy": "multiple_units"
+          }
+        },
+        "evidenceCount": 0,
+        "eventCount": 3,
+        "checks": {
+          "http200": true,
+          "originalHostAndPath": true,
+          "publicIdentity": true,
+          "reasonEnumOnly": true,
+          "ambiguousFactsNull": true,
+          "ambiguousYoyNull": true,
+          "grossMarginNullWithoutReason": true,
+          "allReturnedEvidenceReferencedByPublicCellsOrEvents": true,
+          "boundedEvents": true,
+          "noSetCookie": true
+        },
+        "pass": true
+      }
+    ],
+    "pass": true
+  }
+}
