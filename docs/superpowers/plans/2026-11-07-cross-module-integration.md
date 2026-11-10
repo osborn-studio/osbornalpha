@@ -2,7 +2,18 @@
 
 Spec: `docs/superpowers/specs/2026-11-07-cross-module-integration-design.md`. Tooling: code by Codex CLI gpt-6-sol (medium); audits by mmx MiniMax-M3; PG17 tests run by the commander (`LC_ALL=C`, `.claude/scratch/db-one.ts` for single files, `npm run test:db` for the gate). Logs: `docs/audits/2026-11-07-integration/`.
 
-## Current production evidence and remaining priorities — wave219
+## Current production evidence and remaining priorities — wave223
+
+Both production domains verified exact main `bea837db` on Ready deployment `dpl_FL3gMVnED9CCngt4hjy1BtefWvsz` at 01:05:26 UTC. All 18 anonymous probes and 12 initial company cache samples passed. Default AAPL Overview expired naturally on both domains in the tested 65–72 second windows. The app-only release includes manifest correlation and the shorter current company cache policy. The #220 retry-selector migration was excluded, with production SQL verification pending. See the [Wave223 record](../../audits/2026-11-10-wave223-production.md) and [machine receipt](../../audits/2026-11-10-wave223-production.json).
+
+| Priority | Evidence and remaining gate |
+|---|---|
+| AAPL and POOL | AAPL remains successful at revision 1 and the default public Overview now shows rebuilt September 26 coverage. POOL is also successful at revision 1 with September 30 coverage. The 00:20 UTC company digest on `bffe600b` was partial. Global company-events freshness remained in error with five other failed streams. |
+| Writer diagnostics | The 00:20 UTC run yielded four private evidence writer cancellation IDs. Issuer attribution and database joins remain open. Manifest persistence recovery and historical timing remain open. |
+| Company and industry acceptance | Signed-in NOAH Overview showed four unit markers and one Statements link, which preserved `asOf`. The observed Statements row was disclosed 12M CNY. The concurrent browser session interrupted drawer and SIC3571 checks. The new deployment passed the public NOAH reason check on both domains. |
+| Remaining launch gates | CN publication and company coverage, PDF locators, SW/I-3 rights and pipeline, financial/event gold, multi-member lineage, issuer methodology, disabled F6 kinds, foreign runtime and preferred quote-source recovery remain open. |
+
+## Historical production evidence and remaining priorities — wave219
 
 Both production domains returned runtime `bffe600b` at 12:06 UTC. Main `ff5cdb65` adds the Wave215 documentation. All 12 scoped public checks passed. The signed-in attempt stopped at `cgWindowNotFound`. [Wave219 closeout](../../audits/2026-11-09-wave219-recovery.md) · [Machine receipt](../../audits/2026-11-09-wave219-recovery.json)
 
