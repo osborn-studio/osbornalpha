@@ -7,7 +7,7 @@ A proof that drives one entry point is incomplete when the file lists others.
 |---|---|---|---|---|
 | Landing page + zh/en i18n + design showcase | [landing-i18n.md](landing-i18n.md) | `landing` | guest, gate | no |
 | Guest watchlist: search, add, persist, de-dup | [watchlist.md](watchlist.md) | `watchlist` | guest | yes (quotes) |
-| Portfolio quote + K-line chart | [stock-detail.md](stock-detail.md) | `stock` | guest | yes |
+| Portfolio quote + K-line chart (+ Company Research unavailable state) | [stock-detail.md](stock-detail.md) | `stock` | guest | yes |
 | Public market-data & search API | [market-data-api.md](market-data-api.md) | `quote-api` | guest, gate | yes |
 | Auth gate (signed-out access control) | [auth-gate.md](auth-gate.md) | `auth-gate` | guest, gate | no |
 
