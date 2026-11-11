@@ -11,13 +11,11 @@
  * checkout). Never run it while the cron is running (recordAttempt assumes one producer).
  * Exit 0 success, 1 when the batch (apply) is not success or any stream failed (dry run), 2 bad arguments.
  */
-import {supabaseTableClient} from '../../src/lib/db/table-client';
 import {productionDigestDeps} from '../../src/lib/company/deps';
 import {runCompanyDigest} from '../../src/lib/company/digest';
 import {resolveIssuer} from '../../src/lib/entities/resolve';
 import {resolveCodeVersion} from '../../src/lib/facts/deps';
 import type {Market} from '../../src/lib/facts/types';
-import {getAdminSupabase} from '../../src/lib/supabase/admin';
 
 const USAGE='usage: digest.ts [--full] [--issuer <ticker>]... [--market US|CN] [--limit n] [--apply]';
 interface Args{full:boolean;issuers:string[];market?:Market;limit:number;apply:boolean}
@@ -41,15 +39,17 @@ async function main(){
  const args=parseArgs(process.argv.slice(2));
  const codeVersion=resolveCodeVersion({allowGit:true});
  if(args.apply&&!codeVersion){console.error('code version unavailable (set VERCEL_GIT_COMMIT_SHA or run inside a git checkout); refusing --apply');process.exit(2);}
- const admin=getAdminSupabase();
- const deps=productionDigestDeps({deadline:null,codeVersion,admin});
+ const deps=productionDigestDeps({deadline:null,codeVersion});
  let issuerIds:string[]|undefined;
  if(args.issuers.length>0){
-  const tables=supabaseTableClient(admin);const today=new Date().toISOString().slice(0,10);issuerIds=[];
-  for(const t of args.issuers){const r=await resolveIssuer(tables,{ticker:t},{today});if(!r){console.error(`unknown ticker: ${t}`);process.exit(2);}issuerIds.push(r.issuer_id);}
+  const today=new Date().toISOString().slice(0,10);issuerIds=[];
+  for(const t of args.issuers){const r=await resolveIssuer(deps.tables,{ticker:t},{today});if(!r){console.error(`unknown ticker: ${t}`);process.exit(2);}issuerIds.push(r.issuer_id);}
  }
  const receipt=await runCompanyDigest(deps,{mode:args.full?'full':'incremental',issuerIds,market:args.market,limit:args.limit,dryRun:!args.apply,triggeredBy:'script'});
- console.log(JSON.stringify({mode:args.apply?'apply':'dry-run (no batch written; pass --apply to write)',codeVersion,...receipt},null,1));
+ // Keep raw causes in the persisted batch record and request IDs in private stage logs.
+ const errors=receipt.errors.map(({code,key})=>({code,key}));
+ const streams=receipt.streams.map(({message:_message,...stream})=>stream);
+ console.log(JSON.stringify({mode:args.apply?'apply':'dry-run (no batch written; pass --apply to write)',codeVersion,...receipt,errors,streams},null,1));
  const failed=args.apply?receipt.status!=='success':receipt.streams.some(s=>s.outcome==='failed');
  process.exit(failed?1:0);
 }
