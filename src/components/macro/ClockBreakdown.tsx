@@ -1,97 +1,31 @@
 import type { Regime } from "@/lib/macro/judgment-contract";
-import type { ClockRow } from "./clock-model";
-import { quadrantRows } from "./clock-model";
+import type { WeightedRow } from "./clock-weighted";
+import { CLOCK_ORDER, quadrantRows } from "./clock-model";
 import type { MacroT } from "./use-macro-t";
 
-export function ClockBreakdown({
-  rows,
-  regime,
-  t,
-  onEvidence,
-}: {
-  rows: ClockRow[];
-  regime: Regime;
-  t: MacroT;
-  onEvidence?: (row: ClockRow) => void;
+export function ClockBreakdown({ rows, regime, t, onEvidence }: {
+  rows: WeightedRow[]; regime: Regime; t: MacroT; onEvidence?: (row: WeightedRow) => void;
 }) {
-  return (
-    <div className="clock-breakdown">
-      <p className="clock-small">{t("judgment.widget.formula")}</p>
-      {rows.length ? (
-        <div
-          className="clock-table-scroll"
-          tabIndex={0}
-          role="region"
-          aria-label={`${t(`judgment.clock.${regime}`)}: ${t("judgment.widget.inspect")}`}
-        >
-          <table>
-            <colgroup>
-              {Array.from({ length: 5 }, (_, i) => (
-                <col key={i} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr>
-                {["indicator", "value", "rule", "weight", "contribution"].map(
-                  (key) => (
-                    <th key={key} scope="col">
-                      {t(`judgment.widget.${key}`)}
-                    </th>
-                  ),
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {quadrantRows(rows, regime).map((row) => (
-                <tr key={`${row.seriesId}:${row.ruleId}`}>
-                  <th scope="row">
-                    <a href={`/macro/${encodeURIComponent(row.seriesId)}`}>
-                      {row.name}
-                    </a>
-                    <small>{row.period ?? "—"}</small>
-                  </th>
-                  <td data-label={t("judgment.widget.value")}>
-                    {row.value ?? (
-                      <span className="clock-small">
-                        {t("judgment.widget.missingValue")}
-                      </span>
-                    )}
-                  </td>
-                  <td data-label={t("judgment.widget.rule")}>{row.rule}</td>
-                  <td data-label={t("judgment.widget.weight")}>{row.weight}</td>
-                  <td
-                    data-label={t("judgment.widget.contribution")}
-                    className="clock-number"
-                  >
-                    {row.amount}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <p className="clock-small">{t("judgment.widget.empty")}</p>
-      )}
-      {rows.length > 0 && (
-        <div className="clock-evidence-links">
-          {quadrantRows(rows, regime)
-            .slice(0, 3)
-            .map((row) => (
-              <span key={row.seriesId}>
-                {onEvidence && row.value && row.period ? (
-                  <button type="button" onClick={() => onEvidence(row)}>
-                    {row.name} ↗ {t("judgment.widget.evidence")}
-                  </button>
-                ) : (
-                  <a href={`/macro/${encodeURIComponent(row.seriesId)}`}>
-                    {row.name} ↗ {t("judgment.widget.detail")}
-                  </a>
-                )}
-              </span>
-            ))}
-        </div>
-      )}
+  const w = (key: string) => t(`judgment.widget.${key}`);
+  const ordered = quadrantRows(rows.filter(r => r.state === "matched"), regime)
+    .concat(rows.filter(r => r.state === "not_matched" || r.state === "no_data").map(r => ({ ...r, amount: 0 })))
+    .concat(rows.filter(r => r.state === "missing" || r.state === "restricted").map(r => ({ ...r, amount: 0 })));
+  return <div className="clock-breakdown">
+    <p className="clock-small">{w("formula")}</p>
+    <div className="clock-table-scroll" tabIndex={0} role="region" aria-label={`${t(`judgment.clock.${regime}`)}: ${w("inspect")}`}>
+      <table>
+        <thead><tr>{["indicator", "value", "comparison", "rule", "support", "weight", "contribution", "evidence"].map(key => <th key={key} scope="col">{w(key)}</th>)}</tr></thead>
+        <tbody>{ordered.map(row => <tr key={row.seriesId} className={row.state === "matched" ? undefined : "clock-row-dim"}>
+          <th scope="row"><a href={`/macro/${encodeURIComponent(row.seriesId)}`}>{row.name}</a><small>{row.latest?.period ?? "—"}</small>{row.state !== "matched" && <small>{w(`states.${row.state}`)} · {w("denominatorNote")}</small>}{row.reason && <small>{row.reason}</small>}</th>
+          <td data-label={w("value")} className="clock-number">{row.latest?.value ?? "—"}</td>
+          <td data-label={w("comparison")}>{row.comparisons.length ? row.comparisons.map((c, i) => <span className="clock-comparison" key={`${c.role}:${i}`}>{w(c.role)} · {c.period} · <span className="clock-number">{c.value}</span></span>) : "—"}</td>
+          <td data-label={w("rule")}>{row.rule ?? "—"}</td>
+          <td data-label={w("support")}>{row.support ? CLOCK_ORDER.map(q => <span className="clock-support" key={q}>{t(`judgment.clock.${q}`)} <span className="clock-number">{row.support?.[q]}</span></span>) : "—"}</td>
+          <td data-label={w("weight")} className="clock-number">{row.weight}</td>
+          <td data-label={w("contribution")} className="clock-number">{row.contribution?.[regime] ?? "—"}</td>
+          <td data-label={w("evidence")}>{row.latest && onEvidence ? <button type="button" className="clock-text-button" onClick={() => onEvidence(row)}>{w("evidence")} ↗</button> : "—"}</td>
+        </tr>)}</tbody>
+      </table>
     </div>
-  );
+  </div>;
 }

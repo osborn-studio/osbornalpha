@@ -703,3 +703,21 @@
     grid-column: 1 / -1;
   }
 }
+.clock-reconcile-warning {
+  margin: 16px 28px;
+  color: var(--clock-gold);
+}
+.clock-row-dim { opacity: .7; }
+.clock-comparison, .clock-support { display: block; white-space: nowrap; }
+.clock-number { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.clock-breakdown .clock-table-scroll { overflow-x: auto; }
+.clock-breakdown table { min-width: 900px; table-layout: auto; }
+@container clock-phase (max-width: 560px) {
+  .clock-breakdown .clock-table-scroll { overflow-x: auto; }
+  .clock-breakdown table { display: table; min-width: 900px; }
+  .clock-breakdown thead { position: static; clip-path: none; height: auto; width: auto; overflow: visible; }
+  .clock-breakdown tbody { display: table-row-group; }
+  .clock-breakdown tr { display: table-row; }
+  .clock-breakdown tbody th, .clock-breakdown td { display: table-cell; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+  .clock-breakdown td:before { content: none; }
+}
