@@ -1,6 +1,6 @@
 // Derived US policy events (spec §6.1): effective date, exact bp, all inputs as evidence, determinism.
 import {describe,expect,it} from 'vitest';
-import {EVENTS_VERSION,derivePolicyEvents,toBp} from './events';
+import {EVENTS_VERSION,QUOTE_EVENTS_VERSION,derivePolicyEvents,deriveRateQuoteEvents,toBp,type EventInput} from './events';
 const row=(id:string,d:string,v:string)=>({observation_id:id,period_end:d,value_text:v});
 describe('derivePolicyEvents',()=>{
  const upper=[row('u1','2024-09-17','5.5'),row('u2','2024-09-18','5'),row('u3','2024-09-19','5'),row('u4','2024-11-08','4.75'),row('u5','2025-01-02','4.75')];
@@ -32,5 +32,29 @@ describe('derivePolicyEvents',()=>{
  });
  it('toBp shifts exactly',()=>{
   expect(toBp('-0.25')).toBe('-25');expect(toBp('0.125')).toBe('12.5');expect(toBp('0')).toBe('0');
+ });
+});
+describe('deriveRateQuoteEvents',()=>{
+ const q=(id:string,d:string,v:string):EventInput=>row(id,d,v);
+ it('emits changes between consecutive quotes with quote dates, exact bp and adjacent evidence',()=>{
+  expect(deriveRateQuoteEvents('CN_LPR_1Y_Q',[q('a','2019-08-20','4.25'),q('b','2019-09-20','4.20'),q('c','2019-10-21','4.20'),q('d','2019-11-20','4.15')])).toEqual([
+   {kind:'policy_rate_quote_change',region:'CN',series_id:'CN_LPR_1Y_Q',effective_date:'2019-09-20',from:'4.25',to:'4.2',change_bp:'-5',source:'derived',evidence:['a','b'],version:QUOTE_EVENTS_VERSION},
+   {kind:'policy_rate_quote_change',region:'CN',series_id:'CN_LPR_1Y_Q',effective_date:'2019-11-20',from:'4.2',to:'4.15',change_bp:'-5',source:'derived',evidence:['c','d'],version:QUOTE_EVENTS_VERSION},
+  ]);
+ });
+ it('returns no event for fewer than two quotes or equal numeric values',()=>{
+  expect(deriveRateQuoteEvents('X',[])).toEqual([]);
+  expect(deriveRateQuoteEvents('X',[q('a','2026-01-20','3')])).toEqual([]);
+  expect(deriveRateQuoteEvents('X',[q('a','2026-01-20','3.00'),q('b','2026-02-20','3')])).toEqual([]);
+ });
+ it('rejects descending and duplicate quote dates',()=>{
+  expect(()=>deriveRateQuoteEvents('X',[q('a','2026-02-24','3'),q('b','2026-01-20','3')])).toThrow('events_unsorted');
+  expect(()=>deriveRateQuoteEvents('X',[q('a','2026-01-20','3'),q('b','2026-01-20','3')])).toThrow('events_unsorted');
+ });
+ it('uses a separate quote version while preserving the US event version and shape',()=>{
+  expect(EVENTS_VERSION).toBe('macro-events/1');expect(QUOTE_EVENTS_VERSION).toBe('macro-events-quote/1');
+  expect(derivePolicyEvents([q('u1','2024-09-17','5.5'),q('u2','2024-09-18','5')],[q('l1','2024-09-17','5.25'),q('l2','2024-09-18','4.75')])).toEqual([
+   {kind:'policy_target_change',region:'US',effective_date:'2024-09-18',upper_from:'5.5',upper_to:'5',lower_from:'5.25',lower_to:'4.75',change_bp:'-50',source:'derived',evidence:['u1','u2','l1','l2'],version:'macro-events/1'},
+  ]);
  });
 });

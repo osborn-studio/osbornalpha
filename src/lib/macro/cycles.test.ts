@@ -27,6 +27,11 @@ describe('calendar helpers',()=>{
 describe('policyCycles',()=>{
  const hikes=[ev('2022-03-17','25'),ev('2022-05-05','50'),ev('2023-07-27','25')];
  const cuts=[ev('2024-09-19','-50'),ev('2024-11-08','-25'),ev('2024-12-19','-25')];
+ it('accepts effective dates and bp changes without US-specific event fields',()=>{
+  expect(policyCycles([{effective_date:'2019-09-20',change_bp:'-5'},{effective_date:'2019-11-20',change_bp:'-5'}],'2019-12-20')).toEqual([
+   {...P,direction:'down',start:'2019-09-20',end:'2019-12-20',ongoing:true,confirmed_at:'2019-09-20',event_count:2},
+  ]);
+ });
  it('ends a hiking cycle at its last hike and records a plateau when ≥ 12 months pass before the next move',()=>{
   expect(policyCycles([...hikes,...cuts],'2025-06-30')).toEqual([
    {...P,direction:'up',start:'2022-03-17',end:'2023-07-27',ongoing:false,confirmed_at:'2022-03-17',event_count:3},
