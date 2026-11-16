@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { catalogById } from '@/lib/macro/catalog';
 import { DataTableToggle } from './charts/DataTableToggle';
 import { MacroLineChart } from './charts/MacroLineChart';
-import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
+import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, recentEvents, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
 import { MISSING, formatInstant, formatPeriod, formatValueText, typedChange, unitSuffix } from './macro-format';
 import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
 import { useMacroT } from './use-macro-t';
@@ -26,21 +26,22 @@ function Fact({ label, value, note }: { label: string; value: string; note?: str
     </div>
   );
 }
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="card-base space-y-2"><h3 className="text-sm font-semibold">{title}</h3>{children}</section>;
+function Section({ title, children, className = '' }: { title: string; children: ReactNode; className?: string }) {
+  return <section className={`card-base space-y-2 ${className}`}><h3 className="text-sm font-semibold">{title}</h3>{children}</section>;
 }
 
-export function IndicatorDetail({ seriesId, compact = false }: { seriesId: string; compact?: boolean }) {
+export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObservationId }: { seriesId: string; compact?: boolean; asOf?: string; snapshotObservationId?: string | null }) {
   const { t, locale } = useMacroT();
   const def0 = catalogById(seriesId);
   const windows = windowsFor(def0?.period ?? 'month');
   const [win, setWin] = useState<DetailWindow>(defaultWindow(def0?.period ?? 'month'));
+  const [layers, setLayers] = useState({ derived: true, calendar: false });
   const [mode, setMode] = useState<Mode>('level');
   const [base, setBase] = useState<Load>({ data: null, error: null });
   const [diffLoad, setDiffLoad] = useState<Load>({ data: null, error: null });
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
   const closeDrawer = useCallback(() => setDrawer(null), []);
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const today = useMemo(() => asOf?.slice(0, 10) ?? new Date().toISOString().slice(0, 10), [asOf]);
   const from = useMemo(() => windowFrom(win, today), [win, today]);
   const yoy = def0 ? yoyOf(def0) : null;
   const baseTransform: Transform = mode === 'yoy' ? 'yoy' : 'raw';
@@ -49,27 +50,28 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
   useEffect(() => {
     let cancelled = false;
     setBase({ data: null, error: null });
-    fetchSeriesWindow(seriesId, from, today, period, baseTransform)
+    fetchSeriesWindow(seriesId, from, today, period, baseTransform, fetch, asOf)
       .then((data) => { if (!cancelled) setBase({ data, error: null }); })
       .catch((e: Error) => { if (!cancelled) setBase({ data: null, error: e.message }); });
     return () => { cancelled = true; };
-  }, [seriesId, from, today, period, baseTransform]);
+  }, [seriesId, from, today, period, baseTransform, asOf]);
   const wantDiff = mode === 'diff';
   useEffect(() => {
     if (!wantDiff) return;
     let cancelled = false;
     setDiffLoad({ data: null, error: null });
-    fetchSeriesWindow(seriesId, from, today, period, 'diff')
+    fetchSeriesWindow(seriesId, from, today, period, 'diff', fetch, asOf)
       .then((data) => { if (!cancelled) setDiffLoad({ data, error: null }); })
       .catch((e: Error) => { if (!cancelled) setDiffLoad({ data: null, error: e.message }); });
     return () => { cancelled = true; };
-  }, [wantDiff, seriesId, from, today, period]);
+  }, [wantDiff, seriesId, from, today, period, asOf]);
   const d = base.data;
   const diffRowsJson = wantDiff ? diffLoad.data?.observations ?? null : null;
   const diffMap = useMemo(() => (diffRowsJson ? diffByPeriod(diffRowsJson) : new Map<string, string>()), [diffRowsJson]);
   const points = useMemo(() => (d ? chartPoints(wantDiff ? diffRowsJson ?? [] : d.observations) : []), [d, wantDiff, diffRowsJson]);
   const bands = useMemo(() => (d ? bandsOf(d.cycles) : []), [d]);
-  const markers = useMemo(() => (d && d.observations.length > 0 ? markersOf(d.events, d.calendar, d.observations[0].period_end) : []), [d]);
+  const markers = useMemo(() => (d && d.observations.length > 0 ? markersOf(d.events, d.calendar, d.observations[0].period_end, layers) : []), [d, layers]);
+  const events = useMemo(() => (d ? recentEvents(d.events, d.calendar, layers) : []), [d, layers]);
   if (!def0) return <div className="card-base text-xs text-text-dim">{t('detail.notFound')}</div>;
 
   const def = d?.def ?? def0;
@@ -115,7 +117,7 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
   );
 
   return (
-    <div className="space-y-3">
+    <div className={compact ? 'space-y-3 [&_.card-base]:!rounded-md' : 'space-y-3'}>
       <div className="card-base space-y-3">
         <div className="flex flex-wrap items-baseline gap-2">
           <h2 className="text-lg font-semibold">{name}</h2>
@@ -136,13 +138,27 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
           <div role="group" aria-label={t('detail.windowLabel')} className="ml-auto flex gap-1">{windows.map((w) => <button key={w} type="button" aria-pressed={win === w} onClick={() => setWin(w)} className={btn(win === w)}>{t(`detail.windows.${w}`)}</button>)}</div>
           <div role="group" aria-label={t('detail.transformLabel')} className="flex gap-1">{modes.map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)} className={btn(mode === m)}>{t(`detail.transforms.${m}`)}</button>)}{yoy?.self && <span className={btn(true)}>{t('detail.transforms.yoy')}</span>}</div>
         </div>
+        {asOf && <p className="text-[11px] text-text-dim">{t('keyCards.history', { date: formatInstant(asOf) })}</p>}
+        {asOf && snapshotObservationId !== undefined && cur && cur.observation_id !== snapshotObservationId && <p className="text-[11px] text-text-dim">{t('keyCards.mismatch', { value: `${formatValueText(cur.value_text)}${unit}`, period: formatPeriod(cur.period_end, def.period) })}</p>}
+        <div role="group" aria-label={t('markers.layers')} className="flex gap-1">
+          {(['derived', 'calendar'] as const).map(layer => <button key={layer} type="button" aria-pressed={layers[layer]} onClick={() => setLayers(previous => ({ ...previous, [layer]: !previous[layer] }))} className={btn(layers[layer])}>{t(`markers.${layer}`)}</button>)}
+        </div>
         {error && <div role="alert" className="text-xs text-text-dim">{t('states.loadFailed', { code: error })}</div>}
         {loading && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
         {!error && !loading && (points.length === 0
           ? <div className="text-xs text-text-dim">{t('detail.empty')}</div>
-          : <DataTableToggle t={t} chart={<MacroLineChart points={points} bands={bands} markers={markers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />)}
+          : <DataTableToggle t={t} chart={<MacroLineChart points={points} bands={bands} markers={markers} layers={layers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />)}
         {d && d.cycles.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.confirmNote')}</div>}
       </section>
+
+      {d && <Section title={t('markers.recent')} className="!rounded-md">
+        {events.length === 0 ? <p className="text-xs text-text-dim">{t('detail.noEvents')}</p> :
+          <ul className="space-y-1 text-xs">{events.map(r => <li key={`${r.kind}|${r.key}`}>
+            <span className="font-mono">{r.date}</span> · {t(`markers.${r.kind}`)} · {r.kind === 'derived'
+              ? <span className="font-mono">{r.event.upper_from}→{r.event.upper_to} / {r.event.lower_from}→{r.event.lower_to} · {t('detail.eventChange', { change: r.event.change_bp })}</span>
+              : <span className="font-mono">{r.event.start} – {r.event.end}</span>}
+          </li>)}</ul>}
+      </Section>}
 
       {!compact && d && (
         <>
@@ -160,23 +176,6 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
               </table>
             )}
             {d.insufficient.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.insufficient', { count: d.insufficient.length })}</div>}
-          </Section>
-
-          <Section title={t('detail.events')}>
-            {d.events.length === 0 && d.calendar.length === 0 ? <div className="text-xs text-text-dim">{t('detail.noEvents')}</div> : (
-              <div className="max-h-72 overflow-y-auto">
-                <div className="mb-1 text-[11px] text-text-dim">{t('detail.derivedEvent')} · {t('detail.calendarEvent')}</div>
-                <table className="w-full text-xs">
-                  <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('detail.eventColumns.date')}</th><th className={cell}>{t('detail.eventColumns.kind')}</th><th className={cell}>{t('detail.eventColumns.detail')}</th></tr></thead>
-                  <tbody>
-                    {[...d.events.map((e) => ({ date: e.effective_date, kind: t('detail.derivedEvent'), detail: `${e.upper_from}→${e.upper_to} / ${e.lower_from}→${e.lower_to} · ${t('detail.eventChange', { change: e.change_bp })}` })),
-                      ...d.calendar.map((c) => ({ date: c.start, kind: t('detail.calendarEvent'), detail: `${c.start} – ${c.end}` }))]
-                      .sort((a, b) => b.date.localeCompare(a.date))
-                      .map((r, i) => <tr key={`${r.date}-${i}`} className="border-t border-border"><td className={`${cell} font-mono`}>{r.date}</td><td className={cell}>{r.kind}</td><td className={`${cell} font-mono`}>{r.detail}</td></tr>)}
-                  </tbody>
-                </table>
-              </div>
-            )}
           </Section>
 
           <Section title={t('detail.assets')}>

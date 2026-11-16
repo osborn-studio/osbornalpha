@@ -4,10 +4,10 @@
 import type {AssetByCycle} from '@/lib/macro/series-extras';
 import type {Cycle} from '@/lib/macro/cycles';
 import {MACRO_CATALOG} from '@/lib/macro/catalog';
-import type {PolicyEvent} from '@/lib/macro/events';
+import {US_TARGET_UPPER_ID, type PolicyEvent} from '@/lib/macro/events';
 import type {CalendarEvent} from '@/lib/macro/fomc';
 import type {MacroSeriesDef,PeriodKind} from '@/lib/macro/types';
-import type {ChartBand,ChartMarker,LinePoint} from './charts/MacroLineChart';
+import type {ChartBand,ChartMarker,MarkerLayers,LinePoint} from './charts/MacroLineChart';
 import {MISSING,roundDecimalText} from './macro-format';
 import type {SeriesJson,SeriesObsJson,SourceJson} from './view-model';
 export type DetailWindow='y1'|'y3'|'y5'|'y10'|'all';
@@ -40,10 +40,10 @@ export function dateChunks(from:string,to:string,period:PeriodKind):{from:string
 }
 export type Transform='raw'|'yoy'|'diff';
 /** Fetches bounded date chunks in parallel and merges them (oldest first); extras (cycles, events, def) come from the last chunk. */
-export async function fetchSeriesWindow(seriesId:string,from:string,to:string,period:PeriodKind,transform:Transform,fetcher:typeof fetch=fetch):Promise<SeriesJson>{
+export async function fetchSeriesWindow(seriesId:string,from:string,to:string,period:PeriodKind,transform:Transform,fetcher:typeof fetch=fetch,asOf?:string):Promise<SeriesJson>{
  const chunks=dateChunks(from,to,period);
  const parts=await Promise.all(chunks.map(async c=>{
-  const q=new URLSearchParams({from:c.from,to:c.to});if(transform!=='raw')q.set('transform',transform);
+  const q=new URLSearchParams({from:c.from,to:c.to});if(transform!=='raw')q.set('transform',transform);if(asOf)q.set('asOf',asOf);
   const r=await fetcher(`/api/macro/series/${encodeURIComponent(seriesId)}?${q}`);
   const b=await r.json().catch(()=>null);
   if(!r.ok)throw new Error(b?.error?.code??`http_${r.status}`);
@@ -72,12 +72,25 @@ export const transformLabel=(rows:readonly SeriesObsJson[],diff:boolean):string|
  return diff?r.computed?.version??null:r.transform??null;
 };
 export const bandsOf=(cycles:readonly Cycle[]):ChartBand[]=>cycles.map(c=>({start:c.start,end:c.end,direction:c.direction}));
-/** Markers dated on/after the first plotted month, sorted by time. */
-export function markersOf(events:readonly Pick<PolicyEvent,'effective_date'|'change_bp'>[],calendar:readonly Pick<CalendarEvent,'start'|'end'>[],firstPeriod:string):ChartMarker[]{
- const m0=firstPeriod.slice(0,7);
- const ev=events.filter(e=>e.effective_date.slice(0,7)>=m0).map(e=>({time:e.effective_date,kind:'derived' as const,text:`${e.change_bp} bp`}));
- const cal=calendar.filter(c=>c.end.slice(0,7)>=m0).map(c=>({time:c.end,kind:'calendar' as const,text:'FOMC'}));
- return [...ev,...cal].sort((a,b)=>a.time.localeCompare(b.time)||a.kind.localeCompare(b.kind));
+/** The current US DTO has no series_id; its target-range identity always uses the upper target series. */
+export type MarkerEvent=Pick<PolicyEvent,'effective_date'|'change_bp'> & {kind?:string;region?:string;series_id?:string};
+export const eventIdentity=(e:MarkerEvent):string=>`${e.kind??'policy_target_change'}|${e.region??'US'}|${e.series_id??US_TARGET_UPPER_ID}|${e.effective_date}`;
+type CalendarMark=Pick<CalendarEvent,'start'|'end'>;
+function eventRows<E extends MarkerEvent>(events:readonly E[],calendar:readonly CalendarMark[],layers:MarkerLayers){
+ const seen=new Set<string>();
+ const rows=[...(layers.derived!==false?events.map(event=>({key:eventIdentity(event),date:event.effective_date,kind:'derived' as const,event})):[]),
+  ...(layers.calendar?calendar.map(event=>({key:`${event.start}|${event.end}`,date:event.end,kind:'calendar' as const,event})):[])];
+ return rows.filter(r=>{const key=`${r.kind}|${r.key}`;if(seen.has(key))return false;seen.add(key);return true;});
+}
+/** Latest six enabled events, with deterministic same-day order. Calendar effective date is the meeting end. */
+export function recentEvents<E extends MarkerEvent>(events:readonly E[],calendar:readonly CalendarMark[],layers:MarkerLayers={}){
+ return eventRows(events,calendar,layers).sort((a,b)=>b.date.localeCompare(a.date)||(a.kind===b.kind?0:a.kind==='derived'?-1:1)||a.key.localeCompare(b.key)).slice(0,6);
+}
+/** Keep distinct identities even when their chart coordinates coincide. */
+export function markersOf(events:readonly MarkerEvent[],calendar:readonly CalendarMark[],firstPeriod:string,layers:MarkerLayers={}):ChartMarker[]{
+ return eventRows(events,calendar,layers).filter(r=>r.date.slice(0,7)>=firstPeriod.slice(0,7)).map(r=>({time:r.date,kind:r.kind,
+  text:r.kind==='derived'&&Math.abs(Number(r.event.change_bp))>=25?`${r.event.change_bp} bp`:''}))
+  .sort((a,b)=>a.time.localeCompare(b.time)||a.kind.localeCompare(b.kind));
 }
 export const cycleKey=(c:Pick<Cycle,'basis'|'direction'>):string=>c.basis==='policy_events'?`detail.policyDirection.${c.direction}`:`detail.direction.${c.direction}`;
 export function assetChangeView(a:Pick<AssetByCycle,'change_text'|'change_kind'>):{text:string;tone:'up'|'down'|'flat'|'missing'}{

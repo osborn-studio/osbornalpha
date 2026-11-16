@@ -4,7 +4,7 @@ import {describe,expect,it} from 'vitest';
 import type {MacroT} from './use-macro-t';
 import {MISSING} from './macro-format';
 import {COMPACT_KEYS} from '@/lib/macro/views';
-import {GLANCE_IDS,changeCounts,changeLines,collectionOf,coverageOf,glanceRows,proofRows,revisionRows,selectVersion,sourceLabels,sourceOf,sourceRows,statusKey,toIndicatorView,type IndicatorRowJson,type OverviewEnvelopeJson,type VersionJson} from './view-model';
+import {KEY_INDICATORS,keyIndicatorRows,GLANCE_IDS,changeCounts,changeLines,collectionOf,coverageOf,glanceRows,proofRows,revisionRows,selectVersion,sourceLabels,sourceOf,sourceRows,statusKey,toIndicatorView,type IndicatorRowJson,type OverviewEnvelopeJson,type VersionJson} from './view-model';
 const t:MacroT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
 const src={publisher:{zh:'美国劳工统计局',en:'BLS'},via:{zh:'FRED（圣路易斯联储）',en:'FRED'},fetch_host:'fred.stlouisfed.org',adapter:'fred_csv' as const,rights:'public_domain' as const,attribution:{zh:'来源：BLS via FRED',en:'Source: BLS via FRED'}};
 // Rows in Task 13's IndicatorRow shape (views.ts): flat value fields, status letter, precomputed exact change.
@@ -95,5 +95,17 @@ describe('drawer rows',()=>{
   expect(selectVersion(versions,'gone')).toBeNull();                                               // never relabels another version's proof
   expect(selectVersion(versions,null)).toMatchObject({version:2});                                 // no id (legacy caller) → newest
   expect(toIndicatorView(row({observation_id:'o1'}),'zh',t).observationId).toBe('o1');
+ });
+});
+
+describe('overview key cards',()=>{
+ it('uses the four real catalog indicator ids per region, in editorial order',()=>{
+  expect(KEY_INDICATORS).toEqual({US:['US_DFF','US_DGS10','US_CPI_YOY','US_UNRATE'],CN:['CN_PMI_MFG','CN_CPI_YOY','CN_CGB_10Y','CN_M2_YOY']});
+ });
+ it('selects only envelope rows, preserves missing/restricted facts, and excludes other region rows',()=>{
+  const missing=row({series_id:'US_DGS10',status:'M',value_text:null,sparkline:[]});
+  const restricted=row({series_id:'US_UNRATE',status:'R',value_text:null});
+  expect(keyIndicatorRows(env({indicators:[restricted,row({series_id:'CN_M2_YOY'}),missing]}),'US')).toEqual([missing,restricted]);
+  expect(keyIndicatorRows(env({indicators:[]}),'CN')).toEqual([]);
  });
 });
