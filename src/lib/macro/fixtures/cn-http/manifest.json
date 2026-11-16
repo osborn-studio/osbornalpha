@@ -45,6 +45,20 @@
    "excerpt_bytes": 7923
   },
   {
+   "file": "CN_AFRE_STOCK-2025.htm",
+   "series": "CN_AFRE_STOCK_YOY",
+   "kind": "excerpt",
+   "charset": "gb2312",
+   "rows": "0..7",
+   "source_url": "https://www.pbc.gov.cn/diaochatongjisi/attachDir/2026/02/2026021416101539242.htm",
+   "source_sha256": "a34395206d1b0c2aaa292df1a3e0e2d17c37e1c497563962e43fba8732a71a86",
+   "source_bytes": 57555,
+   "source_fetched_at": "2026-11-07T12:24:13.804Z",
+   "source_content_type": "text/html",
+   "excerpt_sha256": "79b8e675febf5100a12ec04e42292d8f906d55add9c2ff07e2a26a5afde7ee66",
+   "excerpt_bytes": 7926
+  },
+  {
    "file": "CN_AFRE_STOCK-2026.htm",
    "series": "CN_AFRE_STOCK_YOY",
    "kind": "excerpt",

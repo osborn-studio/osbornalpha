@@ -18,7 +18,7 @@ from pathlib import Path
 
 RAW = Path(sys.argv[1])
 OUT = Path(__file__).resolve().parents[2] / "src/lib/macro/fixtures/cn-http"
-AFRE_YEARS = [2015, 2019, 2024, 2026]          # quarterly layout, split label + odd rows, no blank row, partial year
+AFRE_YEARS = [2015, 2019, 2024, 2025, 2026]    # quarterly layout, split label + odd rows, no blank row, article cross-check year, partial year
 LPR_2019 = ["2019-12-20", "2019-11-20", "2019-10-21", "2019-09-20", "2019-08-20", "2019-08-16", "2019-08-15"]
 LPR_2026 = ["2026-10-20", "2026-09-20", "2026-08-20"]
 sha = lambda b: hashlib.sha256(b).hexdigest()
