@@ -37,17 +37,22 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as _dt
+from html import unescape
 import json
 import math
 import os
 import platform
 import re
+import ssl
 import sys
 import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
+
+import requests
+import requests.adapters
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # recorder.py sits next to this file (also under python -I)
 from recorder import Capture, recording  # noqa: E402
@@ -57,12 +62,14 @@ MAX_BODY_BYTES = 3_500_000
 HERE = Path(__file__).resolve().parent
 SPEC_FILE = HERE / "cn-series.json"
 EXT = {"application/json": "json", "text/html": "html", "text/csv": "csv", "text/plain": "txt"}
+UA = "OsbornAlpha-macro-collect/1 (+https://osbornalpha.com)"
+CT_FAMILY = {"http_json": "application/json", "http_html": "text/html"}
 
 
 # ---------------------------------------------------------------- spec and calls
 def load_specs(path: Path = SPEC_FILE) -> List[Dict[str, Any]]:
     doc = json.loads(path.read_text("utf-8"))
-    if doc.get("version") != "cn-series/1" or not isinstance(doc.get("series"), list):
+    if doc.get("version") not in ("cn-series/1", "cn-series/2") or not isinstance(doc.get("series"), list):
         raise SystemExit(f"unexpected spec file {path}")
     return doc["series"]
 
@@ -91,12 +98,29 @@ def calls_for(spec: Dict[str, Any], mode: str, today: _dt.date) -> List[Dict[str
         return [{"start_date": start.strftime("%Y%m%d"), "end_date": today.strftime("%Y%m%d")}]
     if fn == "currency_boc_safe":
         return [{}]
-    raise SystemExit(f"unsupported function {fn}")
+    if fn == "http_json":
+        if spec.get("windows") != "calendar_year":
+            raise ValueError(f"{spec['series_id']}: unsupported windows {spec.get('windows')!r}")
+        first = _dt.date.fromisoformat(spec["first_period"])
+        years = range(first.year, today.year + 1) if mode == "backfill" else [today.year]
+        return [{"url": spec["url"].format(start=f"{y}-01-01", end=f"{y}-12-31")} for y in years]
+    if fn == "http_html":
+        pages = spec["pages"] if mode == "backfill" else spec["pages"][:2]
+        return [{"page": p["url"]} for p in pages]
+    raise ValueError(f"unsupported function {fn}")
 
 
 def is_evidence(spec: Dict[str, Any], cap: Capture) -> bool:
     parts = urlsplit(cap.url)
-    return cap.status == 200 and parts.scheme == "https" and parts.hostname == spec["fetch_host"] and parts.path == spec["evidence_path"]
+    if cap.status != 200 or parts.scheme != "https" or parts.hostname != spec["fetch_host"]:
+        return False
+    family = CT_FAMILY.get(spec["function"])
+    if family and not cap.content_type.lower().startswith(family):
+        return False
+    if spec.get("evidence_path_match") == "prefix":
+        prefixes = spec.get("evidence_path_prefixes") or [spec["evidence_path"]]
+        return parts.path.endswith(".htm") and any(parts.path.startswith(p) for p in prefixes)
+    return parts.path == spec["evidence_path"]
 
 
 # ---------------------------------------------------------------- claims
@@ -145,6 +169,46 @@ def claims_from_frame(spec: Dict[str, Any], df: Any, today: Optional[_dt.date] =
                 out.append({"series_id": sid, "period_label": str(d), "value_text": vt})
         return out
     raise ValueError(f"unsupported function {fn}")
+
+
+def _json_pointer(doc: Any, pointer: str) -> Any:
+    cur = doc
+    for part in pointer.split("/")[1:]:
+        if isinstance(cur, list):
+            cur = cur[int(part)] if part.isdigit() and int(part) < len(cur) else None
+        elif isinstance(cur, dict):
+            cur = cur.get(part.replace("~1", "/").replace("~0", "~"))
+        else:
+            return None
+        if cur is None:
+            return None
+    return cur
+
+
+def claims_from_http(spec: Dict[str, Any], body: bytes) -> Tuple[List[Dict[str, str]], Optional[str]]:
+    if spec["function"] != "http_json":
+        return [], None
+    try:
+        doc = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return [], "claims_bad_json"
+    data = doc.get("data") if isinstance(doc, dict) else None
+    if isinstance(data, dict) and data.get("message"):
+        return [], "lpr_window_refused"
+    records = _json_pointer(doc, spec["pointer"])
+    if not isinstance(records, list):
+        return [], "claims_bad_json"
+    out = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        date = rec.get("showDateCN")
+        if not isinstance(date, str) or date < spec["first_period"]:
+            continue
+        value = value_text(rec.get(spec["field"]))
+        if value is not None:
+            out.append({"series_id": spec["series_id"], "period_label": date, "value_text": value})
+    return out, None
 
 
 # ---------------------------------------------------------------- evidence and chunks
@@ -209,6 +273,62 @@ class EmptySeries(RuntimeError):
     """The calls succeeded but produced no usable claim for the target series."""
 
 
+class ClaimsUnavailable(RuntimeError):
+    """Received evidence cannot supply usable claims; the message is the outcome code."""
+
+
+LEGACY_TLS_HOSTS = {"www.chinamoney.org.cn"}
+
+
+class _LegacyTlsAdapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        ctx = ssl.create_default_context()
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
+
+
+def _http_get(url: str, host: str) -> requests.Response:
+    parts = urlsplit(url)
+    if parts.scheme != "https" or parts.hostname != host or parts.port not in (None, 443):
+        raise RuntimeError(f"refused url {url}")
+    session = requests.Session()
+    if host in LEGACY_TLS_HOSTS:
+        session.mount(f"https://{host}/", _LegacyTlsAdapter())
+    res = session.get(url, headers={"user-agent": UA, "accept": "application/json,text/html;q=0.9"}, timeout=60, allow_redirects=False)
+    if 300 <= res.status_code < 400:
+        raise RuntimeError(f"redirect {res.status_code} from {url}")
+    res.raise_for_status()
+    return res
+
+
+def _page_text(page: bytes) -> str:
+    head = page[:2048].decode("latin-1")
+    match = re.search(r"charset\s*=\s*['\"]?([\w-]+)", head, re.I)
+    if not match or match.group(1).lower() != "utf-8":
+        raise RuntimeError(f"unexpected charset {match.group(1) if match else 'none'}")
+    return page.decode("utf-8")
+
+
+def discover_afre_htm(base: str, page: bytes) -> str:
+    text = _page_text(page)
+    blocks = []
+    for block in re.findall(r'<table[^>]*class=["\']a2015["\'][^>]*>.*?</table>', text, re.S | re.I):
+        cell = re.search(r'<t[dh]\b[^>]*>(.*?)</t[dh]>', block, re.S | re.I)
+        if not cell:
+            continue
+        title = re.split(r'<br\b[^>]*>', cell.group(1), maxsplit=1, flags=re.I)[0]
+        title = re.sub(r'\s+', '', unescape(re.sub(r'<[^>]+>', '', title)))
+        if title == "社会融资规模存量统计表":
+            blocks.append(block)
+    if len(blocks) != 1:
+        raise RuntimeError(f"{len(blocks)} stock-table blocks on the AFRE page")
+    match = re.search(r'href=["\']([^"\']+\.htm)["\']', blocks[0], re.I)
+    if not match:
+        raise RuntimeError("no htm link in the stock-table block")
+    return urljoin(base, match.group(1))
+
+
 def _first_html_date(evidence: List[Capture]) -> Optional[str]:
     """Earliest date shown as a table cell in the SAFE HTML evidence (the form's own date inputs are attributes)."""
     dates = [d for c in evidence for d in re.findall(r"^\s*(\d{4}-\d{2}-\d{2})\s*$", c.body.decode("utf-8", errors="replace"), re.M)]
@@ -216,33 +336,49 @@ def _first_html_date(evidence: List[Capture]) -> Optional[str]:
 
 
 def collect_series(spec: Dict[str, Any], mode: str, today: _dt.date, ak: Any) -> Dict[str, Any]:
-    """Calls AKShare for one series; returns {series_id, captures, evidence, claims, error, code}. Captures are kept even
+    """Collects one series; returns {series_id, captures, evidence, claims, error, code}. Captures are kept even
     when a call raises after receiving bytes, so a failed series still ships its evidence (marked failed, no claims)."""
-    fn = getattr(ak, spec["function"])
     caps: List[Capture] = []
     evidence: List[Capture] = []
     claims: List[Dict[str, str]] = []
     try:
+        function = spec["function"]
+        if function not in ("http_json", "http_html", "macro_china_nbs_nation", "bond_china_yield", "currency_boc_safe"):
+            raise ClaimsUnavailable("unsupported_function")
+        fn = getattr(ak, function) if function not in CT_FAMILY else None
         for kwargs in calls_for(spec, mode, today):
             got: List[Capture] = []
             try:
                 with recording() as got:
-                    df = fn(**kwargs)
+                    if function == "http_json":
+                        res = _http_get(kwargs["url"], spec["fetch_host"])
+                        found, code = claims_from_http(spec, res.content)
+                        if code:
+                            raise ClaimsUnavailable(code)
+                        claims.extend(found)
+                    elif function == "http_html":
+                        page = _http_get(kwargs["page"], spec["fetch_host"])
+                        htm = _http_get(discover_afre_htm(f"https://{spec['fetch_host']}", page.content), spec["fetch_host"])
+                        title = "社会融资规模存量统计表"
+                        if not any(title.encode(charset) in htm.content for charset in ("gb2312", "utf-8")):
+                            raise ClaimsUnavailable("afre_title_missing")
+                    else:
+                        df = fn(**kwargs)
+                        claims.extend(claims_from_frame(spec, df, today))
             finally:
                 caps.extend(got)
                 evidence.extend(c for c in got if is_evidence(spec, c))
-            claims.extend(claims_from_frame(spec, df, today))
         if not evidence:
             raise RuntimeError(f"no evidence response from {spec['fetch_host']}{spec['evidence_path']}")
         if spec["function"] == "currency_boc_safe":
             first = _first_html_date(evidence)
             if first is not None:
                 claims = [c for c in claims if c["period_label"] >= first]
-        if not claims:
+        if not claims and function != "http_html":
             raise EmptySeries(f"{spec['series_id']}: no usable claims in the response")
         return {"series_id": spec["series_id"], "captures": caps, "evidence": evidence, "claims": claims, "error": None, "code": None}
     except Exception as e:  # one failing series never stops the others; its outcome is reported in finish (P2-2)
-        code = "empty_series" if isinstance(e, EmptySeries) else f"collect_{type(e).__name__}".lower()[:64]
+        code = str(e) if isinstance(e, ClaimsUnavailable) else ("empty_series" if isinstance(e, EmptySeries) else f"collect_{type(e).__name__}".lower()[:64])
         return {"series_id": spec["series_id"], "captures": caps, "evidence": evidence, "claims": [], "error": f"{type(e).__name__}: {e}"[:300], "code": code}
 
 

@@ -100,8 +100,8 @@ def test_committed_spec_file_lists_every_cn_series_once():
     specs = collect.load_specs()
     ids = [s["series_id"] for s in specs]
     assert len(ids) == len(set(ids)) and all(i.startswith("CN_") for i in ids)
-    assert {s["function"] for s in specs} <= {"macro_china_nbs_nation", "bond_china_yield", "currency_boc_safe"}
-    assert {s["fetch_host"] for s in specs} <= {"data.stats.gov.cn", "yield.chinabond.com.cn", "www.safe.gov.cn"}
+    assert {s["function"] for s in specs} <= {"macro_china_nbs_nation", "bond_china_yield", "currency_boc_safe", "http_json", "http_html"}
+    assert {s["fetch_host"] for s in specs} <= {"data.stats.gov.cn", "yield.chinabond.com.cn", "www.safe.gov.cn", "www.chinamoney.org.cn", "www.pbc.gov.cn"}
 
 
 def test_calls_for_daily_and_backfill():
@@ -363,3 +363,160 @@ def test_http_poster_raises_ingest_error_on_a_non_json_200(monkeypatch):
     with pytest.raises(collect.IngestHttpError) as ei:
         collect.http_poster("https://x.test/ingest", "s")({"action": "start"})
     assert ei.value.code == "non_json_response"
+
+
+# ---------------------------------------------------------------- dormant official HTTP branches (all responses are stubs)
+LPR = {"series_id": "CN_LPR_1Y_Q", "function": "http_json", "fetch_host": "www.chinamoney.org.cn", "period": "day",
+       "evidence_path": "/ags/ms/cm-u-bk-currency/LprHis", "evidence_path_match": "exact", "column": "1Y",
+       "url": "https://www.chinamoney.org.cn/ags/ms/cm-u-bk-currency/LprHis?lang=CN&strStartDate={start}&strEndDate={end}&pageNum=1&pageSize=50",
+       "pointer": "/records", "field": "1Y", "windows": "calendar_year", "first_period": "2019-08-20"}
+AFRE = {"series_id": "CN_AFRE_STOCK_YOY", "function": "http_html", "fetch_host": "www.pbc.gov.cn", "period": "month",
+        "evidence_path": "/diaochatongjisi/attachDir/", "evidence_path_match": "prefix",
+        "evidence_path_prefixes": ["/diaochatongjisi/attachDir/", "/diaochatongjisi/fileDir/resource/cms/"], "column": "增速（%）",
+        "pages": [{"year": 2026, "url": "https://www.pbc.gov.cn/diaochatongjisi/116219/116319/2026ntjsj/shrzgm/index.html"},
+                  {"year": 2025, "url": "https://www.pbc.gov.cn/diaochatongjisi/116219/116319/5570903/5570885/index.html"}]}
+
+
+def test_load_specs_accepts_both_versions(tmp_path):
+    for version in ("cn-series/1", "cn-series/2"):
+        path = tmp_path / "spec.json"
+        path.write_text(json.dumps({"version": version, "series": [LPR]}))
+        assert collect.load_specs(path) == [LPR]
+
+
+def test_calls_for_http_windows_and_pages():
+    today = dt.date(2026, 11, 7)
+    daily = collect.calls_for(LPR, "daily", today)
+    assert daily == [{"url": LPR["url"].format(start="2026-01-01", end="2026-12-31")}]
+    back = collect.calls_for(LPR, "backfill", today)
+    assert len(back) == 8 and "2019-01-01" in back[0]["url"] and back[-1] == daily[0]
+    afre = {**AFRE, "pages": AFRE["pages"] + [{"year": 2024, "url": "https://www.pbc.gov.cn/2024/index.html"}]}
+    assert collect.calls_for(afre, "daily", today) == [{"page": p["url"]} for p in afre["pages"][:2]]
+    assert collect.calls_for(afre, "backfill", today) == [{"page": p["url"]} for p in afre["pages"]]
+
+
+def test_http_evidence_filters_host_path_type_and_status():
+    def cap(url, ct="text/html", status=200):
+        return Capture("GET", url, status, ct, b"", "2026-11-07T00:00:00.000Z")
+    root = "https://www.pbc.gov.cn"
+    assert collect.is_evidence(AFRE, cap(root + "/diaochatongjisi/attachDir/2026/10/x.htm"))
+    assert collect.is_evidence(AFRE, cap(root + "/diaochatongjisi/fileDir/resource/cms/2016/02/x.htm"))
+    assert not collect.is_evidence(AFRE, cap(AFRE["pages"][0]["url"]))
+    assert not collect.is_evidence(AFRE, cap(root + "/diaochatongjisi/attachDir/x.pdf"))
+    assert not collect.is_evidence(AFRE, cap(root + "/diaochatongjisi/attachDir/x.htm", "application/json"))
+    assert not collect.is_evidence(AFRE, cap(root + "/diaochatongjisi/attachDir/x.htm", status=302))
+    url = LPR["url"].format(start="2026-01-01", end="2026-12-31")
+    assert collect.is_evidence(LPR, cap(url, "application/json;charset=UTF-8"))
+    assert not collect.is_evidence(LPR, cap(url, "text/html"))
+    assert not collect.is_evidence(LPR, cap(url.replace("LprHis?", "LprHisExcel?"), "application/json"))
+
+
+def test_http_json_claims_and_refusal_codes():
+    body = json.dumps({"data": {"message": ""}, "records": [
+        {"1Y": "3.00", "5Y": "3.50", "showDateCN": "2026-10-20"},
+        {"1Y": "4.31", "5Y": "---", "showDateCN": "2019-08-01"}]}).encode()
+    assert collect.claims_from_http(LPR, body) == ([{"series_id": "CN_LPR_1Y_Q", "period_label": "2026-10-20", "value_text": "3.0"}], None)
+    assert collect.claims_from_http({**LPR, "field": "5Y", "series_id": "CN_LPR_5Y_Q"}, body) == ([{"series_id": "CN_LPR_5Y_Q", "period_label": "2026-10-20", "value_text": "3.5"}], None)
+    assert collect.claims_from_http(LPR, b"<html>") == ([], "claims_bad_json")
+    assert collect.claims_from_http(LPR, b'{"data":{"message":"window refused"},"records":[]}') == ([], "lpr_window_refused")
+    assert collect.claims_from_http(AFRE, b"") == ([], None)
+
+
+LIST_PAGE = ('<meta charset=utf-8><table class="a2015"><tr><td>社会融资规模存量统计表</td>'
+             '<td><a href="/diaochatongjisi/attachDir/2026/10/b.htm">htm</a></td></tr></table>').encode()
+
+
+def test_discover_afre_htm_requires_one_stock_block_and_utf8():
+    root = "https://www.pbc.gov.cn"
+    assert collect.discover_afre_htm(root, LIST_PAGE) == root + "/diaochatongjisi/attachDir/2026/10/b.htm"
+    for page in (b"<html></html>", LIST_PAGE + LIST_PAGE, LIST_PAGE.replace(b"utf-8", b"gb2312")):
+        with pytest.raises(RuntimeError):
+            collect.discover_afre_htm(root, page)
+
+
+def test_discover_afre_htm_requires_exact_stock_title():
+    root = "https://www.pbc.gov.cn"
+    title = "社会融资规模存量统计表".encode()
+    for other in ("社会融资规模存量统计表说明", "非社会融资规模存量统计表"):
+        with pytest.raises(RuntimeError):
+            collect.discover_afre_htm(root, LIST_PAGE.replace(title, other.encode()))
+    # The exact Chinese title may be followed by its English translation on a new line.
+    page = LIST_PAGE.replace(title, title + b"<br>Aggregate Financing (Stock)")
+    assert collect.discover_afre_htm(root, page) == root + "/diaochatongjisi/attachDir/2026/10/b.htm"
+
+
+class _Resp:
+    def __init__(self, url, body, ct="text/html", status=200):
+        self.url, self.content, self.status_code, self.headers = url, body, status, {"content-type": ct}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+@pytest.mark.parametrize("body,code", [
+    (b'{"data":{"message":""},"records":[{"1Y":"3.00","showDateCN":"2026-10-20"}]}', None),
+    (b'<html>', "claims_bad_json"),
+    (b'{"data":{"message":"window refused"},"records":[]}', "lpr_window_refused"),
+])
+def test_collect_http_json_keeps_evidence_on_success_and_claim_failure(monkeypatch, body, code):
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, url, *a, **k: _Resp(url, body, "application/json"))
+    r = collect.collect_series(LPR, "daily", dt.date(2026, 11, 7), ak=None)
+    assert r["code"] == code
+    assert len(r["captures"]) == len(r["evidence"]) == 1
+    assert r["evidence"][0].body == body
+    assert r["claims"] == ([] if code else [{"series_id": "CN_LPR_1Y_Q", "period_label": "2026-10-20", "value_text": "3.0"}])
+
+
+def test_collect_http_html_records_only_htm_and_disables_redirects(monkeypatch):
+    htm = "<meta charset=gb2312>社会融资规模存量统计表".encode("gb2312")
+    calls = []
+    def fake_request(self, method, url, *a, **k):
+        calls.append((url, k.get("allow_redirects")))
+        return _Resp(url, LIST_PAGE if url.endswith("index.html") else htm)
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    r = collect.collect_series({**AFRE, "pages": AFRE["pages"][:1]}, "daily", dt.date(2026, 11, 7), ak=None)
+    assert r["error"] is None and [c.url for c in r["evidence"]] == ["https://www.pbc.gov.cn/diaochatongjisi/attachDir/2026/10/b.htm"]
+    assert len(r["captures"]) == 2 and r["claims"] == []
+    assert all(redirects is False for _, redirects in calls)
+
+
+def test_collect_http_html_bad_title_keeps_evidence(monkeypatch):
+    htm = "<meta charset=gb2312>社会融资规模增量统计表".encode("gb2312")
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, url, *a, **k: _Resp(url, LIST_PAGE if url.endswith("index.html") else htm))
+    r = collect.collect_series({**AFRE, "pages": AFRE["pages"][:1]}, "daily", dt.date(2026, 11, 7), ak=None)
+    assert r["code"] == "afre_title_missing" and len(r["evidence"]) == 1
+
+
+def test_collect_http_html_accepts_utf8_historical_table(monkeypatch):
+    htm = "<meta charset=utf-8>社会融资规模存量统计表".encode("utf-8")
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, url, *a, **k: _Resp(url, LIST_PAGE if url.endswith("index.html") else htm))
+    r = collect.collect_series({**AFRE, "pages": AFRE["pages"][:1]}, "daily", dt.date(2026, 11, 7), ak=None)
+    assert r["error"] is None and len(r["evidence"]) == 1
+
+
+def test_collect_http_redirect_fails_without_evidence(monkeypatch):
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, url, *a, **k: _Resp(url, b"", status=302))
+    r = collect.collect_series(LPR, "daily", dt.date(2026, 11, 7), ak=None)
+    assert r["error"] is not None and r["evidence"] == []
+
+
+def test_legacy_tls_adapter_is_mounted_only_for_chinamoney(monkeypatch):
+    assert collect.LEGACY_TLS_HOSTS == {"www.chinamoney.org.cn"}
+    mounts = []
+    monkeypatch.setattr(requests.Session, "mount", lambda self, prefix, adapter: mounts.append((prefix, adapter)))
+    monkeypatch.setattr(requests.Session, "request", lambda self, m, url, *a, **k: _Resp(url, b"{}", "application/json"))
+    collect._http_get("https://www.chinamoney.org.cn/x", "www.chinamoney.org.cn")
+    host_mounts = [(prefix, adapter) for prefix, adapter in mounts if prefix.startswith("https://www.")]
+    assert len(host_mounts) == 1 and host_mounts[0][0] == "https://www.chinamoney.org.cn/"
+    assert isinstance(host_mounts[0][1], collect._LegacyTlsAdapter)
+    mounts.clear()
+    collect._http_get("https://www.pbc.gov.cn/x", "www.pbc.gov.cn")
+    assert not any(prefix.startswith("https://www.") for prefix, _ in mounts)
+
+
+def test_unknown_function_is_one_failed_series_outcome():
+    r = collect.collect_series({**SAFE, "series_id": "CN_BAD", "function": "not_supported"}, "daily", dt.date(2026, 11, 7), ak=None)
+    assert r["code"] == "unsupported_function" and r["evidence"] == []
+    assert collect.series_outcomes([r, {"series_id": "CN_GOOD", "error": None}]) == [
+        {"series_id": "CN_BAD", "ok": False, "code": "unsupported_function"}, {"series_id": "CN_GOOD", "ok": True}]
