@@ -47,4 +47,4 @@ Not on main and not mine: `method_manifest`, transmission v2, clock `acceptedVer
 
 - `claude/macro-wpd-fed` — merged `origin/main` (no rebase), typecheck/lint clean, 1862 macro/cron/judgments tests pass, pushed (`85fc1c39`), PR not opened yet.
 - `claude/macro-wpd-cn` — rebuilt from `origin/main` (the old local-only branch held the raw CFETS/PBOC payloads in its history; it was never pushed). Contains the plan, plan-audit records and this document.
-- Raw evidence kept only in local scratch: `…/scratchpad/raw-evidence/cn-http-2026-11-07/` (LPR `CN_LPR_Q-2019…2026.json`, AFRE `CN_AFRE_STOCK-2015…2026.htm`, manifest with sha256s, recorder script).
+- Raw evidence kept only on the local SSD, outside any repository: `/Volumes/AIMATE_WORK/tmp/osbornalpha-wpd-raw-evidence/cn-http-2026-11-07/` (restored 2026-11-16 from the unpushed local commit after the session scratch was wiped; all 20 sha256 match the manifest) (LPR `CN_LPR_Q-2019…2026.json`, AFRE `CN_AFRE_STOCK-2015…2026.htm`, manifest with sha256s, recorder script).
