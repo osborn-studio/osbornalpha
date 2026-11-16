@@ -12,6 +12,18 @@
 
 ---
 
+## 修订 A（2026-11-16，与 main 对账之后；本节与下文冲突时以本节为准）
+
+完整对账见 `docs/audits/2026-11-07-macro-wpd/RECONCILE-2026-11-16.md`。
+
+- **A1 权利门槛**（main #182）：中国货币网（CFETS）法律声明 §1 要求书面授权方可"电子抓取"，PBOC 法律声明未澄清商业再分发。因此 `CN_LPR_1Y`、新增 `CN_LPR_5Y` 与两个报价事件源、`CN_AFRE_STOCK_YOY` 在目录里是 **`restricted`**（`rights:'third_party'`，双语理由写明缺什么授权），**不是** `active`；owner 按 runbook §9 书面确认后才翻。受限行不进 `collectableOf`，没有任何采集器 / cron / 测试会请求它们。美联储三序列（FRED 公有领域）照原计划 `active`。
+- **A2 Task 1 取代**：不提交录制器与原始响应。原始字节（2026-11-07 录制）只在本机 scratch；仓库里是 `scripts/macro/make-cn-http-excerpts.py` 产出的**摘录夹具**（`src/lib/macro/fixtures/cn-http/`：PBOC 存量表 2015 / 2019 / 2024 / 2026 的原表头与原行到存量行为止、逐单元格原样，行列下标与完整文件一致；LPR 两个合成信封 + 真实报价行；`manifest.json` 记录原文件 sha256）。
+- **A3 Task 3 解析器的真实版式规则**（12 个年表核对后）：标题行 = 第一个单元格归一化后恰为 `社会融资规模存量统计表` 的唯一表；月份头 = 第一个含 `YYYY.M` 或 `YYYY.Qn` 单元格的行（2015 年表是季度头，期末月 = 3n）；其后一行为子头，成对的 `存量` / `增速（%）`（全角括号归一化）；存量行首格归一化后匹配 `^社会融资规模存量(AFRE\(stock\))?$`（2019 年表无 AFRE 后缀，后一行有孤立的 `AFRE(stock)`）；存量行下标不固定（7 或 8，有无空行），**不得写死**；列 = 按顺序的子头对。独立真值（colspan 感知网格，`afre_truth.py`）：2016–2025 每年 12 点，2015 年 4 个季末点，2026 年 9 点（10–12 月为空），合计 133 点。
+- **A4 采集器**：`http_json`（含仅对 www.chinamoney.org.cn 开启 legacy renegotiation 的适配器）与 `http_html` 分支照 Task 4 写，但**休眠**：测试只用 stub，**不得请求真实站点**，无 dry-run 步骤。
+- **A5 迁移编号**：`20261125090000_macro_wpd_catalog.sql`（main 最新 `20261124110000`；合并前再核对）。
+- **A6 方法版本**：#132 已把 v2 的哈希集缩到 33 个文件（`v2-closure.txt`），`snapshots.ts` / `freshness.ts` / `db.ts` / `read-api.ts` 不再被哈希。Task 11 的 `macro-inputs.ts` 抽取**取消**；`macro_regime@v3` 只是 v2 的副本 + 新目录字面量 pin；v2 经迁移里的 SQL（`judgment_methodologies.status='retired'` + `judgment_methodology_events`）退役。
+- **A7 唯一一次升级的时机**：任何 `restricted`→`active` 都会再次改变 `CATALOG_VERSION`。PR-3 要么在 O-LPR / O-AFRE 书面授权到位后一次性把对应行置 `active`，要么以 `restricted` 先发并接受以后的 v4；合并闸门由 commander / owner 决定。
+
 ## 仓库约定（动手前必读；每个 Codex 任务提示都附本节）
 
 - **工作树**：`/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/prod-bringup-3d24d3`。分支：PR-1 `claude/macro-wpd-cn`（从 `origin/main` `0764bfae`）；PR-2 `claude/macro-wpd-fed`（从 `origin/main`）；PR-3 `claude/macro-wpd-catalog-v3`（从 **#129 `claude/integ-regime-drift` 合并后的 main**；#129 注册 `macro_regime@v2`，本计划的升级是 v3）。不要 `cd` 出去；不用裸 `git stash`（栈与其他工作树共享）。只改本任务 **Files** 列出的文件。
