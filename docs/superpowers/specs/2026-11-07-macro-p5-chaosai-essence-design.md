@@ -581,3 +581,19 @@ O1 publishable；O2/O3 指数权利与 DataGateway；方法 v1.1；QE/QT 事件�
 ## 10. 分期与 PR
 
 P5-B → P5-C1（§4.1–4.3、4.5、4.6）→ P5-C2（§4.4）→ P5-D1 → P5-D2 → P5-D3 → P5-D4 → P5-D5。
+
+## 11. Owner decisions and reconcile addendum (2026-11-16)
+
+### 11.1 O3 (partial): 资产配置假设模板卡
+
+- Approved: a static card under the clock, versioned `macro_allocation_template@v1`, four quadrants × 股票/债券/商品/现金.
+- Mandatory labels on the card: 假设框架 · 未经检验 · 不构成投资建议. Source line cites the Merrill Lynch Investment Clock (Greetham & Hartnett, 2004) for the quadrant→asset mapping and states that the percentages are this product's own illustrative values.
+- "当前" marker only when the clock has a published primary quadrant; otherwise (judgments off, abstained, insufficient coverage, reconciliation failed) the card is a static reference with no marker.
+- Never: connected to portfolio or trading, shown as a probability, described as optimised or backtested.
+- Not approved: sector over/underweight. Not built.
+- Changing any ratio or label is a template version bump (`@v2`), never an in-place edit.
+- Implementation: `src/lib/macro/allocation-template.ts`, `src/components/macro/AllocationTemplateCard.tsx` (PR #231).
+
+### 11.2 Reconcile with main
+
+Main shipped the clock (#135/#142). Sections 2 and 3 are superseded where they differ: the server clock route and `method_manifest` are dropped; the clock stays client-side and this spec's reconciliation invariants run in `clock-weighted.ts` via `reconcileStorage`. Full table: `docs/audits/2026-11-07-macro-p5/RECONCILE-2026-11-16.md`. WP-D (section 5) remains the contract for session macro-wpd and does not need `method_manifest`.
