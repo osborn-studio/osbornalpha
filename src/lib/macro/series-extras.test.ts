@@ -1,4 +1,4 @@
-// Series detail extras (spec §3.3, §6): US policy events + cycles + same-region enabled assets; CN has no events.
+// Series detail extras (spec §3.3, §6): US policy events, CN quote events, cycles and same-region assets.
 import {describe,expect,it} from 'vitest';
 import {catalogById} from './catalog';
 import {MacroDbError,type MacroDb} from './db';
@@ -30,6 +30,7 @@ describe('seriesExtras',()=>{
    ['US_WTI','2024-09-30','2026-09-30','2.6845','pct'],['US_UST10Y','2024-09-30','2026-09-30','29','bp']]);
   expect(x.calendar.length).toBeGreaterThan(0);
   expect(x.calendar.every(c=>Number.isFinite(Date.parse(c.retrieved_at)))).toBe(true);
+  expect(x.quoteEvents).toEqual([]);expect(x.quoteEventsVersion).toBe('macro-events-quote/1');
   expect(x.eventsVersion).toBe('macro-events/1');expect(x.cyclesVersion).toBe('macro-cycles/1');
  });
  it('calendar follows asOf: empty before the first retrieval, populated after',async()=>{
@@ -43,10 +44,29 @@ describe('seriesExtras',()=>{
   expect(x.assetsByCycle.some(a=>a.asset_id==='US_UST10Y')).toBe(false);
   expect(x.cycles[0]).toMatchObject({basis:'trailing_median',direction:'up'});
  });
+ it('CN policy rate derives quote events and policy cycles from the quote source history',async()=>{
+  const def={...catalogById('CN_LPR_1Y')!,derive:{kind:'month_end' as const,from:'CN_LPR_1Y_Q'}};
+  const quotes=[obs('a','2019-08-20','4.25'),obs('b','2019-09-20','4.20'),obs('c','2019-10-21','4.20'),obs('d','2019-11-20','4.15'),obs('e','2019-12-20','4.15')];
+  const x=await seriesExtras(fake({CN_LPR_1Y_Q:quotes}),def,{});
+  expect(x.events).toEqual([]);expect(x.calendar).toEqual([]);
+  expect(x.quoteEvents.map(e=>[e.effective_date,e.change_bp,e.evidence,e.version])).toEqual([
+   ['2019-09-20','-5',['a','b'],'macro-events-quote/1'],['2019-11-20','-5',['c','d'],'macro-events-quote/1'],
+  ]);
+  expect(x.cycles.map(c=>[c.basis,c.direction,c.start,c.end,c.event_count])).toEqual([
+   ['policy_events','down','2019-09-20','2019-12-20',2],
+  ]);
+  expect(x.quoteEventsVersion).toBe('macro-events-quote/1');expect(x.eventsVersion).toBe('macro-events/1');
+ });
+ it('CN policy rate without quote history has no quote events or cycles',async()=>{
+  const def={...catalogById('CN_LPR_1Y')!,derive:{kind:'month_end' as const,from:'CN_LPR_1Y_Q'}};
+  const x=await seriesExtras(fake({}),def,{});
+  expect(x.quoteEvents).toEqual([]);expect(x.cycles).toEqual([]);
+ });
  it('CN: no events and no calendar; cycles from the series itself',async()=>{
   const pmi=Array.from({length:24},(_,i)=>obs(`p${i}`,new Date(Date.UTC(2020,i+1,0)).toISOString().slice(0,10),`${49+Math.floor(i/10)}.${i%10}`));
   const x=await seriesExtras(fake({CN_PMI_MFG:pmi}),catalogById('CN_PMI_MFG')!,{});
   expect(x.events).toEqual([]);expect(x.calendar).toEqual([]);
+  expect(x.quoteEvents).toEqual([]);expect(x.quoteEventsVersion).toBe('macro-events-quote/1');
   expect(x.cycles).toHaveLength(1);
   expect(x.assetsByCycle.map(a=>[a.asset_id,a.change_text,a.missing])).toEqual([['CN_CGB10Y',null,'both']]);
  });
