@@ -6,7 +6,7 @@ import {usePathname,useRouter,useSearchParams} from 'next/navigation';
 import {useTranslations} from 'next-intl';
 import {PUBLIC_RATINGS} from '@/lib/broker-research/public-dto';
 import type {PublicInstitutionDto} from '@/lib/broker-research/public-dto';
-import type {LibraryTotals} from '@/lib/broker-research/public-read';
+import type {LibraryTotals} from '@/lib/broker-research/public-types';
 import {ReportsTable} from './ReportsTable';
 import {apiQuery,classifyListResponse,EMPTY_FILTERS,filtersToParams,parseListFilters} from './list-query';
 import type {ListFilters,ListOutcome} from './list-query';

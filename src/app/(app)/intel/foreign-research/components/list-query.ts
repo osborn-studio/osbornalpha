@@ -1,5 +1,5 @@
 // URL filters and four public list response states (spec §9.2).
-import type {ReportPage} from '@/lib/broker-research/public-read';
+import type {ReportPage} from '@/lib/broker-research/public-types';
 export interface ListFilters{ticker:string;institution:string;rating:string;from:string;to:string;summary:boolean}
 export const EMPTY_FILTERS:ListFilters={ticker:'',institution:'',rating:'',from:'',to:'',summary:false};
 export function parseListFilters(sp:URLSearchParams):ListFilters{return {ticker:sp.get('ticker')??'',institution:sp.get('institution')??'',rating:sp.get('rating')??'',from:sp.get('from')??'',to:sp.get('to')??'',summary:sp.get('summary')==='1'};}

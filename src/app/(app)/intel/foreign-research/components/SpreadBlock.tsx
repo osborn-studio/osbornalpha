@@ -3,7 +3,7 @@
 import {useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
-import type {PublicSpreadRowDto} from '@/lib/broker-research/public-read';
+import type {PublicSpreadRowDto} from '@/lib/broker-research/public-types';
 import {RatingBadge} from './RatingBadge';
 import {TargetValue} from './TargetValue';
 import {reportHref} from './ReportsTable';

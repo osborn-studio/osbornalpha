@@ -10,18 +10,20 @@ import type {TableClient} from '../db/table-client';
 import {isCurrentSecurity,resolveIssuer} from '../entities/resolve';
 import {inferCoreMarket,normalizeSecurityTicker} from '../securities/ticker';
 import {supabaseBrokerResearchDb} from './db';
-import type {BrokerResearchDb,NormalizedRating,PublicReportBundle,ReportScope} from './types';
+import type {BrokerResearchDb,PublicReportBundle} from './types';
 import {notNull,toPublicHistoryRow,toPublicInstitution,toPublicInstitutionAnalyst,toPublicReport,toPublicReportDetail} from './public-dto';
-import type {PublicHistoryRowDto,PublicInstitutionAnalystDto,PublicInstitutionDto,PublicInstitutionRef,PublicReportDetailDto,PublicReportDto,PublicTargetDto} from './public-dto';
+import type {PublicHistoryRowDto,PublicInstitutionDto,PublicReportDetailDto,PublicReportDto} from './public-dto';
 
-export const LIST_DEFAULT_LIMIT=50,LIST_MAX_LIMIT=200,BY_TICKER_DEFAULT_LIMIT=5,BY_TICKER_MAX_LIMIT=20;
-export const HISTORY_DEFAULT_LIMIT=50,HISTORY_MAX_LIMIT=200,SPREAD_WINDOW_MONTHS=12,INSTITUTION_ANALYSTS_LIMIT=50;
 // Spread selection is performed by broker_spread_latest_v, without a report traversal limit.
+
+export {LIST_DEFAULT_LIMIT,LIST_MAX_LIMIT,BY_TICKER_DEFAULT_LIMIT,BY_TICKER_MAX_LIMIT,HISTORY_DEFAULT_LIMIT,HISTORY_MAX_LIMIT,SPREAD_WINDOW_MONTHS,INSTITUTION_ANALYSTS_LIMIT,currencyOf,focusTarget,monthsBefore} from './public-types';
+export type {ReportCursor,ListQuery,ReportPage,LibraryTotals,PublicSpreadRowDto,ReportPageData,InstitutionPageData} from './public-types';
+import {LIST_MAX_LIMIT,HISTORY_MAX_LIMIT,SPREAD_WINDOW_MONTHS,INSTITUTION_ANALYSTS_LIMIT,currencyOf,focusTarget,monthsBefore} from './public-types';
+import type {ReportCursor,ListQuery,ReportPage,LibraryTotals,PublicSpreadRowDto,ReportPageData,InstitutionPageData} from './public-types';
 
 export interface PublicReadDeps{db:BrokerResearchDb;tables:TableClient}
 export function anonPublicDeps():PublicReadDeps{const sb=getAnonSupabase();return {db:supabaseBrokerResearchDb({anon:sb}),tables:supabaseTableClient(sb)};}
 
-export interface ReportCursor{publishedDate:string;reportId:string}
 const CURSOR_RE=/^(\d{4}-\d{2}-\d{2})\|([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 export const encodeCursor=(c:ReportCursor)=>Buffer.from(`${c.publishedDate}|${c.reportId}`,'utf8').toString('base64url');
 export function decodeCursor(s:string):ReportCursor|null{
@@ -34,8 +36,6 @@ const cursorOf=(b:PublicReportBundle):string|null=>{
  return typeof d==='string'&&typeof id==='string'?encodeCursor({publishedDate:d.slice(0,10),reportId:id}):null;
 };
 
-export interface ListQuery{institutionId?:string;issuerId?:string;rating?:NormalizedRating;securityTicker?:string;currency?:string|null;scope?:ReportScope;from?:string;to?:string;limit:number;cursor?:ReportCursor;summaryOnly?:boolean}
-export interface ReportPage{reports:PublicReportDto[];nextCursor:string|null;count:number}
 /** One view page. summaryOnly → PublicReportFilter.hasSummary (filtered in the db layer, so pages stay full); nextCursor follows the last fetched row. */
 export async function listPublicReports(deps:PublicReadDeps,q:ListQuery):Promise<ReportPage>{
  const bundles=await deps.db.publicReports({institutionId:q.institutionId,issuerId:q.issuerId,rating:q.rating,scope:q.scope,from:q.from,to:q.to,limit:q.limit,cursor:q.cursor,...(q.summaryOnly?{hasSummary:true}:{}),
@@ -45,7 +45,6 @@ export async function listPublicReports(deps:PublicReadDeps,q:ListQuery):Promise
  return {reports,nextCursor:bundles.length>=q.limit&&last?cursorOf(last):null,count:reports.length};
 }
 
-export interface LibraryTotals{reports:number;institutions:number;lastAvailableAt:string|null}
 /** Public institutions with their counts (report_count / last_* come from research_institutions_public_v in one query) and the library totals. */
 export async function listPublicInstitutions(deps:PublicReadDeps):Promise<{institutions:PublicInstitutionDto[];totals:LibraryTotals}>{
  const institutions=(await deps.db.publicInstitutions()).map(r=>toPublicInstitution(r)).filter(notNull)
@@ -82,14 +81,8 @@ export async function publicHistory(deps:PublicReadDeps,q:{securityTicker:string
  return (await deps.db.ratingHistory(q)).map(r=>toPublicHistoryRow(r)).filter(notNull);
 }
 
-export function monthsBefore(today:string,months:number):string{
- const d=new Date(`${today}T00:00:00Z`);d.setUTCMonth(d.getUTCMonth()-months);return d.toISOString().slice(0,10);
-}
-export const currencyOf=(t:PublicTargetDto):string|null=>t.currency;
-export const focusTarget=(r:PublicReportDto):PublicTargetDto|null=>r.targets.find(t=>t.targetKey===r.primaryTargetKey)??r.targets[0]??null;
 const newestFirst=(a:PublicReportDto,b:PublicReportDto)=>(b.publishedDate??'').localeCompare(a.publishedDate??'')||b.reportId.localeCompare(a.reportId);
 
-export interface PublicSpreadRowDto{currency:string|null;reportId:string;institution:PublicInstitutionRef;publishedDate:string|null;rating:{raw:string|null;normalized:NormalizedRating|null};targetPricePublic:boolean;target:{price:string;currency:string|null}|null;priceAtReport:{value:string;currency:string|null}|null;upsidePct:string|null}
 export async function publicSpread(deps:PublicReadDeps,q:{issuerId:string;securityTicker:string;currency:string|null;today:string;windowMonths?:number}):Promise<PublicSpreadRowDto[]>{
  const reports=(await deps.db.spreadReports({issuerId:q.issuerId,securityTicker:q.securityTicker,currency:q.currency,from:monthsBefore(q.today,q.windowMonths??SPREAD_WINDOW_MONTHS)})).map(toPublicReport).filter(notNull);
  const latest=new Map<string,PublicSpreadRowDto>();
@@ -103,7 +96,6 @@ export async function publicSpread(deps:PublicReadDeps,q:{issuerId:string;securi
  return [...latest.values()];
 }
 
-export interface ReportPageData{report:PublicReportDetailDto;history:PublicHistoryRowDto[];spread:PublicSpreadRowDto[];focusTargetKey:string|null}
 export async function reportPageData(deps:PublicReadDeps,reportId:string,today:string):Promise<ReportPageData|null>{
  const report=await getPublicReport(deps,reportId);if(!report)return null;
  const t=focusTarget(report);
@@ -116,7 +108,6 @@ export async function reportPageData(deps:PublicReadDeps,reportId:string,today:s
  return {report,history:history.filter(h=>h.targetCurrency===histCurrency),spread,focusTargetKey:t.targetKey};
 }
 
-export interface InstitutionPageData{institution:PublicInstitutionDto;reports:PublicReportDto[];analysts:PublicInstitutionAnalystDto[];securities:number;lastPublishedDate:string|null;moreReports:boolean}
 /** Counts come from the institutions view (exact); the report list is the newest LIST_MAX_LIMIT; securities count the listed reports. */
 export async function institutionPageData(deps:PublicReadDeps,institutionId:string):Promise<InstitutionPageData|null>{
  const institution=(await deps.db.publicInstitutions()).map(r=>toPublicInstitution(r)).filter(notNull).find(i=>i.id===institutionId);

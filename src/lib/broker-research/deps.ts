@@ -1,6 +1,7 @@
 // Production dependencies for broker research services (plan Part C): private DB/storage, DQ tables, clock and ids.
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
+import type {BrokerDatabase} from './database-types';
 import {getAdminSupabase} from '../supabase/admin';
 import {supabaseTableClient} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
@@ -15,7 +16,7 @@ import {productionLlmPort} from './ports/llm';
 import type {LlmPort} from './ports/llm';
 export interface CoreDeps{db:BrokerResearchDb;storage:BrokerStorage;tables:TableClient;now:()=>Date;codeVersion:string;newId:()=>string}
 export function coreDeps():CoreDeps{
- const admin=getAdminSupabase() as unknown as SupabaseClient;
+ const admin=getAdminSupabase() as unknown as SupabaseClient<BrokerDatabase>;
  return {db:supabaseBrokerResearchDb({admin}),storage:supabaseBrokerStorage(admin),tables:supabaseTableClient(admin),
   now:()=>new Date(),codeVersion:resolveCodeVersion({allowGit:false})??'unknown',newId:randomUUID};
 }

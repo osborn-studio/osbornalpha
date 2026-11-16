@@ -4,7 +4,7 @@ import {useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
 import {PUBLIC_RATINGS} from '@/lib/broker-research/public-dto';
-import type {InstitutionPageData} from '@/lib/broker-research/public-read';
+import type {InstitutionPageData} from '@/lib/broker-research/public-types';
 import {ReportsTable} from './ReportsTable';
 import {primaryTarget} from './format';
 import {CARD,CARD_FLUSH,H1,H2,SEG,TINY,segBtn} from './ui';
