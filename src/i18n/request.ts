@@ -10,7 +10,7 @@ import { resolveLocale } from '@/lib/i18n/locale';
 const MESSAGE_DOMAINS = [
   'common', 'landing', 'auth', 'errors', 'settings',
   // G1b domains (pre-registered for the parallel extraction fan-out):
-  'today', 'portfolio', 'intel', 'tools', 'market', 'components',
+  'portfolio', 'intel', 'tools', 'market', 'components',
   // G1d domains (pre-registered, same fan-out pattern):
   'briefs', 'radar', 'watchlist',
   // Internal operations dashboard:
@@ -25,6 +25,19 @@ const MESSAGE_DOMAINS = [
   // Macro workbench (spec 2026-11-04-macro-workbench-design §10):
   'macro',
   // /MACRO
+  // MACRO-P3
+  'macroStrategy',
+  // /MACRO-P3
+  // F3 document pipeline (source drawer, spec 2026-11-04 §9.1):
+  'documents',
+  // F3 end
+  // COMPANY — company research module (plan 2026-11-06 Task 11)
+  'company', 'tracking',
+  // /COMPANY
+  // F4
+  // Judgment framework (spec 2026-11-04 §9.5):
+  'judgments',
+  // /F4
   // FOREIGN ↓ foreign broker research (plan Task D2)
   'foreign-research',
   // FOREIGN ↑

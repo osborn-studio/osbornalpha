@@ -1,0 +1,11 @@
+{
+ "_synthetic": "F3 Task 18 synthetic fixture in the shape of https://www.sec.gov/Archives/edgar/data/1321655/000132165526000039/index.json (directory.item[]); not recorded from SEC.",
+ "directory": {
+  "name": "/Archives/edgar/data/1321655/000132165526000039",
+  "parent-dir": "/Archives/edgar/data/1321655",
+  "item": [
+   {"last-modified": "2026-08-03 16:06:14", "name": "pltr-20260803.htm", "type": "text.gif", "size": "30124"},
+   {"last-modified": "2026-08-03 16:06:14", "name": "0001321655-26-000039-index.htm", "type": "text.gif", "size": ""}
+  ]
+ }
+}

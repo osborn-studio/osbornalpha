@@ -1,0 +1,86 @@
+{
+  "_note": "hand-written to F4 spec §9.2 (2026-11-06); replace with a recorded GET /api/judgments?subject_type=issuer&subject_key=<id>&view=latest",
+  "subject": {
+    "type": "issuer",
+    "key": "11111111-1111-4111-8111-111111111111"
+  },
+  "asOf": null,
+  "view": "latest",
+  "cards": [
+    {
+      "judgment_id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "subject": {
+        "type": "issuer",
+        "key": "11111111-1111-4111-8111-111111111111"
+      },
+      "judgment_type": "thesis_win_rate",
+      "kind": "probability",
+      "lifecycle": "settled",
+      "calibration": "calibrated",
+      "retrospective": false,
+      "as_of": "2024-05-10",
+      "registered_at": "2024-05-10T08:00:00Z",
+      "methodology": {
+        "id": "thesis-win",
+        "version": "1.0.0",
+        "title": {
+          "zh": "论点胜率",
+          "en": "Thesis win rate"
+        },
+        "href": "/intel/methods/thesis-win/1.0.0"
+      },
+      "display": {
+        "headline": {
+          "zh": "一年内营收增速高于 10%",
+          "en": "Revenue growth above 10% within a year"
+        },
+        "percent": 62,
+        "value": null,
+        "band": "mid"
+      },
+      "condition": {
+        "text": {
+          "zh": "FY2024 营业收入同比 > 10%",
+          "en": "FY2024 operating revenue YoY > 10%"
+        },
+        "horizon": "1y",
+        "target": "revenue_yoy",
+        "label_policy": "strict",
+        "settle_after": "2025-03-01",
+        "settle_by": "2025-06-30"
+      },
+      "settlement": {
+        "kind": "resolved",
+        "outcome": "hit",
+        "realized": 0.1566,
+        "settled_at": "2025-03-01T03:00:00Z",
+        "evidence_summary": "fact revenue_yoy 15.66%"
+      },
+      "calibration_summary": {
+        "n_independent": 64,
+        "n_total": 80,
+        "threshold_n": 50,
+        "brier": 0.21,
+        "brier_skill": 0.08,
+        "ece_raw_holdout": 0.04,
+        "valid_until": "2026-12-31",
+        "hit_rate": {
+          "rate": 0.61,
+          "low": 0.5,
+          "high": 0.71
+        },
+        "href": "/intel/methods/thesis-win/1.0.0",
+        "computed_at": "2025-03-02T00:00:00Z"
+      },
+      "inputs": [
+        {
+          "label": {
+            "zh": "营业收入同比 FY2024",
+            "en": "Operating revenue YoY FY2024"
+          },
+          "href": "/stock/600519.SH?view=metrics&asOf=2025-03-01"
+        }
+      ]
+    }
+  ]
+}

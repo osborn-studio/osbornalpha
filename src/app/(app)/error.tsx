@@ -29,7 +29,7 @@ export default function AppError({ error, reset }: { error: Error & { digest?: s
           {t('retry')}
         </button>
         <Link
-          href="/today"
+          href="/macro"
           className="rounded-md bg-bg-card px-4 py-2 text-sm text-text-dim hover:text-text"
         >
           {t('backHome')}

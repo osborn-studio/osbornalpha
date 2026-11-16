@@ -30,3 +30,7 @@
 
 ## 6. 默认值（规格 §16，本期按默认执行）
 D1 阈值、D2 `gold_approval='process'`（清单需 `waivers`）、D3 上线前一次特权 report 后每季度、D4 public 集全量 JSON + `.md` 入 `docs/evals/`、D5 只用 36 格、D6 账本批准人 owner、D7 清单失败为上线检查项、D8 `extraction_gold` 不启用且不建 `eval-restricted` 桶。
+
+## 7. 黄金集准入与校准准备（离线）
+
+`npx tsx scripts/evals/validate.ts --gold-admission <file>`：独立于 `--gold` 的数据集契约准入；拒绝 legacy、synthetic、空/全撤回、未锁定及受限集合。退出 0 只表示 `dataset_contract_only`，不认证来源、人工准确率、许可或发布就绪。当前 plan2 与 synthetic-us 均退出 1。逐案证据缺口及 F4 校准启用前置条件见 [F6 gold admission](f6-gold-admission.md)。

@@ -117,3 +117,22 @@ Codex 第二轮判定原句：**"The second draft is substantially improved, but
 ## 两轮都确认必须保留的要点（Codex "must not be regressed"）
 
 市场分流与单信封读取、`truncated` 失败关闭；事件/覆盖原子替换、语义事件身份、墓碑与首次可见时间保留；按 `asOf` 现算回放、明确的回放排除；公共事实与私有用户状态分离；mock 共识/财务/新闻移除、港股缺失保持缺失；DCF 单位统一与事实种子不被 LLM 覆盖；读时新鲜度、RLS、`private, no-store`、表格等价、双语注册、critical 套件注册。
+
+## 第五轮（第 5 稿 → 第 6 稿；`06-codex-round5.md`，2026-11-06，增量审计 + 对照已落地规格二代码）
+
+判定原句：**"Not ready for implementation planning; blocking P1 findings are #61–#65 and #67."** 全部接受，落点为规格新增 §0（规范性，优先于正文）并在正文受影响段落加指针。
+
+| # | 严重度 | 处置 | 第 6 稿落点 |
+|---|---|---|---|
+| 61 | P1 | ACCEPT | §0 引言与 §0.1：以已落地 facts 代码为只读契约；未落地请求由本模块适配器实现并列入 PR；C0 退出条件改为适配器契约测试通过；§10.1、§13 改写 |
+| 62 | P1 | ACCEPT | §0.1 证据索引 `company_fact_evidence`（重新解析快照、全键匹配、无猜测）；§0.2 #62 DTO 含 `snapshot.sha256`/`hashLocator`/`jsonPointer` 与三步回放；下载端点改为 `/api/companies/snapshot?fact=` |
+| 63 | P1 | ACCEPT | §0.2 #63 `evidenceEligible` 完整谓词（US 下载与来源；CN `linked` + `documentUrl` + 绑定的 `locator.pdf`；admin 只豁免 CN PDF 条件） |
+| 64 | P1 | ACCEPT | §0.2 #64 `issuer_events` 仅 service_role 可读；路由服务端组装并过门槛；真实角色测试 |
+| 65 | P1 | ACCEPT | §0.2 #65 CN 净债务 `borrowings_total − monetary_funds`（含受限资金口径）；公共 CN 种子在 PDF 定位前不可用；两份夹具验收 |
+| 66 | P2 | ACCEPT | §0.2 #66 单季/TTM 用落地 `Q_SINGLE_CONCEPTS`；概念数用 `FACT_CONCEPTS.length` |
+| 67 | P1 | ACCEPT | §0.2 #67 指标代理保留 rev 前后守卫与 `stale`、缓存上限 |
+| 68 | P2 | ACCEPT | §0.2 #68 抽屉走 `/api/companies/[ticker]/facts`；`factIds` 模式的 null 序列字段不推断 |
+| 69 | P2 | ACCEPT | §0.2 #69 复用 `resolvePublicIssuer`，市场取自匹配证券行 |
+| 70 | P2 | ACCEPT | §0.2 #70 失败只在 attempt_id 超过成功与失败两个水位时推进 |
+| 71 | P2 | ACCEPT | §0.2 #71 迁移 `20261112090000_*` / `20261112091000_*` |
+| 72 | P2 | ACCEPT | §0.2 #72 本模块自有人工抄录夹具；未抄录项 pending 并列为 owner 事项 |

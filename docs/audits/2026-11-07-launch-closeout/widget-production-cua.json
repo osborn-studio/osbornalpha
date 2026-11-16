@@ -1,0 +1,21 @@
+{
+  "sha": "98e9a819d8f8ccc73de8f69df9feac09690014f3",
+  "surface": "native Chrome via computer use, existing logged-in osbornalpha.com/macro",
+  "date": "2026-11-07",
+  "verified": [
+    "Production refresh visibly renders redesigned full-width four-phase investment clock and local navigation",
+    "US current overheat; coverage60%; missinggrowth limitation shown",
+    "US overheat quantitative breakdown CPI3.72% period2026-09-30 rule3%<inflation<=4%, weight15 contribution9",
+    "US source drawer BLS via FRED, yoy_from_index@1, two readable US_CPI_INDEX inputs, CSVlines322/310 column2, same SHA24c03d8062d14e2574c81cfd054b3e3f1d661e05714a564907685dfcd1d0f8e8",
+    "US to CN click clears US data while loading then binds CN; currentstagflation,21/21 tie withrecession explicit,coverage60%",
+    "CN stagflation quantitative breakdown PPI5% weight15 contribution9;PMI49.3 weight15 contribution6; total21",
+    "CN PPI source drawer NBS data.stats.gov.cn, index_minus_100@1, readableCN_PPI_INDEX input, JSONpointer /data/1/values/0/value, SHAe992b5c4b578b03a77e9e10227bb53ad06d4b056fa4071eac5c6bad1a1d5addc"
+  ],
+  "limits": [
+    "Raw evidence bytes not downloaded/recomputed",
+    "Live mobile/browser console/logout/account-switch not fully rerun in this acceptance",
+    "Language English with bilingual phase names; Chinese/light/mobile tested fixture-side, not all repeated live",
+    "This is agent functional/visual verification, not user aesthetic approval",
+    "Production does not include unmerged150 cold latency fix; dc47performance samples not a new98e9benchmark"
+  ]
+}

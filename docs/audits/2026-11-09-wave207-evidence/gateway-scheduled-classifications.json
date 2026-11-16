@@ -1,0 +1,23 @@
+[
+  {
+    "runId": 42418793899,
+    "jobId": 128542543966,
+    "availability": "available",
+    "preferred_source": "selected",
+    "reason": "classified"
+  },
+  {
+    "runId": 42434058923,
+    "jobId": 128588986177,
+    "availability": "stale",
+    "preferred_source": "degraded",
+    "reason": "classified"
+  },
+  {
+    "runId": 42552669657,
+    "jobId": 128951476677,
+    "availability": "stale",
+    "preferred_source": "degraded",
+    "reason": "classified"
+  }
+]

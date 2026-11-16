@@ -1,0 +1,43 @@
+{
+  "sha": "13c734ba8df51e954359c980014ba902d703a12d",
+  "timestamp": "2026-11-08T16:29:22.365056+00:00",
+  "migration187": {
+    "recorded_at": "2026-11-08T15:51:53.841126+00:00",
+    "project": "mzfcaabhuwtfvsvadvsv",
+    "version": "20261123110000",
+    "name": "company_evidence_fact_lookup",
+    "status": "APPLIED_AND_READBACK_VERIFIED",
+    "source_sha256": "13200b68cefef07ec96cd4355b5d46441b36ab790405b6e7551c605b6d74edfc",
+    "before_body_md5": "afc90dd6ebd7191c5953952fd95393bb",
+    "after_body_md5": "2ef0916131e85b10b3ab894a609397e8",
+    "transaction": "guarded BEGIN; reviewed function and revoke; expected body guard; history insert; COMMIT",
+    "ui_result": "Success. No rows returned",
+    "independent_readback": {
+      "migration_present": true,
+      "body_hash_matches": true,
+      "security_definer": false,
+      "search_path": "",
+      "acl": [
+        "postgres=X/postgres"
+      ],
+      "execute": {
+        "anon": false,
+        "authenticated": false,
+        "service_role": false
+      }
+    },
+    "production_performance_claim": "not_measured"
+  },
+  "project": {
+    "projectId": "prj_bdNjYtvVl2nMCZz8iarFvUp33yr6",
+    "orgId": "team_B2Z3dd7qoz7rJQGfLHpR0E8W",
+    "projectName": "stock-monitor"
+  },
+  "clean": true,
+  "remoteMainMatches": true,
+  "rollback": "dpl_67Baof7ufD3rTEsdg52cWTZtZsY4",
+  "CI": [
+    "42499250767",
+    "42499250845"
+  ]
+}

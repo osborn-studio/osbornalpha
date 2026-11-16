@@ -1,0 +1,81 @@
+%PDF-1.4
+1 0 obj
+<</Type/Catalog/Pages 2 0 R>>
+endobj
+2 0 obj
+<</Type/Pages/Kids[9 0 R 11 0 R]/Count 2>>
+endobj
+3 0 obj
+<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>
+endobj
+4 0 obj
+<</Length 141>>
+stream
+begincmap
+1 begincodespacerange
+<0000><FFFF>
+endcodespacerange
+3 beginbfchar
+<0001><D840DC0B>
+<0002><D83DDE00>
+<0003><FF11>
+endbfchar
+endcmap
+endstream
+endobj
+5 0 obj
+<</Type/FontDescriptor/FontName/U/Flags 4/FontBBox[0 0 1000 1000]>>
+endobj
+6 0 obj
+<</Type/Font/Subtype/CIDFontType2/BaseFont/U/CIDSystemInfo<</Registry(Adobe)/Ordering(Identity)/Supplement 0>>/FontDescriptor 5 0 R/DW 1000/CIDToGIDMap/Identity>>
+endobj
+7 0 obj
+<</Type/Font/Subtype/Type0/BaseFont/U/Encoding/Identity-H/DescendantFonts[6 0 R]/ToUnicode 4 0 R>>
+endobj
+8 0 obj
+<</Length 311>>
+stream
+BT/FU 10 Tf 20 270 Td<00010002>Tj ET
+BT/FL 10 Tf 44 270 Td(Revenue)Tj ET
+BT/FL 10 Tf 20 250 Td(Total)Tj ET
+BT/FL 10 Tf 150 250 Td(1,234)Tj ET
+BT/FL 10 Tf 220 250 Td((5,678))Tj ET
+BT/FL 10 Tf 20 235 Td(Cost)Tj ET
+BT/FL 10 Tf 155 235 Td((100))Tj ET
+BT/FL 10 Tf 235 235 Td(90)Tj ET
+BT/FU 10 Tf 20 200 Td<0003>Tj ET
+endstream
+endobj
+9 0 obj
+<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Resources<</Font<</FL 3 0 R/FU 7 0 R>>>>/Contents 8 0 R>>
+endobj
+10 0 obj
+<</Length 105>>
+stream
+BT/FL 10 Tf 20 270 Td(Page two)Tj ET
+BT/FU 10 Tf 20 250 Td<0001>Tj ET
+BT/FL 10 Tf 30 250 Td(cash 42)Tj ET
+endstream
+endobj
+11 0 obj
+<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Resources<</Font<</FL 3 0 R/FU 7 0 R>>>>/Contents 10 0 R>>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000054 00000 n 
+0000000112 00000 n 
+0000000200 00000 n 
+0000000390 00000 n 
+0000000473 00000 n 
+0000000651 00000 n 
+0000000765 00000 n 
+0000001125 00000 n 
+0000001246 00000 n 
+0000001401 00000 n 
+trailer
+<</Size 12/Root 1 0 R>>
+startxref
+1524
+%%EOF

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司页 报表视图</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1700px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav" aria-label="主导航"><a href="#">首页</a><a class="on" href="#">自选</a><a href="#">雷达</a><a href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 20px">
+    <section style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap">
+      <div style="display: flex; flex-direction: column; gap: 8px; min-width: 0">
+        <h1 class="h1">贵州茅台 <span class="en" style="font-size: 16px">Kweichow Moutai</span></h1>
+        <div class="row">
+          <button class="chip ac m" aria-current="true">600519.SH ◉</button>
+          <span class="chip sq">A 股</span>
+          <span class="tiny">CIK <span class="m">—</span> · LEI <span class="m">300300S39XTBSV1ZPG26</span> · USCI <span class="m">91520000214434146R</span></span>
+        </div>
+      </div>
+      <div class="card" style="margin-left: auto; padding: 10px 14px; display: grid; grid-template-columns: repeat(3, auto); gap: 4px 20px; font-size: 12px">
+        <span class="fog">最近财期 Latest period</span><span class="fog">最近文件 Latest filing</span><span class="fog">引用 Citations</span>
+        <span class="m">2025-09-30</span><span class="m">2025-10-25</span><span><span class="m">linked 9</span> · <span class="m">pending 1</span></span>
+        <span class="fog">最近同步成功</span><span class="fog">数据集</span><span></span>
+        <span class="m">2026-11-02</span><span class="row" style="gap: 6px"><span class="m">facts.cn</span><span class="chip"><span class="dot ok"></span>fresh</span></span><span></span>
+      </div>
+      <div class="row" style="flex-basis: 100%">
+        <button class="btn sm">加入自选 Add to watchlist</button>
+        <button class="btn sm" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">跟踪 ✓ Tracking</button>
+        <button class="btn sm">分析 Analyze ▸</button>
+        <span class="tiny" style="margin-left: auto">行情行按决策 J 默认不显示（无回放契约）</span>
+      </div>
+    </section>
+
+    <nav class="tabs" aria-label="视图 Views">
+      <a href="Overview.dc.html">概览</a><a class="on" href="#">报表</a><a href="Metrics.dc.html">指标</a><a href="Filings.dc.html">文件</a><a href="#">跟踪</a><a href="#">判断</a><a href="#">模型观点（未校准）</a><a href="#">信号</a><a href="#">持仓</a>
+    </nav>
+
+    <div class="row" style="gap: 12px">
+      <div class="seg" aria-label="报表 Statement"><button class="on">利润表 IS</button><button>资产负债表 BS</button><button>现金流量表 CF</button></div>
+      <div class="seg" aria-label="口径 Basis"><button class="on">按披露 Disclosed</button><button>年度 Annual</button><button>单季 Quarterly</button></div>
+      <div class="seg" aria-label="期数"><button class="on">8</button><button>20</button><button>40</button></div>
+      <div class="seg" aria-label="显示缩放 Scale"><button>原值</button><button>千</button><button>百万</button><button class="on">亿</button></div>
+      <span class="chip sq">合并 consolidated</span>
+      <button class="btn sm" style="margin-left: auto">回放 asOf ▾</button>
+      <button class="btn sm">导出 CSV</button>
+    </div>
+
+    <div class="row" style="padding: 8px 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; font-size: 12px">
+      <span class="dot warn"></span>
+      <span><span class="m">13</span> 格未显示：引用待挂接（citation_pending · 2025 三季报尚未挂接巨潮 PDF 或缺逐值定位）。服务端置空，不显示替代值。</span>
+      <span class="tiny" style="margin-left: auto">徽标：<span class="bdg">R</span> 修订 <span class="bdg">n</span> 再次披露 <span class="bdg">U</span> 多单位</span>
+    </div>
+
+    <section class="card scrollx" style="padding: 0">
+      <table class="t">
+        <thead><tr>
+          <th class="stick" style="padding-left: 16px; min-width: 220px">概念 Concept<span class="en">单位 · 亿元 CNY 1e8</span></th>
+          <sc-for list="{{cols}}" as="c" hint-placeholder-count="8"><th class="n"><span class="m" style="color: #fafafa">{{c.pe}}</span><span class="en">{{c.d}}</span></th></sc-for>
+        </tr></thead>
+        <tbody>
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="13">
+            <tr>
+              <td class="stick" style="padding-left: 16px"><button class="src" style="font-family: inherit; text-decoration: none; color: #fafafa">{{r.zh}}</button><span class="en">{{r.en}}</span><sc-if value="{{r.bars}}" hint-placeholder-val="{{false}}"><span class="chip ac" style="margin-left: 8px; height: 18px">迷你柱 ✓</span></sc-if></td>
+              <sc-for list="{{r.cells}}" as="x" hint-placeholder-count="8">
+                <td class="n"><sc-if value="{{x.v}}" hint-placeholder-val="{{true}}"><button class="src">{{x.t}}</button><sc-if value="{{x.b}}" hint-placeholder-val="{{false}}"><span class="bdg">{{x.b}}</span></sc-if></sc-if><sc-if value="{{x.w}}" hint-placeholder-val="{{false}}"><span class="wh" title="引用待挂接 citation_pending">— 待挂接</span></sc-if><sc-if value="{{x.e}}" hint-placeholder-val="{{false}}"><span class="wh" title="该期无此概念的可见披露">—</span></sc-if></td>
+              </sc-for>
+            </tr>
+            <sc-if value="{{r.bars}}" hint-placeholder-val="{{false}}">
+              <tr><td class="stick" style="padding-left: 16px"><span class="tiny">同一行数据的内联柱图</span></td>
+                <td colspan="8" style="padding: 6px 10px">
+                  <svg viewBox="0 0 960 46" width="100%" height="46" role="img" aria-label="营业总收入各期柱图，数值即上一行"><g fill="#ca8a04" fill-opacity=".55"><rect x="140" y="12" width="70" height="34"></rect><rect x="260" y="22" width="70" height="24"></rect><rect x="380" y="33" width="70" height="13"></rect><rect x="500" y="0" width="70" height="46"></rect><rect x="620" y="14" width="70" height="32"></rect><rect x="740" y="24" width="70" height="22"></rect><rect x="860" y="34" width="70" height="12"></rect></g><rect x="20" y="40" width="70" height="6" fill="none" stroke="#8b8b94" stroke-dasharray="3 3"></rect></svg>
+                </td>
+              </tr>
+            </sc-if>
+          </sc-for>
+        </tbody>
+      </table>
+    </section>
+    <div class="tiny">单元格 → 披露历史抽屉（事实）或公式抽屉（派生）；行头 → 概念说明。CSV 含 fact_id / filing_id / available_date / unit 与 value_text 原样。迷你柱 &lt; 640px 不渲染。</div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var cols = [["2025-09-30","9M"],["2025-06-30","6M"],["2025-03-31","3M"],["2024-12-31","12M"],["2024-09-30","9M"],["2024-06-30","6M"],["2024-03-31","3M"],["2023-12-31","12M"]].map(function (c) { return { pe: c[0], d: c[1] }; });
+    var base = [["营业总收入","revenue",1741.4,true],["营业收入","revenue_operating",1708.99,false],["营业成本","cost_of_revenue",137.6,false],["税金及附加","taxes_surcharges",257.3,false],["销售费用","selling_expense",57.6,false],["管理费用","admin_expense",95.4,false],["研发费用","rnd_expense",2.0,false],["财务费用","finance_expense",-11.6,false],["营业利润","operating_income",1197.4,false],["利润总额","pretax_income",1196.3,false],["净利润","net_income",893.3,false],["归母净利润","net_income_parent",862.3,false],["基本每股收益（元）","eps_basic · per_share",68.64,false]];
+    var frac = [0.75, 0.52, 0.29, 1, 0.73, 0.5, 0.27, 0.87];
+    var rows = base.map(function (b, i) {
+      var cells = frac.map(function (f, j) {
+        if (j === 0) return { v: false, w: true, e: false, t: "", b: "" };
+        if (b[1] === "rnd_expense" && (j === 2 || j === 6)) return { v: false, w: false, e: true, t: "", b: "" };
+        var val = b[2] * f * (j > 3 ? 0.88 : 1);
+        var badge = "";
+        if (i === 1 && j === 3) badge = "R";
+        if (i === 11 && j === 7) badge = "n";
+        if (i === 12 && j === 3) badge = "U";
+        return { v: true, w: false, e: false, t: val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }), b: badge };
+      });
+      return { zh: b[0], en: b[1], bars: b[3], cells: cells };
+    });
+    return { cols: cols, rows: rows };
+  }
+}
+</script>
+</body>
+</html>

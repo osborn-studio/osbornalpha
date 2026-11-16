@@ -1,0 +1,48 @@
+{
+  "drawer": {
+    "title": "Source",
+    "source": "Source",
+    "publishedAt": "Published",
+    "availableAt": "Available",
+    "page": "Page {page}",
+    "snippet": "Cited text",
+    "periodEvidence": "Period evidence",
+    "openOriginal": "Open original",
+    "downloadCopy": "Download copy",
+    "oldExtraction": "Citation refers to an older extraction",
+    "integrityFailed": "Citation check failed",
+    "licensedRequired": "Licence required",
+    "notFound": "Citation not found",
+    "noTextLayer": "This file has no text layer; open page {page} of the original",
+    "loading": "Loading source…"
+  },
+  "sources": {
+    "edgar": "SEC EDGAR",
+    "cninfo": "CNINFO",
+    "hkexnews": "HKEXnews",
+    "upload": "Upload"
+  },
+  "docClass": {
+    "annual_report": "Annual report",
+    "interim_report": "Interim report",
+    "quarterly_report": "Quarterly report",
+    "results_announcement": "Results announcement",
+    "current_report": "Current report",
+    "registration": "Registration",
+    "proxy": "Proxy",
+    "ownership": "Ownership",
+    "other": "Other"
+  },
+  "status": {
+    "stored": "Stored",
+    "extracted": "Extracted",
+    "no_text_layer": "No text layer",
+    "extract_failed": "Extraction failed"
+  },
+  "list": {
+    "asOf": "As of",
+    "versions": "All versions",
+    "replaced": "Replacement",
+    "empty": "No filings as of this date"
+  }
+}

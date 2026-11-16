@@ -1,0 +1,300 @@
+{
+  "releaseReceipt": {
+    "timestamp": "2026-11-07T16:41:22.757239+00:00",
+    "expectedSha": "3f14ec4a075f8bc200681929e887ceff92892d5e",
+    "status": "waiting_ci_and_migration_access",
+    "deployed": false,
+    "ci": {
+      "applicationRun": 42392239511,
+      "status": "in_progress",
+      "fixtureRun": 42392239520,
+      "fixtureConclusion": "success"
+    },
+    "migration": {
+      "pr154": "function replacement, no flags/licenses/publication changes",
+      "pr157": "no migration",
+      "blocker": "Supabase management access token unavailable; no production DB URL credential in Vercel environment. Cannot inspect production migration state or determine whether included migration needs application.",
+      "includedMigration": "20261120093000_industry_exact_pair_tolerance.sql",
+      "productionApplicationRequired": "unknown until authoritative production state is inspected"
+    },
+    "pass": false,
+    "baseline": {
+      "file": "production-baseline.json",
+      "expectedSha": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+      "pass": true,
+      "notCandidateVerification": true
+    },
+    "mmx": {
+      "model": "MiniMax-M2.5",
+      "testDesignStopReason": "end_turn",
+      "auditStopReason": "end_turn",
+      "auditVerdict": "HOLD",
+      "auditScope": "predeployment incomplete CI and unknown production migration state"
+    }
+  },
+  "ciRunMetadata": {
+    "application": {
+      "conclusion": "",
+      "headBranch": "main",
+      "headSha": "3f14ec4a075f8bc200681929e887ceff92892d5e",
+      "status": "in_progress",
+      "updatedAt": "2026-11-07T16:37:40Z",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42392239511",
+      "workflowName": "Application checks"
+    },
+    "fixture": {
+      "conclusion": "success",
+      "headBranch": "main",
+      "headSha": "3f14ec4a075f8bc200681929e887ceff92892d5e",
+      "status": "completed",
+      "updatedAt": "2026-11-07T16:38:38Z",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42392239520",
+      "workflowName": "Macro source fixture checks"
+    }
+  },
+  "baselineHttpVerification": {
+    "timestamp": "2026-11-07T16:42:04.068Z",
+    "base": "https://www.osbornalpha.com",
+    "expectedSha": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+    "expectedFormulaHash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+    "requestMode": "anonymous; no cookies or bearer; Cache-Control: no-cache",
+    "checks": [
+      {
+        "path": "/api/methodologies",
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 921,
+        "codeVersion": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+        "errorCode": null,
+        "v2": {
+          "status": "active",
+          "publishable": true,
+          "formula_hash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+          "registrationCodeVersion": "01308b44347421f061cc03cef36a0f172df41bc6"
+        },
+        "pass": true
+      },
+      {
+        "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 482,
+        "codeVersion": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+        "errorCode": null,
+        "cards": [
+          {
+            "methodology": {
+              "id": "macro_regime",
+              "version": "v2",
+              "title": {
+                "zh": "宏观象限（当期 nowcast）",
+                "en": "Macro regime (current-period nowcast)"
+              },
+              "href": "/intel/methods/macro_regime/v2"
+            },
+            "value": "overheat",
+            "calibration": "insufficient"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 396,
+        "codeVersion": "ab11d6e3b41a603169fda19df2db2d69fdad70c9",
+        "errorCode": null,
+        "cards": [
+          {
+            "methodology": {
+              "id": "macro_regime",
+              "version": "v2",
+              "title": {
+                "zh": "宏观象限（当期 nowcast）",
+                "en": "Macro regime (current-period nowcast)"
+              },
+              "href": "/intel/methods/macro_regime/v2"
+            },
+            "value": "stagflation",
+            "calibration": "insufficient"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/transmission?region=US",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 338,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 339,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/policy-response?window=3",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 323,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/transmission?region=US",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 321,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 337,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/policy-response?window=3",
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 441,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      }
+    ],
+    "pass": true,
+    "limitations": [
+      "No browser or authenticated-user verification performed.",
+      "Read-only current-state samples do not prove account isolation, cross-instance cache hits, expiry behavior, or latency SLOs.",
+      "No flags/licenses modified and no cron jobs invoked."
+    ]
+  },
+  "mergeAncestry": {
+    "baseline": "3f14ec4a075f8bc200681929e887ceff92892d5e",
+    "prs": [
+      {
+        "mergeCommit": {
+          "oid": "2bdd097d8065ed4fa0a5f70dc2f46f913dbb74e3"
+        },
+        "number": 154,
+        "state": "MERGED",
+        "url": "https://github.com/osborn-studio/osbornalpha/pull/154"
+      },
+      {
+        "mergeCommit": {
+          "oid": "8fab2b678455a4ddea7a5b87a2e5454b2e8c167d"
+        },
+        "number": 155,
+        "state": "MERGED",
+        "url": "https://github.com/osborn-studio/osbornalpha/pull/155"
+      },
+      {
+        "mergeCommit": {
+          "oid": "df10989b5012c8aa6b5ab68faf27cddb1bfe34ad"
+        },
+        "number": 156,
+        "state": "MERGED",
+        "url": "https://github.com/osborn-studio/osbornalpha/pull/156"
+      },
+      {
+        "mergeCommit": {
+          "oid": "a6b18d904b4fdbdead3b9c68502e02b767ce6f04"
+        },
+        "number": 157,
+        "state": "MERGED",
+        "url": "https://github.com/osborn-studio/osbornalpha/pull/157"
+      },
+      {
+        "mergeCommit": {
+          "oid": "3f14ec4a075f8bc200681929e887ceff92892d5e"
+        },
+        "number": 158,
+        "state": "MERGED",
+        "url": "https://github.com/osborn-studio/osbornalpha/pull/158"
+      }
+    ]
+  },
+  "companyOperationsEvidence": {
+    "baseline": "3f14ec4a",
+    "node": "22.22.1",
+    "source_urls": {
+      "api": "https://www.osbornalpha.com/api/companies/AAPL/facts?concept=revenue&periodStart=2023-10-01&periodEnd=2024-09-28&unit=USD",
+      "sec": "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json",
+      "snapshot": "https://www.osbornalpha.com/api/companies/snapshot?fact=b99454eb-ab9f-4726-8989-e3752972e72a",
+      "cn": "https://static.cninfo.com.cn/finalpage/2025-03-29/1222946269.PDF"
+    },
+    "snapshot_sha256": "f085735b4d08fb116ade18d24247ffabe11df8eb52eae6556b165831f15ef1ad",
+    "cn_sha256": "771c7cfe4d8c133991af831eeebb99d14bffdfb0ed8b55e1c091d5eba8fd5eff",
+    "tests": {
+      "files": 3,
+      "passed": 65
+    },
+    "operational_matrix": {
+      "real_entries_passed": 3,
+      "bounded_rejections": 17,
+      "input_errors": 3
+    },
+    "cn": {
+      "pages": 222,
+      "consolidated_income_physical_page": 72,
+      "parent_income_physical_page": 74,
+      "consolidated_revenue_2024": "6581075306.06",
+      "parent_revenue_2024": "5329948899.18",
+      "production_source": "emptyPdfLocatorSource",
+      "assessment": "Real layout extraction works. No verified Tushare fact ID/reconciliation binding established. Duplicate equal revenue_total and revenue_operating cells require concept/row distinction, parent/consolidated and year-column binding. Do not enable public CN values."
+    },
+    "code_changes": false
+  },
+  "taskReports": {
+    "company-operations": {
+      "reportSha256": "7d406ba742261cc5a641221bf7e1ea79b980d2ed9a94bec629bddc46a03d34cd",
+      "report": "# Company operational evidence replay — wave158\n\nBaseline: `3f14ec4a`. Assigned branch `codex/wave158-company-operations`. Node `22.22.1` explicitly selected from `/opt/homebrew/opt/node@22/bin`. No repository changes, no PR, no production writes, no financial-judgment enablement.\n\n## Real EDGAR workflow\n\nFetched anonymously and preserved the unmodified live response:\n`https://www.osbornalpha.com/api/companies/AAPL/facts?concept=revenue&periodStart=2023-10-01&periodEnd=2024-09-28&unit=USD`.\n\nThe response contains three `kind: fact` entries. Downloaded original bytes using its stable `/api/companies/snapshot?fact=b99454eb-ab9f-4726-8989-e3752972e72a` link. Downloaded SEC's public companyfacts endpoint separately, with a descriptive user agent: `https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json`. Both HTTP 200, 3,859,564 bytes, identical SHA256 `f085735b4d08fb116ade18d24247ffabe11df8eb52eae6556b165831f15ef1ad`. Signed redirect credentials were not recorded or printed.\n\nRan the documented CLI against the original API JSON and downloaded snapshot for all three real fact IDs. Each exited 0 with `source_replay_verified`, value `391035000000`, mapping `facts-map/1`. Fact IDs and complete outputs are in `replay-matrix.json`.\n\n23 operational cases: 3 real positive runs, 17 modified-input rejection runs (all exit 1 with bounded reason), 3 invalid input/usage runs (exit 2). Tested byte tampering; truncated response; withheld, duplicate, missing fact; missing evidence; unsupported mapping; incorrect value/pointer/hash locator/run/filing/period/concept/unit; absent code version; CN; invalid JSON; missing file; missing arguments. Modified inputs are adversarial probes, not public evidence. Missing-file and invalid-JSON stderr omits file paths/content.\n\n65 existing tests passed across replay, evidence gate, evidence index. `baseline-tests.log` preserves the command output. No confirmed functional replay problem found. This is consistency under the current landed parser, not authentication of saved metadata, historical code behavior, claimed asOf availability, complete disclosure history, or human gold acceptance. A user can rewrite unauthenticated metadata coherently; that is explicitly outside this command's documented claim.\n\n## Actual CN public sample and capability boundary\n\nDownloaded official CNInfo PDF: `https://static.cninfo.com.cn/finalpage/2025-03-29/1222946269.PDF` (Hengsheng Electronics, 600570, 2024 annual report), HTTP 200, 4,552,771 bytes, SHA256 `771c7cfe4d8c133991af831eeebb99d14bffdfb0ed8b55e1c091d5eba8fd5eff`.\n\nRan existing `extractPdf` and `detectTables` against actual bytes. Shared root dependencies lacked pdfjs-dist; downloaded pinned `pdfjs-dist@4.10.38` package into task scratch and injected its loader/CMap/font paths using existing extraction options, without changing root checkout dependencies. Text extraction succeeded on all 222 physical pages; logged rendering-polyfill warnings did not prevent text extraction. This was text/table extraction, not rendered visual or human acceptance.\n\nPhysical page 72 has `合并利润表`, `2024年1—12月`, CNY yuan unit, 2024/2023 columns. Both total revenue and operating revenue are `6,581,075,306.06`; two distinct row/cell locations share the value. Page 74 starts the parent-company income statement with revenue `5,329,948,899.18`. Existing tables expose text, page, row/column, and offsets; they do not reconcile a published Tushare fact identity to those cells. Raw extraction is necessary but insufficient for `PdfLocatorSource`.\n\nProduction `src/lib/company/deps.ts` still wires `emptyPdfLocatorSource`. `pdf-locator.ts` explicitly defers real locators to upstream reconciliation. Static locators are tests/injected acceptance fixtures only. `pair-cn-gold.ts` consumes reviewed gold rather than producing arbitrary live per-fact locators. `docs/runbooks/cn-gold-transcription.md` requires independent recorder/reviewer and a same-version Tushare source reference; the gold source/row/column/page also need binding to the specific stored fact, exact PDF, and current extraction. No verified Tushare fact IDs or recorder/reviewer decisions were available for this sample. Did not manufacture locators.\n\nConcrete prerequisites for the next implementation:\n1. Assign R1 recorder and R2 independent reviewer; complete same-version gold with PDF SHA, source reference, concept, printed unit/precision, physical page, row and column.\n2. Settle the persistence/read contract joining verified per-value reconciliation to fact ID, issuer, filing/source version, PDF URL/hash, extraction version and current raw/value identity, including invalidation on reimport/revision/re-extraction and conflict abstention. The current `locate(issuerId,market,factIds)` interface alone specifies no producer/storage/invalidation behavior.\n3. Implement the upstream source with real accepted evidence and tests for duplicate equal values, total vs operating revenue, consolidated vs parent tables, comparison years, unit scale, missing text, stale versions, mismatch/ambiguity.\n4. Keep production CN values withheld until that real source is wired and acceptance passes. Complete the separate human gold matrix before claiming full company acceptance.\n\n## MiniMax audit\n\nReal `MiniMax-M2.5` final audit completed with `stop_reason=end_turn` (`mmx-final.json`, extracted `mmx-final.txt`). Verdict: CN withholding justified; no confirmed US replay bug; consistency wording required. Its request did not include the independently observed two-file SHA comparison or complete gate/CLI source, so its cautions about those missing inputs do not override the execution record. Focused closure audit also completed with `stop_reason=end_turn` (`mmx-closure.json` / `mmx-closure.txt`), after supplying direct-SEC byte identity, gate/CLI source, and cutoff 1900. Earlier network failure, timeout, and short max_tokens response are preserved but do not count as approval.\n\n## Artifact inventory\n\n- `facts-response.json`: actual saved production API JSON.\n- `snapshot.json`, `CIK0000320193.json`: exact archived/direct public source bytes.\n- `replay-matrix.mjs`, `replay-matrix.json`: rerunnable CLI operational checks and results.\n- `baseline-tests.log`: 65 passing repository tests.\n- `600570-2024.pdf`, `cn-pages.json`, `cn-assessment.json`, `extract-cn.mjs`, `cn-extraction.log`: actual PDF, extraction and source assessment.\n- `evidence-summary.json`: compact machine-readable summary.\n- `mmx-*.json`: requests/responses and failures; only completed final text can count as an audit verdict.\n\nParent may remove the assigned worktree after handoff. No commit/PR is warranted for an audit-only outcome with no confirmed functional fix.\n\nAdditional live CN read: `/api/companies/600519.SH/facts?concept=revenue_operating&periodStart=2023-01-01&periodEnd=2023-12-31&unit=CNY` returned 404 `unknown_ticker` (`cn-live-response.json`). This is a concrete issuer availability limitation for that request, not evidence that a populated live CN series was tested for withholding. Existing gate tests cover emptyPdfLocatorSource withholding.\n"
+    },
+    "industry-readiness": {
+      "reportSha256": "a505a661f4e52e6b7cbf705391a4cd2e149b485253af70ecb8dc32b6266fc898",
+      "report": "# Industry valuation readiness — wave release158\n\nDate: 2026-11-07. Assigned checkout: `wave158-industry-readiness`, branch `codex/wave158-industry-readiness`, inspected HEAD `3f14ec4a075f8bc200681929e887ceff92892d5e`. Independent Codex CLI session; no additional agents/CLI sessions spawned. This report is a readiness assessment, not release approval.\n\n## Outcome\n\nNo remaining bounded **real I-3 implementation slice** was found that can proceed under an already approved methodology. H remains unselected in specification §6.4/§16 and the runbook; PB remains unverified. Consequently no formula, policy, schema, job, license, flag, publication or production changes were made, and no commit/push/PR is proposed. This follows the task's report fallback rather than repeating #147's disabled preparation or #154's arithmetic fix. The existing runbook already requires independent dataset authorization, so this evidence is retained in the task report rather than opening a redundant audit-only PR.\n\nReviewed: industry specification §6.1–6.5, §13.4 and §16; runbook §2/4/5; K1–K3 verification record; industry closeout; `VALUATION-PREPARATION.md`; provider, ingestion, preparation, diagnostics, jobs and public input boundaries; the #154 forward migration. This does not audit unrelated release work.\n\nCurrent code supplies paged provider adapters, complete calendar validation, internal observation plans, membership/mark preparation and aligned numeric diagnostics. Actual approved formula computation, valuation manifests/replay, ingestion job orchestration, carry/dependency handling, publication/activation and percentiles are still absent. Existing SQL infrastructure does not confer method approval. `stage_industry_valuation_pairs` still maps both PE metrics to official PE; H must resolve basis-specific `not_applicable` semantics before any integration. #154's exact comparison was not changed or reimplemented.\n\n## Primary-source provider and rights research\n\nChecked current public documentation on 2026-11-07; no authenticated market fetch or provider contact was performed. Public pages describe offered services, not an executed entitlement or a rights decision for OsbornAlpha. Captured HTML bytes, retrieval times and hashes are in `provider-evidence.json`; these are page fingerprints, not proof of a contract or account entitlement.\n\n| Candidate | Direct evidence | What remains unresolved / alternative |\n|---|---|---|\n| Tushare: existing implementation path | [sw_daily documentation](https://tushare.pro/document/2?doc_id=327) states SW2021 default, 4000 rows/request, 5000 points, trading-day 18:30 update; exposes PE, PB and market values. [daily_basic](https://tushare.pro/document/2?doc_id=32) documents share units in ten-thousands and `free_share`; access at 2000 points, 5000 without total limit. | Owner C must verify actual account entitlement, historical span, completeness, revisions and backfill cost. Field names do not specify the full SW comparator methodology. Tushare free shares are not established as identical to SW free shares. |\n| Tushare: rights route | [Service agreement §II(2).5](https://tushare.pro/document/1?doc_id=405) describes a personal, nontransferable, noncommercial, revocable, time-limited, nonexclusive grant for personal viewing. [Custom services](https://tushare.pro/document/1?doc_id=12) offers bespoke data discussions; published contact is `waditu_a`. | Request written scope for organizational processing/storage, derivation, display, redistribution/replay, historical retention and upstream SW rights. This is a candidate negotiation route, not evidence that a commercial license exists or can be obtained. A standard points purchase alone is not evidence of the product rights needed here. |\n| Tushare: scheme/calendar | [index_classify](https://tushare.pro/document/2?doc_id=181) and [index_member_all](https://tushare.pro/document/2?doc_id=335) require 2000 points. [trade_cal](https://tushare.pro/document/2?doc_id=26) requires 2000 points and exposes explicit exchange/open-day fields. | Public API descriptions do not replace historical availability evidence, membership reconstruction labeling or calendar completeness. The classify note says indices with fewer than 5 members are not published; this is not approval of a valuation sample rule or resolution of the old document's ≤5 rule. |\n| Direct SW research / methodology confirmation | Existing K1 record identifies [2012 PE/PB method PDF](https://www.swsresearch.com/swindex/pdf/swclassifypepb.pdf) and [index method 5.0](https://www.swsresearch.com/swindex/pdf/80100350.pdf). Official index site is [SW index release](https://www.swsresearch.com/institute_sw/allIndex/releasedIndex). | This session could not freshly authenticate those PDFs: web fetch failed and Python HTTPS failed certificate validation. No verification bypass was used. Method details remain inherited K1 evidence, **not freshly confirmed**. Direct SW supply, current method, pricing, SLA, redistribution and derived-use permissions need owner/provider confirmation; no direct API contract or license was established. |\n| Alternative provider/product: Shenzhen Securities Information / CNINDEX | [Official services page](https://www.cnindex.com.cn/zh_services/data_licensing/index.html?act_menu=4&act_service=3) offers corporate data agreements and authorized agents, index PE/fundamentals, sample/classification/free-share data and industry static PE. It separately describes outward index-display authorization. Published contact: `szsi_index.service@szse.cn`, 0755-83202239. | This is a procurement alternative for a separately designed product, **not** a drop-in SW2021 comparator, SW PB source or proof of equivalent financial basis. A switch requires explicit taxonomy/metric/method/version decisions and new validation, plus contractual scope. |\n| Alternative raw exchange inputs / independent evidence | [SSE official service directory](https://www.sse.com.cn/transparency/services/) routes market-data product/authorization inquiries through SSE Information and its business platform; contact `marketservice@sse.com.cn`. | Investigate independent prices/share evidence and permitted derived use. It does not by itself supply SW classifications/official PE/PB, settle cross-class share treatment or satisfy the golden set. No golden values were transcribed here. |\n\nThe rights evidence changes the precision of the procurement question: ask for a written grant matching the actual internal and public uses, rather than asking only whether 5000 points or a public web page is available. No inference is made about existing private contracts, which were not inspected. No legal rights conclusion or license status change is made.\n\n## Exact owner decisions still required\n\n1. **H / methodology:** choose (a) a separately identified `pe_ttm_sw` validation effort with existing whole-company PE kept distinct, or (b) retain whole-company PE with all official PE comparisons `not_applicable` and no publication under current U5. A third route—another provider/benchmark—is a new specification, not a silent substitution. Record signer/date, metric identity, formula, financial reporting calendar, version/hash and comparator mapping before implementation. Neither shared “TTM” naming nor a near numerical fit approves comparability.\n2. **H / candidate inputs and edge cases:** if (a), determine exact SW versus Tushare free-share source, A/H/B denominator treatment, TTM cutoff/version consistency, missing inputs, negative profits, numerator retention versus exclusion, suspension/delisting, IPO admission and minimum sample handling. K1's two-industry/five-day exploration conflicts with the 2012 loss-exclusion description and uses a proxy; confirm current provider methodology or explicitly approve a separately named method. No thresholds are changed here.\n3. **PB owner:** either keep PB ineligible (current state), or commission current-method verification and approve a distinct PB specification. Resolve parent equity versus other-equity adjustments, negative equity, weighting and reporting cutoffs against primary provider evidence and independent assertions. Do not borrow Tushare `daily_basic.pb` semantics for `sw_daily.pb` or inherit PE qualification.\n4. **A / rights owner:** separately determine scheme, marks and official permissions; all three remain internal. Options are a documented grant for the existing supply chain, a documented direct/provider alternative with new adapter scope, or continued disabled/public-unavailable valuation. Record entity, covered datasets/versions, purpose, users, storage/retention, derivation, display/replay/redistribution, attribution, territory/term and upstream permissions. Official-value replay permission does not authorize derived valuation publication. Internal database status is not proof that organizational use is permitted by a contract.\n5. **C / availability and operations:** actual 5000-point/API entitlement, historic marks/SW coverage, provider revisions, rate/backfill limits, complete calendar plus specified monthly/weekly sampling boundaries and storage/retention budget. Published limits are documentation, not a successful live account probe. Separate raw acquisition rights from derived-output rights.\n6. **Evidence owner:** produce the specified exchange golden set (5 companies including A+H ×2 days; 3 industries ×4 official PE/PB dates) with independent original evidence. Expand current-method experiments across reporting-calendar transitions, loss-heavy industries, A+H/A+B, missing/free shares, new stocks and suspensions. Synthetic tests and inherited ten-cell exploration are not golden acceptance.\n7. **Integration owner, after H/rights:** validate ≥24 valid pairs **per code/metric**, ≥90% paired expected dates, ≥95% of numeric pairs within exact 1%; use complete approved calendar and current official revisions even on carry dates. Exercise real PostgreSQL stage/publish/activate, dependencies, version incompatibility/full recompute, current-observation races, immutable manifests and replay. Do not pool series or use rounded `rel_diff` for classification.\n8. **E / CN readiness and Q2 / judgment owners:** independent CN real-facts acceptance, worker/readiness and judgment method/resolution/settlement decisions remain required. Production scheduling and public activation require their existing gates. This work does not assert these dependencies passed.\n\n## Verification\n\n- Installed lockfile dependencies locally under the assigned checkout: `env PATH=/opt/homebrew/opt/node@22/bin:$PATH npm ci --no-audit --no-fund` (exit 0). Explicit Node executable reports **v22.22.1**; the initial login-shell `node` resolved to v26.5.0, so all npm verification used the Node22 path explicitly.\n- Ran `env PATH=/opt/homebrew/opt/node@22/bin:$PATH npm test -- src/lib/industry src/app/api/industries src/lib/judgments/inputs.test.ts --exclude '**/*.integration.test.ts'`: **36 files, 456 tests passed**, exit 0. Log `tests.log`; exact selected/excluded files are in `test-file-inventory.json` (36 selected; four PostgreSQL integration files excluded). Includes recorded-provider/ingestion/preparation and exact decimal diagnostics, memory contract tests, disabled jobs, route/license boundaries and judgment rejection of `industry_valuations`.\n- PostgreSQL integration suites were explicitly excluded; no real database test, production probe, live market fetch, gold acceptance or rights acceptance occurred in this task. No new tests duplicate existing coverage. No code was changed.\n- MiniMax-M2.5 test-design review completed with `stop_reason=end_turn` and a nonempty final text (12,716 characters); raw `mmx-test-design.json`, extracted `mmx-test-design-final.md`. Accepted: run delivered preparation/diagnostic/disabled-route/input tests, and explicitly exclude claims about SQL-side #154, live provider, rights and real I-3 acceptance. The selected run includes all four core suites and the proposed regression surfaces.\n- Test-design suggestions disposition: no static migration-string tests or import/no-write mirrors were added because no implementation changed and source inspection plus existing behavior tests cover the bounded review. The reviewer overlooked existing exact 90% (27/30) and 95% (38/40) cases, which were supplied in its context; those are not gaps. The exactly-24 passing case is an optional existing-suite improvement, not an implementation blocker or reason for a redundant PR. Zero/multiple primary A securities both intentionally return `ambiguous_primary` in the current code; no new policy was inferred. K3 boundaries are already recorded approved reconstruction rules; this task does not reopen them. Provider calls are injectable and the tests used recorded fixtures; network egress was not separately instrumented and no global “network disabled” claim is made.\n- Final MiniMax-M2.5 audit completed: model `MiniMax-M2.5`, `stop_reason=end_turn`, nonempty final text, **NO BLOCKING FINDINGS** for the report-only task outcome. Raw `mmx-final-audit.json`; final-only extraction `mmx-final-audit-final.md`. It explicitly gives no release, license, method or production approval. Nonblocking NB-1 noted that some cited pages were absent from the initial capture manifest; a supplementary capture pass was run after audit. The final `provider-evidence.json` records all 12 cited retrieval targets: nine successful HTML captures and three SW certificate-validation failures (two PDFs plus index release page). This closes the missing-attempt traceability gap; failed SW retrievals remain disclosed and no new methodology confirmation is claimed.\n\n## Handoff\n\nNo PR URL: report-only task outcome, no repository modification proposed. Parent may attach this report/evidence to its release record, preserving **valuation disabled / I-3 incomplete**. Parent owns final worktree removal. Final `git status --short` and `git diff --exit-code` were clean at unchanged HEAD; no untracked nonignored files. mmx final audit completed as recorded above. No commit, push, PR, merge or deployment was performed.\n"
+    },
+    "evals-operations": {
+      "reportSha256": "24d1189c4415503011ead563aec84c799e15d5715b87900da96fd3a97270a463",
+      "report": "# F6 runtime operations handoff\n\nBase: 3f14ec4a075f8bc200681929e887ceff92892d5e\nBranch: codex/wave158-evals-operations\n\nConfirmed defect: defaultCliDeps.loadLock used JSON.parse plus a GoldLock type cast, bypassing validated loadLock. Matching first entries let duplicate paths, unknown top-level fields and malformed unrelated entries produce exit 0 / passing synthetic CI reports. red.log records three expected-exit-2 failures receiving 0. The first setup attempts failed due to absent node_modules and temporary-cwd TypeScript aliases; those are not counted as defect evidence. npm ci --ignore-scripts installed local dependencies; child TSX_TSCONFIG_PATH now targets repository tsconfig.\n\nFix: reuse loadLock before checkLock and dependency creation. Real CLI tests now reject seven invalid lock classes with gold_invalid exit 2, no report and unchanged lock bytes.\n\nSynthetic lifecycle: distinct test-recorder/test-reviewer metadata with review_required true; missing and same-person review refused, matching registration succeeds and is idempotent, matching CI run passes, changed candidate bytes refused by runner, same-version edit refused by updater, v2 without history refused, v2 with history registered, downgrade refused. All input values/identities are synthetic test contracts, never accepted human gold. No real human review was performed.\n\nConcurrency: child real updater pauses after fsync with pending file held. Competing actual CLI exits 1 and preserves exact pending bytes. Winner commits; loser retry appends distinct candidate, preserves winner and both exact candidate hashes. Pending file removed.\n\nVerification on Node v22.22.1:\n- Focused CLI/lifecycle selection: 2 files, 36 tests passed (green.log).\n- Complete non-DB F6 selection: 50 files, 799 tests passed, no skips (f6-tests.log).\n- npx tsc --noEmit: exit 0 (typecheck.log).\n- Changed-file ESLint --max-warnings=0: exit 0 (lint.log).\n- git diff --check: passed.\n\nMiniMax-M2.5:\n- mmx-design.json exhausted max_tokens and is NOT approval.\n- mmx-design-final.json reached end_turn with test design recommendations. Review identity rejection, matching-run positive control, seven malformed-lock categories, pending-byte preservation and winner preservation are covered. Existing update-lock tests cover review_required false and no-rewrite idempotence. Its statement that version history belongs to lock is incorrect; F6 schema stores history on candidate, and tests use that contract.\n- mmx-audit.json reached end_turn: PASS, no actionable P1/P2 defects, no consequential test-design defects. Raw responses retained locally.\n\nScope limits: No production gold, recorder registry, integrity lock fixture or disabled kind enablement changed. Calibration remains disabled pending real eligible corpus/probability method/settlement/threshold prerequisites. No production evaluation, source verification, human acceptance, DB tests, deployment or merge performed. Parent owns release and worktree removal. No additional agents or CLI coding sessions spawned.\n\nHandoff: PR https://github.com/osborn-studio/osbornalpha/pull/159 ; commit c6c1597cd6049df9d015fec07e6c7210608e05c8. Branch pushed successfully (git emitted a local keychain-store warning after remote accepted the branch). Worktree clean at handoff. PR open, unmerged.\n"
+    },
+    "macro-acceptance": {
+      "reportSha256": "3a935666760bfdc64e702ddd14b88abfbe97197d72f0088ce3a821898e302d28",
+      "report": "# Macro strategy measurement handoff\n\nBase: `3f14ec4a075f8bc200681929e887ceff92892d5e`.\nBranch: `codex/wave158-macro-acceptance`.\n\nNew benchmark only; no production performance defect proven, no runtime changes, no SLO claim. #155 CPU improvement remains intact. Parent owns browser and release acceptance.\n\nPrior evidence reviewed: macro-performance README, cache-regression handler benchmark, cycle-cold transport benchmark, and #155 cycle-performance fixture/report. Prior 16.114s first-observed miss is not a controlled cold baseline and is not resolved by these local measurements.\n\n| Boundary | Cache-empty ms (two resets) | Local-warm median ms (n=5) | Next-cache-warm ms (n=1) | Cold/warm HTTP requests |\n| --- | --- | --- | --- | --- |\n| event_day | 308.56, 277.90 | 0.76 | 0.66 | 39 / 4 |\n| first_trading_day | 251.18, 278.37 | 0.60 | 0.63 | 39 / 4 |\n| month_end | 248.16, 285.70 | 0.55 | 0.57 | 39 / 4 |\n\nEach boundary freezes 22,713 inputs. Cold uploads 6,516,394 entity-body bytes (first_trading_day: 6,516,402) and downloads 9,276,882 bytes. Warm uploads zero body bytes and downloads 728 bytes. All full submitted manifests equal an independently built memory-port reference; complete responses and identities equal across cache states/reset. Five 4,300-row histories page as 1000/1000/1000/1000/300, five monthly histories and three policy histories remain complete.\n\nScope: exported GET through real Supabase read/write adapters and production wiring, builders, canonicalization/hash, persistence metadata and Next cache adapter, ending after response.text(). Explicit fixture session and simulated HTTP/database/Next backend. Cache-empty is same-process cache reset; PostgreSQL/RLS/auth/TLS/production latency and distributed-cache persistence are not tested. Emulator sorting/filtering and JIT/GC affect timings.\n\nValidation: strategy 529 passed / 42 environment-gated skipped; final focused benchmark + manifest transport + strategy route suites 111 passed; full TypeScript check and scoped ESLint passed; git diff whitespace check passed. Node v22.22.1.\n\nmmx design output reached max_tokens and is NOT approval. First final audit completed with end_turn and four benchmark findings; fixed output-path containment (resolved parent + O_NOFOLLOW), exact region/history requests, metadata response verification and request wording. Follow-up MiniMax-M2.5 audit finished end_turn with no blocking findings. Raw evidence: mmx-reaudit.json and text mmx-reaudit.md. Numeric open flags use type-safe openSync/writeFileSync/closeSync; path traversal and symlink negative checks passed with sentinel unchanged. No runtime performance defect was established.\n\nArtifacts: full-path.json, strategy-tests.log, final-focused-tests.log, typecheck.log, lint.log, mmx-design-request.json/mmx-design.json, mmx-final-request.json/mmx-final.json. No production credentials, auth cookies or browser extraction were used.\n\nCommit: `55045f12` (test-only benchmark and README). Worktree retained for parent removal after handoff.\n\nPR: https://github.com/osborn-studio/osbornalpha/pull/160\nHead: `55045f12888b89e1a107aaff77215e4302f26317`.\nAt handoff: PR open; test/provider-date-ingress/source-fixtures checks in progress. No merge or deployment performed. Git tracked/untracked status clean. Parent removes assigned worktree.\n"
+    }
+  },
+  "documentationEditorLimits": "Documentation-only reconciliation; sibling commands were not rerun by this editor. Report-only MiniMax verdicts are not release or module acceptance."
+}

@@ -8,17 +8,20 @@ import {getAnonSupabase} from '../supabase/anon';
 import {supabaseTableClient} from '../db/table-client';
 import {supabaseMacroDb} from './db';
 import {supabaseEvidenceStore} from './evidence';
+import {productionMacroJudgmentHook} from '../judgments/on-macro-published';
+import type {OnPublished} from './snapshots';
 import type {IngestDeps} from './ingest';
 
-export interface MacroDeps extends IngestDeps{fetch:typeof fetch;sleep:(ms:number)=>Promise<void>}
+export interface MacroDeps extends IngestDeps{onPublished?:OnPublished;fetch:typeof fetch;sleep:(ms:number)=>Promise<void>}
 
-export function productionMacroDeps(opts:{codeVersion:string}):MacroDeps{
+export function productionMacroDeps(opts:{codeVersion:string;triggeredBy?:'cron'|'script'}):MacroDeps{
  const admin=getAdminSupabase();
  return {
   db:supabaseMacroDb({admin,anon:getAnonSupabase()}),
   evidence:supabaseEvidenceStore(admin),
   tables:supabaseTableClient(admin),
   codeVersion:opts.codeVersion,
+  onPublished:productionMacroJudgmentHook({codeVersion:opts.codeVersion,triggeredBy:opts.triggeredBy??'script'}),
   now:()=>new Date(),
   fetch:(input,init)=>globalThis.fetch(input,init),
   sleep:(ms)=>new Promise<void>(r=>setTimeout(r,ms)),

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>移动 披露历史抽屉</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 390px; height: 1400px; display: flex; flex-direction: column">
+  <div class="sheet" role="dialog" aria-label="披露历史" style="flex: 1; margin-top: 12px; display: flex; flex-direction: column">
+    <div class="grab"></div>
+    <div style="display: flex; gap: 8px; padding: 8px 16px 14px; border-bottom: 1px solid rgba(255,255,255,.06)">
+      <div style="flex: 1">
+        <div class="lbl-state">披露历史</div>
+        <div class="h3" style="margin-top: 4px">营业收入 · 2024 · 12M</div>
+        <div class="row"><span class="m" style="font-size: 24px; font-weight: 500">1,708.99</span><span class="cap">亿元</span><span class="bdg">R</span></div>
+      </div>
+      <button class="ibtn" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px">
+      <div class="ml">序列（升序）</div>
+      <div class="card pad" style="display: flex; flex-direction: column; gap: 6px">
+        <div class="row"><span class="m">2025-04-03</span><a href="#" style="font-size: 12px; margin-left: auto">年报 · PDF ↗</a></div>
+        <div class="m" style="font-size: 13px">170,899,152,276.34 CNY</div>
+        <div class="tiny">① 映射 v7 · gen 3 ② CNY ④ ÷1e8 · 3f9c2e1</div>
+      </div>
+      <div class="card pad" style="display: flex; flex-direction: column; gap: 6px; border-color: rgba(202,138,4,.4)">
+        <div class="row"><span class="m">2025-08-13</span><span class="chip sq">修订</span><a href="#" style="font-size: 12px; margin-left: auto">半年报 · PDF ↗</a></div>
+        <div class="m" style="font-size: 13px">170,912,400,118.02 CNY</div>
+        <div class="tiny">+13.25 亿元 · +0.0078% · 5a10b7d</div>
+      </div>
+      <details class="card pad">
+        <summary class="h3" style="cursor: pointer; min-height: 32px; display: flex; align-items: center">证据 Evidence</summary>
+        <dl class="kv" style="grid-template-columns: 96px 1fr; margin-top: 8px">
+          <dt>rawHash</dt><dd class="hash">7f2c…a019</dd>
+          <dt>locator.pdf</dt><dd class="m" style="font-size: 12px">p.112 · 合并利润表 · 营业收入 · 本期</dd>
+          <dt>source</dt><dd><a href="#">巨潮 PDF ↗</a></dd>
+          <dt>download</dt><dd class="cap">null（不可再分发）</dd>
+        </dl>
+      </details>
+      <button class="btn lg" style="justify-content: center">复制可复现查询</button>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

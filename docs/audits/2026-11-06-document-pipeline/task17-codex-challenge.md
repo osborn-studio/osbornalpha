@@ -1,0 +1,10 @@
+Read-only review; tests were inspected, not executed.
+
+| ID | Sev P1/P2/P3 | file:line | attack/defect | fix |
+|---|---|---|---|---|
+| T17-01 | P2 | `src/lib/documents/candidates/run.ts:230` | `finalizeHkHooks` is never called. Accept an HK item through the generic quarantine route: its `no_target` failed hook remains unfinished across candidate cron runs. Task 17 explicitly requires this recovery integration. | Call the finalizer before promotion selection, including when no issuers are due. Add the missing runner integration test. |
+| T17-02 | P2 | `src/app/api/admin/documents/candidates/[id]/route.ts:41` | A comparison-language candidate with passing checks can be confirmed. Neither this route nor SQL `decide_candidate` checks extraction role/document language. Publication later excludes English documents, but the API still records a forbidden confirmation and freezes its checks. Mocked decision tests miss this. | Reject comparison candidates with 409; enforce the invariant consistently in database implementations and test with a real comparison extraction. |
+| T17-03 | P2 | `src/app/api/admin/documents/candidates/route.ts:19` | `citedIds` drops `unit_currency`. For cents/仙 EPS candidates, administrators receive the unit token but lose the separate evidence establishing its currency, despite the list promising every cited span. | Include `unit_currency` in citation collection and serialization; test inherited-currency EPS evidence. |
+| T17-04 | P2 | `src/app/api/citations/route.ts:36` | The `fact_citations` read is unpaged. A fact with more than 1,000 links returns silently truncated evidence under PostgREST’s default cap; ordering by role can omit later `unit`/`value` links entirely. Subsequent 100-ID chunks cannot recover links never fetched. The schema imposes no per-fact bound, and the test fake imposes no server cap. | Page links using stable `(role, citation_id)` ordering until exhausted. Add a capped-client regression with more than 1,000 links and verify complete evidence. |
+
+VERDICT: fail (0 P1, 4 P2)

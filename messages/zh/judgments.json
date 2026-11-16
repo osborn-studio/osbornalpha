@@ -1,0 +1,496 @@
+{
+  "lifecycle": { "abstained": "未判断", "open": "未结算", "settled": "已结算", "void": "作废", "withdrawn": "已撤回", "pending_fill": "待定价" },
+  "calibration": { "insufficient": "未校准", "failed": "校准未通过", "calibrated": "已校准", "evaluated": "已评估", "self_assessed": "自评" },
+  "calibrationDetail": {
+    "insufficient": "未校准：有效样本 {n}/{threshold}",
+    "failed": "校准未通过：ECE {ece}",
+    "calibrated": "该方法历史命中 {rate}%（{low}–{high}%）",
+    "evaluated": "评估：Spearman {spearman}（n={n}）",
+    "self_assessed": "自评，不可审计",
+    "expired": "校准报告已失效",
+    "reliabilityLink": "可靠性图"
+  },
+  "kind": { "probability": "概率", "categorical": "类别", "score": "分值", "interval": "区间" },
+  "band": { "low": "低", "mid": "中", "high": "高", "label": "研究员信心 / 模型信心：{band}" },
+  "outcome": { "hit": "命中", "miss": "未命中" },
+  "card": {
+    "methodLine": "方法 {method} · 截至 {asOf}",
+    "condition": "条件：{text}",
+    "target": "目标：{target}",
+    "settlement": "结算：{settlement}",
+    "settleWindow": "{after} 起结算，{by} 截止",
+    "retrospective": "补登记",
+    "mergedFrom": "登记于合并前主体 {subject}",
+    "registeredValue": "登记值（未校准）：{value}",
+    "scores": "得分（不是概率）",
+    "notRun": "方法未对该主体运行",
+    "abstainReason": "未判断：{reason}",
+    "missing": "缺少：{items}",
+    "openInputs": "输入",
+    "openTimeline": "结算",
+    "nominalCoverage": "名义覆盖 {pct}%",
+    "historicalCoverage": "历史覆盖 {pct}%（名义 {nominal}%）",
+    "accuracy": "历史准确率 {pct}%（n={n}）",
+    "dimensionMissing": "缺维度：{reason}",
+    "realized": "实现值 {value}",
+    "result": "结果：{outcome}",
+    "voidReason": "作废原因：{reason}",
+    "withdrawnReason": "撤回原因：{reason}",
+    "tableView": "表格视图",
+    "chartView": "图形视图"
+  },
+  "target": {
+    "session_index": "{base} 之后第 {n} 个交易日",
+    "date": "{date}",
+    "period": "{period}",
+    "fiscal_period": "{periodEnd} 财期",
+    "extrapolated": "（外推）"
+  },
+  "horizon": { "trading_sessions": "{n} 个交易日", "calendar_days": "{n} 天", "calendar_months": "{n} 个月", "fiscal_quarters": "{n} 个财季" },
+  "labelPolicy": { "first_observed": "首次观测", "cutoff_vintage": "截止 vintage" },
+  "inputs": {
+    "title": "输入",
+    "kind": {
+      "financial_fact": "财务事实",
+      "financial_metric": "派生指标",
+      "macro_observation": "宏观观测",
+      "macro_snapshot": "宏观快照",
+      "price_bar": "日线",
+      "table_rows": "参考表",
+      "judgment": "判断",
+      "legacy_fill": "建议定价",
+      "document_span": "文档片段"
+    },
+    "hashOk": "哈希一致",
+    "hashMismatch": "哈希不一致",
+    "availableAt": "可得 {at}",
+    "origin": "来源：{publisher}（{adapter}）",
+    "transform": "变换：{transform}",
+    "open": "查看来源",
+    "empty": "无输入"
+  },
+  "timeline": {
+    "title": "结算时间线",
+    "registered": "登记",
+    "target": "目标",
+    "settled": "结算",
+    "void": "作废",
+    "withdrawn": "撤回",
+    "reopened": "重开",
+    "evidence": "证据",
+    "actor": "操作者 {actor}",
+    "reason": "原因：{reason}",
+    "pending": "等待结算"
+  },
+  "methods": {
+    "title": "方法注册表",
+    "subtitle": "每个判断方法的公式、版本与校准状态",
+    "columns": { "method": "方法", "type": "判断类型", "kind": "种类", "status": "状态", "publishable": "公开", "calibration": "校准", "n": "独立样本", "computedAt": "计算于" },
+    "status": { "draft": "草稿", "active": "启用", "retired": "退役" },
+    "publishable": { "yes": "公开", "no": "未公开" },
+    "empty": "尚无方法",
+    "detail": {
+      "formula": "公式文档",
+      "params": "参数",
+      "history": "版本历史",
+      "calibration": "校准报告",
+      "reliability": "可靠性图",
+      "reliabilityTable": "分箱表",
+      "binRange": "{low}–{high}",
+      "binColumns": { "range": "区间", "n": "样本", "meanP": "平均登记值", "hitRate": "命中率", "wilson": "Wilson 区间" },
+      "confusion": "混淆矩阵",
+      "temporal": "时间顺序验证",
+      "train": "训练段 {n}",
+      "holdout": "留出段 {n}",
+      "dropped": "边界剔除 {n} 条",
+      "isotonic": "isotonic 映射（仅报告，不用于显示）",
+      "recentSettlements": "最近结算",
+      "noCalibration": "尚无校准报告",
+      "docMissing": "公式文档缺失",
+      "docMismatch": "文档哈希与注册表不一致",
+      "sample": "样本清单",
+      "scopes": { "all": "全部", "market": "市场 {key}", "subject_type": "主体类型 {key}" }
+    }
+  },
+  "admin": {
+    "title": "判断层运维",
+    "queue": "结算队列",
+    "filters": { "due": "到期", "backoff": "退避", "leased": "租约中", "all": "全部" },
+    "columns": { "judgment": "判断", "settleAfter": "最早结算", "settleBy": "截止", "nextAttempt": "下次尝试", "attempts": "尝试次数", "lastStatus": "上次状态", "lease": "租约" },
+    "quarantine": "隔离项（/admin/dq）",
+    "withdraw": "作废结算",
+    "reopen": "重开",
+    "settleNow": "立即结算一条",
+    "reason": "原因（必填）",
+    "confirm": "确认",
+    "cancel": "取消",
+    "done": "已完成",
+    "error": "操作失败：{code}",
+    "empty": "队列为空",
+    "more": "加载更多"
+  },
+  "derived": {
+    "notComputed": "不计算：{reasons}",
+    "odds": "赔率 {b}",
+    "kelly": "凯利仓位 {f}",
+    "reasons": {
+      "wrong_type": "判断类型不匹配",
+      "not_open": "底层判断不是未结算状态",
+      "not_calibrated": "底层方法未校准",
+      "invalid_k": "凯利系数无效",
+      "scenarios_missing": "缺少涨跌情景",
+      "scenarios_not_normalized": "情景概率之和不为 1",
+      "scenario_values_invalid": "情景数值无效",
+      "inputs_inconsistent": "输入不一致",
+      "event_mismatch": "情景与胜率不是同一事件",
+      "as_of_mismatch": "截至日期不同",
+      "subject_mismatch": "主体不同",
+      "target_mismatch": "目标期不同",
+      "invalid_probability": "概率无效",
+      "odds_not_finite": "赔率或仓位不是有限数",
+      "unit_mismatch": "期限单位不同"
+    }
+  },
+  "errors": {
+    "unknown_judgment": "判断不存在",
+    "unknown_methodology": "方法不存在",
+    "invalid_parameter": "参数无效：{name}",
+    "settlement_sequence": "该结算转移不允许",
+    "request_key_conflict": "请求与之前的请求冲突",
+    "load": "加载失败"
+  },
+  "analyst": {
+    "band": {
+      "low": "低",
+      "mid": "中",
+      "high": "高"
+    },
+    "uncalibrated": "未校准",
+    "showRegistered": "登记值",
+    "hideRegistered": "收起",
+    "toggleAria": "信心 {band}（未校准）：显示或收起登记值",
+    "registeredLabel": "登记值（未校准）",
+    "registeredNote": "即填写的信心 ÷ 100；未经校准，只作记录",
+    "lifecycleLabel": "状态",
+    "lifecycle": {
+      "abstained": "弃权",
+      "open": "进行中",
+      "settled": "已结算",
+      "void": "作废",
+      "withdrawn": "已撤回",
+      "pending_fill": "待定价"
+    },
+    "outcome": {
+      "hit": "命中",
+      "miss": "未命中"
+    },
+    "abstainLabel": "弃权原因",
+    "abstain": {
+      "no_confidence": "未填写信心",
+      "no_direction": "持有建议没有方向",
+      "market_unsupported": "该市场不在 A 股 / 港股 / 美股之内"
+    },
+    "conditionLabel": "条件",
+    "targetLabel": "目标",
+    "target": "基准日 {base} 后第 {n} 个交易日",
+    "settleBy": "最迟结算 {date}",
+    "selfAssessment": {
+      "title": "自评（不可审计）",
+      "empty": "还没有可计入自评的已结算建议。",
+      "settled": "已结算",
+      "independent": "独立样本",
+      "hitRate": "命中率（区间）",
+      "brier": "Brier",
+      "brierSkill": "Brier skill",
+      "bandTable": "按信心档位的命中情况",
+      "columns": {
+        "band": "档位",
+        "n": "n",
+        "hits": "命中",
+        "rate": "命中率"
+      },
+      "note": "自评基于可被改写的评分记录：只给自己看，不进入公共校准，也不会把信心显示为百分比。区间为 Wilson 95%。"
+    }
+  },
+  "ui": {
+    "common": {
+      "loading": "加载中…",
+      "error": "出错：{message}"
+    },
+    "nav": {
+      "breadcrumb": "位置",
+      "intel": "研究",
+      "methods": "方法"
+    },
+    "type": {
+      "macro_regime": "宏观象限",
+      "macro_regime_asset_pair": "宏观资产配对",
+      "recommendation_call": "分析师建议",
+      "industry_lifecycle_stage": "行业生命周期",
+      "industry_prosperity": "行业景气",
+      "valuation_verdict": "估值结论",
+      "thesis_win_rate": "论点胜率",
+      "return_range": "收益区间",
+      "sellside_rating": "卖方评级",
+      "sellside_target_price": "卖方目标价",
+      "synthetic_fact_metric": "合成事实指标"
+    },
+    "kind": {
+      "all": "全部 kind",
+      "probability": "概率",
+      "categorical": "类别",
+      "score": "分值",
+      "interval": "区间"
+    },
+    "domain": {
+      "all": "全部",
+      "macro": "宏观",
+      "industry": "行业",
+      "company": "公司",
+      "private": "私有"
+    },
+    "status": {
+      "draft": "草案",
+      "active": "生效",
+      "retired": "退役"
+    },
+    "band": {
+      "low": "低",
+      "mid": "中",
+      "high": "高"
+    },
+    "classes": {
+      "recovery": "复苏",
+      "overheat": "过热",
+      "stagflation": "滞胀",
+      "recession": "衰退"
+    },
+    "lifecycle": {
+      "abstained": "弃权",
+      "open": "进行中",
+      "settled": "已结算",
+      "void": "作废",
+      "withdrawn": "撤回",
+      "pending_fill": "待定价",
+      "hit": "命中",
+      "miss": "未命中"
+    },
+    "calibration": {
+      "calibrated": "已校准",
+      "insufficient": "未校准",
+      "insufficientN": "未校准 · 有效样本 {n}/{threshold}",
+      "failed": "校准未通过",
+      "failedEce": "校准未通过 · ECE {ece}",
+      "evaluated": "评估",
+      "evaluatedSpearman": "评估 Spearman {rho}（n {n}）",
+      "selfAssessed": "自评"
+    },
+    "inputKind": {
+      "financial_fact": "事实",
+      "financial_metric": "派生指标",
+      "macro_observation": "宏观观测",
+      "macro_snapshot": "宏观快照",
+      "price_bar": "K 线",
+      "table_rows": "目录行",
+      "judgment": "判断",
+      "legacy_fill": "成交价",
+      "document_span": "文档片段"
+    },
+    "card": {
+      "retrospective": "补登记",
+      "mergedFrom": "登记于合并前主体 {key}",
+      "private": "仅自己可见",
+      "confidence": "信心（档位）",
+      "bandAria": "三分位档位：{band}",
+      "hitRate": "该方法历史命中 {rate}（{low}–{high}，n = {n}）",
+      "reliabilityLink": "可靠性图",
+      "accuracy": "历史准确率 {rate}（n = {n}）",
+      "coverage": "历史覆盖 {rate}（名义 {nominal}）",
+      "nominalCoverage": "名义覆盖 {nominal} · 未校准",
+      "selected": "判断",
+      "realized": "实现",
+      "realizedValue": "实现 {value}",
+      "scoresInDrawer": "得分只在输入抽屉中显示，不带 %。",
+      "dims": "维度",
+      "dimMissing": "缺",
+      "abstained": "弃权：{reason}",
+      "missing": "缺：{items}",
+      "result": "结果：{outcome} · 实现值 {value}",
+      "reason": {
+        "void": "作废原因：{reason}",
+        "withdrawn": "撤回原因：{reason}",
+        "reopened": "已重开：{reason}"
+      },
+      "method": "方法",
+      "asOf": "截至 {date}",
+      "condition": "条件：{text}",
+      "target": "目标：{target}",
+      "settlement": "结算：{state}",
+      "inputs": "输入 {count}",
+      "timeline": "结算时间线"
+    },
+    "drawer": {
+      "close": "关闭",
+      "tabs": "输入与结算",
+      "registeredAt": "登记 {at}",
+      "frozenNote": "每个输入的投影值冻结在登记行里，回放不依赖重抓；哈希校验用 scripts/judgments/replay.ts。",
+      "noInputs": "该判断没有冻结输入。",
+      "caption": "冻结输入",
+      "columns": {
+        "kind": "类型",
+        "ref": "定位",
+        "availableAt": "可得",
+        "origin": "来源",
+        "source": "来源链接"
+      },
+      "source": "来源",
+      "registeredValue": "登记值（未校准）",
+      "registeredNote": "只在这里以小数显示；卡面显示档位。",
+      "scores": "得分（不是概率）",
+      "scoresNote": "归一化得分，不显示为百分比。",
+      "detailUnavailable": "结算历史暂时读不到，只显示卡片上的最新结算。"
+    },
+    "timeline": {
+      "title": "结算时间线",
+      "registered": "登记",
+      "target": "目标",
+      "settledHit": "结算 · 命中",
+      "settledMiss": "结算 · 未命中",
+      "void": "作废",
+      "withdrawn": "撤回",
+      "reopened": "重开",
+      "pending": "等待结算",
+      "pendingFill": "等待成交价",
+      "abstained": "弃权",
+      "asKnownNote": "历史视图（as_known）只显示截止时刻之前已知的结算与校准。"
+    },
+    "reliability": {
+      "title": "可靠性",
+      "view": "显示方式",
+      "tableOnly": "只看表",
+      "chartAndTable": "图 + 表",
+      "chartLabel": "可靠性图：{bins} 个分箱的平均预测与实际频率，虚线为完美校准",
+      "caption": "可靠性分箱表",
+      "columns": {
+        "bin": "分箱",
+        "n": "n",
+        "meanP": "平均预测",
+        "hitRate": "实际频率",
+        "wilson": "Wilson 95%"
+      },
+      "summary": "Brier {brier} · Brier skill {skill} · 留出段 ECE（原始）{ece}"
+    },
+    "methods": {
+      "title": "方法注册表",
+      "subtitle": "每个判断型数字都来自这里的一个方法版本。能否显示为百分比由两道门决定：样本够、校准通过。",
+      "filterDomain": "按领域筛选",
+      "filterKind": "按 kind 筛选",
+      "caption": "方法注册表",
+      "columns": {
+        "method": "方法",
+        "version": "版本",
+        "kind": "kind",
+        "subject": "主体",
+        "status": "状态",
+        "calibration": "校准",
+        "samples": "有效样本",
+        "brier": "Brier",
+        "validUntil": "有效至"
+      },
+      "publishable": "公开",
+      "unpublished": "未公开",
+      "adapterTitle": "我的推荐（只读适配器）",
+      "adapterStatus": "只读适配器",
+      "empty": "没有符合筛选的方法。",
+      "note": "未公开（publishable = false）的方法在读接口层面不返回任何判断；草案方法只在测试与 dry-run 下登记。"
+    },
+    "method": {
+      "unknown": "没有这个方法版本。",
+      "producer": "生产者：{kind}",
+      "gates": "两道门",
+      "gateSample": "门 1 · 样本够",
+      "gateSampleDetail": "独立样本 {n} / 门槛 {threshold}（已结算 {total}）",
+      "gateCalibration": "门 2 · 校准通过",
+      "gateEce": "留出段 ECE {ece} ≤ {max}，skill {skill}",
+      "gateAccuracy": "准确率 Wilson 下界 {low} > 多数类基准 {base}",
+      "gateCoverage": "覆盖 {coverage}（名义 {nominal}），宽度比 {ratio}",
+      "gateSpearman": "Spearman {rho}（分值型只评估，不校准）",
+      "gatePass": "通过",
+      "gateFail": "未通过",
+      "gateNa": "未判定",
+      "validity": "有效期",
+      "validityDetail": "至 {until} · 计算于 {computed} · revision {revision}",
+      "noCalibration": "该方法还没有校准报告：显示为未校准。",
+      "confusion": "混淆矩阵（行 = 判断，列 = 实现）",
+      "confusionCaption": "混淆矩阵",
+      "confusionCorner": "判断 \\ 实现",
+      "temporal": "时间顺序验证",
+      "splitColumns": {
+        "segment": "样本段",
+        "skill": "skill"
+      },
+      "splitAll": "全部独立样本",
+      "splitHoldout": "时间外留出（后 30%）",
+      "doc": "公式文档",
+      "params": "参数",
+      "paramColumns": {
+        "name": "参数",
+        "value": "值"
+      },
+      "versions": "版本",
+      "recent": "最近结算",
+      "noSettlements": "还没有结算。"
+    },
+    "admin": {
+      "deniedTitle": "需要管理员权限",
+      "deniedBody": "判断管理只对管理员开放。",
+      "title": "判断管理",
+      "summary": "队列摘要",
+      "filterLabel": "队列筛选",
+      "filters": {
+        "due": "到期待结算",
+        "backoff": "退避中",
+        "leased": "租约持有",
+        "all": "全部"
+      },
+      "quarantine": "隔离项",
+      "quarantineLink": "在 /admin/dq 处理",
+      "caption": "结算队列",
+      "columns": {
+        "judgment": "判断",
+        "method": "方法",
+        "target": "目标",
+        "window": "settle_after / by",
+        "attempts": "尝试",
+        "next": "下次",
+        "status": "状态",
+        "actions": "操作"
+      },
+      "lastStatus": {
+        "pending": "未到期（退避）",
+        "unavailable": "暂不可得（退避）",
+        "inconsistent": "待隔离处理",
+        "error": "出错"
+      },
+      "leasedUntil": "租约至 {at}",
+      "settle": "立即结算",
+      "settleDisabled": {
+        "not_due": "未到期",
+        "leased": "租约中",
+        "closed": "已终态"
+      },
+      "withdraw": "撤回",
+      "withdrawEllipsis": "撤回…",
+      "withdrawTitle": "撤回结算",
+      "reopen": "重开",
+      "reopenTitle": "重开判断",
+      "reasonLabel": "原因（必填）",
+      "appendOnlyNote": "写入只追加的 judgment_settlements 与 research_audit_log；旧结算行保留。",
+      "cancel": "取消",
+      "done": "{action}：{status}",
+      "empty": "这个筛选下没有队列行。",
+      "refresh": "刷新",
+      "more": "加载更多"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/macro/strategy/route-helpers.ts:55` | **Accepted explanations can disappear from GET results.** POST accepts an uppercase review UUID, resolves it through PostgreSQL’s UUID lookup, and stores the original `subject_id` in a **text** column. GET always lowercases that UUID before its case-sensitive text lookup, so it cannot retrieve those explanations—even using the original POST subject. | Canonicalize review subject UUIDs consistently before POST hashing/storage and GET lookup; handle existing mixed-case rows. Add a POST→GET regression using a UUID containing uppercase hexadecimal letters. |
+| 2 | P3 | `src/app/api/macro/strategy/routes.test.ts:25` | **The required explanation API failure/recovery paths are not exercised together.** Tests mock both the request handler and production LLM adapter. Consequently, HTTP-level rejection with completed billing, finish-failure recovery without another provider call, and 409/429 propagation remain unverified as an integrated path (§12). Separate unit tests do not cover this composition. | Add route integration tests using the real handler and production adapter, with fake provider/billing transport and controlled storage failures. Assert response, persisted evidence, settlement payload, and provider call count. |
+
+fix required

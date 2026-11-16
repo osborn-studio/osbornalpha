@@ -1,0 +1,44 @@
+[
+  {
+    "at": "2026-11-09T04:45:31.201312+00:00",
+    "ticker": "600519.SH",
+    "http": 200,
+    "source": "sina",
+    "selectedSource": "sina",
+    "delayed": false,
+    "positivePrice": true,
+    "meta": {
+      "attempted": 1,
+      "failed": 0,
+      "stale": 0,
+      "duration_ms": 5307
+    },
+    "windCounts": {
+      "attempted": 1,
+      "succeeded": 0,
+      "failed": 1,
+      "duration_ms": 5307
+    }
+  },
+  {
+    "at": "2026-11-09T04:45:31.201498+00:00",
+    "ticker": "AAPL",
+    "http": 200,
+    "source": "eastmoney",
+    "selectedSource": "eastmoney",
+    "delayed": true,
+    "positivePrice": true,
+    "meta": {
+      "attempted": 1,
+      "failed": 0,
+      "stale": 0,
+      "duration_ms": 2903
+    },
+    "windCounts": {
+      "attempted": 1,
+      "succeeded": 0,
+      "failed": 1,
+      "duration_ms": 2903
+    }
+  }
+]

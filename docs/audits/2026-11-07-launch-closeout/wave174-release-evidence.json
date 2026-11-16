@@ -1,0 +1,804 @@
+{
+  "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+  "timeConvention": "Raw receipt timestamps retain explicit UTC/offset; prose uses Asia/Shanghai.",
+  "overallAcceptance": "DEGRADED_NOT_GRANTED",
+  "merge": [
+    {
+      "pr": 174,
+      "commit": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "observedAt": "2026-11-08T13:54:42+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 173,
+      "commit": "ed24b6c0b6381255d9082fbb1911563da09700af",
+      "observedAt": "2026-11-08T13:53:08+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 172,
+      "commit": "80a67690686e74b8ba57063a17e04a6cfca253df",
+      "observedAt": "2026-11-08T13:52:11+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 169,
+      "commit": "aea81c04ea98e1b7d94f5d2b5d77cabf880978e8",
+      "observedAt": "2026-11-08T13:50:41+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 171,
+      "commit": "2d3c5ad5b754891ac579b08111398473f6d2d94a",
+      "observedAt": "2026-11-08T12:54:04+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 170,
+      "commit": "fbf9501e3a49800695eba0b735016dc5926923ab",
+      "observedAt": "2026-11-08T12:48:54+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 168,
+      "commit": "f01b73f003bab20707642b48036ca5e36ea626f8",
+      "observedAt": "2026-11-08T12:17:13+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 166,
+      "commit": "5df5bbbff7a87ee0611508836ad999056568c9c3",
+      "observedAt": "2026-11-08T12:16:48+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 167,
+      "commit": "b0cdc71de4a33f3bbf55f4e511371cfb26edea0c",
+      "observedAt": "2026-11-08T12:04:53+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 164,
+      "commit": "5e3b71d1b57d2ea83a06595a1afadf64c02a289e",
+      "observedAt": "2026-11-08T12:04:30+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 165,
+      "commit": "16e68ec6c46c8e9ccbf5339d43656bc2f871bc6c",
+      "observedAt": "2026-11-08T12:03:27+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 162,
+      "commit": "ff61203ca09488611645b32d73ab8e9fe6febaa6",
+      "observedAt": "2026-11-08T12:03:03+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    },
+    {
+      "pr": 163,
+      "commit": "e22f4a2125f37e083c0182349fdfa8577d768189",
+      "observedAt": "2026-11-08T12:01:51+08:00",
+      "source": "git first-parent history; merge-base --is-ancestor",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "included": true
+    }
+  ],
+  "ci": [
+    {
+      "observedAt": "2026-11-08T06:09:50.224072+00:00",
+      "source": "wave174/release/production-evidence.json:ciApplication",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "conclusion": "success",
+      "headSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "name": "Application checks",
+      "status": "completed",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42452595542"
+    },
+    {
+      "observedAt": "2026-11-08T06:09:50.224072+00:00",
+      "source": "wave174/release/production-evidence.json:ciFixtures",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "conclusion": "success",
+      "headSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "name": "Macro source fixture checks",
+      "status": "completed",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42452595545"
+    }
+  ],
+  "deployment": {
+    "observedAt": "2026-11-08T06:09:50.224072+00:00",
+    "source": "wave174/release/production-evidence.json; inspect-apex-after.log; inspect-www-after.log",
+    "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "id": "dpl_4NcR75SHZizFxKBjRQ8iHDtgptJ7",
+    "state": "READY",
+    "project": "stock-monitor",
+    "url": "https://stock-monitor-5qnirtqtk-gilosbornhellos-projects.vercel.app",
+    "domains": [
+      "https://osbornalpha.com",
+      "https://www.osbornalpha.com"
+    ],
+    "runtimeSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "rollback": {
+      "id": "dpl_5ARPEjdR3a3ztxUNb8bJCEK6YVww",
+      "runtimeSha": "2d3c5ad5b754891ac579b08111398473f6d2d94a",
+      "retainedReady": true,
+      "performed": false
+    }
+  },
+  "anonymous": [
+    {
+      "observedAt": "2026-11-08T06:08:55.068Z",
+      "source": "wave174/release/production-verification-apex.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "base": "https://osbornalpha.com",
+      "checks": [
+        {
+          "path": "/api/methodologies",
+          "timestamp": "2026-11-08T06:08:52.307Z",
+          "responseSha256": "23f9ebbeda83dd5d1071f05d626e39cbb7416af1089a5b79736cd78f0fcac95b",
+          "setCookiePresent": false,
+          "status": 200,
+          "cacheControl": "public, max-age=300",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 1612,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84",
+          "errorCode": null,
+          "pass": true
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+          "timestamp": "2026-11-08T06:08:52.704Z",
+          "responseSha256": "835a183a982fbeed29302b24b1e3871af95639ea066e2aad7bdf74a9bd5936f6",
+          "setCookiePresent": false,
+          "status": 200,
+          "cacheControl": "public, max-age=300",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 397,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84",
+          "errorCode": null,
+          "pass": true
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+          "timestamp": "2026-11-08T06:08:53.110Z",
+          "responseSha256": "690101e8a643640fd07a93e1752fa125b72ab918bdce5bd5b90aef04ab7c4ae5",
+          "setCookiePresent": false,
+          "status": 200,
+          "cacheControl": "public, max-age=300",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 405,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84",
+          "errorCode": null,
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-08T06:08:53.446Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 336,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-08T06:08:53.779Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 332,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-08T06:08:54.094Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 315,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-08T06:08:54.439Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 346,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-08T06:08:54.755Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 315,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-08T06:08:55.068Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 313,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "observedAt": "2026-11-08T06:08:55.582Z",
+      "source": "wave174/release/production-verification-www.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "base": "https://www.osbornalpha.com",
+      "checks": [
+        {
+          "path": "/api/methodologies",
+          "timestamp": "2026-11-08T06:08:52.016Z",
+          "responseSha256": "23f9ebbeda83dd5d1071f05d626e39cbb7416af1089a5b79736cd78f0fcac95b",
+          "setCookiePresent": false,
+          "status": 200,
+          "cacheControl": "public, max-age=300",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 1327,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84",
+          "errorCode": null,
+          "pass": true
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+          "timestamp": "2026-11-08T06:08:52.499Z",
+          "responseSha256": "835a183a982fbeed29302b24b1e3871af95639ea066e2aad7bdf74a9bd5936f6",
+          "setCookiePresent": false,
+          "status": 200,
+          "cacheControl": "public, max-age=300",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 482,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84",
+          "errorCode": null,
+          "pass": true
+        },
+        {
+          "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+          "timestamp": "2026-11-08T06:08:52.902Z",
+          "responseSha256": "690101e8a643640fd07a93e1752fa125b72ab918bdce5bd5b90aef04ab7c4ae5",
+          "setCookiePresent": false,
+          "status": 200,
+          "cacheControl": "public, max-age=300",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 403,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84",
+          "errorCode": null,
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-08T06:08:53.928Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 1025,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-08T06:08:54.246Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 318,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-08T06:08:54.564Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 318,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/transmission?region=US",
+          "timestamp": "2026-11-08T06:08:54.947Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 383,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+          "timestamp": "2026-11-08T06:08:55.266Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 319,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        },
+        {
+          "path": "/api/macro/strategy/policy-response?window=3",
+          "timestamp": "2026-11-08T06:08:55.582Z",
+          "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+          "setCookiePresent": false,
+          "status": 401,
+          "cacheControl": "no-store",
+          "age": "0",
+          "vercelCache": "MISS",
+          "ms": 316,
+          "codeVersion": null,
+          "errorCode": "unauthorized",
+          "pass": true
+        }
+      ]
+    }
+  ],
+  "authenticated": {
+    "observedAt": "2026-11-08T06:16:00Z",
+    "observedAtPrecision": "approximate capture time, parent supplied",
+    "source": "wave174/acceptance/cache.json",
+    "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "status": "BOUNDED_SEQUENCE_PASS",
+    "manifests": {
+      "observedAt": "2026-11-08T06:16:00Z",
+      "observedAtPrecision": "same parent capture window; separate exact request timestamp not supplied",
+      "source": "wave174/acceptance/manifests.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "evidence": {
+        "source": "Parent Chrome logged-in CUA console full manifest fetch and SHA256 canonical JSON recomputation",
+        "runtime": "a43f2499a85df0b652d996579ac225a8710a2a84",
+        "results": [
+          {
+            "region": "US",
+            "id": "4066e916-85a3-4dd7-880a-4dc5b6302b55",
+            "status": 200,
+            "hashMatch": true,
+            "inputs": 15
+          },
+          {
+            "region": "CN",
+            "id": "1747ec6a-33fc-4727-be24-da56b9f056f5",
+            "status": 200,
+            "hashMatch": true,
+            "inputs": 15
+          }
+        ],
+        "scope": "Transmission manifests only; not full cycle-table22451-input replay."
+      }
+    },
+    "cacheEvidenceRef": "cache.evidence",
+    "cycle": {
+      "observedAt": null,
+      "observedAtStatus": "Not supplied in parent receipt; exact capture time unknown",
+      "source": "wave174/acceptance/cycle.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "evidence": {
+        "source": "Parent logged Chrome CUA DevTools",
+        "runtime": "a43f2499a85df0b652d996579ac225a8710a2a84",
+        "manifest": "07af71fa-cbd1-493f-86da-995df1410a78",
+        "requests": [
+          {
+            "status": 200,
+            "memo": "miss",
+            "ms": 27273
+          },
+          {
+            "status": 200,
+            "memo": "hit",
+            "ms": 1035
+          }
+        ],
+        "privateNoStore": true,
+        "fullRead": {
+          "status": 200,
+          "inputs": 22669,
+          "canonicalHashMatch": true,
+          "codeVersion": "a43f2499a85df0b652d996579ac225a8710a2a84"
+        },
+        "limit": "New cycle-table manifest success; does not resolve historical old-manifest replay57014. Cold27.3sec remains performance concern."
+      }
+    }
+  },
+  "clockRecovery": {
+    "observedAt": "2026-11-08T06:17:27.395Z",
+    "source": "wave174/clock-recovery/apply-results.json; apply-verification.json; dry-run-results.json; parent handoff",
+    "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "status": "EXECUTED_STORED_BINDINGS_VERIFIED_SCOPED_UI_OBSERVED",
+    "method": "macro_regime@v2",
+    "formulaHash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+    "executionBoundary": "Parent reviewed scratch wrapper using exact a43 source; Node22 runner repair only, no app code or configuration change.",
+    "batchId": "b82fa0a1-9b81-44fa-85a7-e3d6ef2b2e28",
+    "batchFinishFailed": false,
+    "counts": {
+      "fetched": 2,
+      "inserted": 2,
+      "duplicates": 0,
+      "versioned": 0,
+      "quarantined": 0,
+      "failed": 0
+    },
+    "errors": [],
+    "stored": [
+      {
+        "region": "CN",
+        "judgment_id": "73b9199d-ea83-8a2e-9904-1b63aa9eead0",
+        "as_of": "2026-11-08",
+        "registered_at": "2026-11-08T06:16:46.232Z",
+        "retrospective": false,
+        "abstained": false,
+        "inputs_hash": "94e1123f8f7d18fbc4c50c087ebc2e89532cc3592a493e52b7d3495fe09f0d5c",
+        "snapshot_id": "1624906b-61eb-4f04-b8d1-bab2862069fc"
+      },
+      {
+        "region": "US",
+        "judgment_id": "a213f4fd-ac11-8749-9664-54712842154d",
+        "as_of": "2026-11-08",
+        "registered_at": "2026-11-08T06:17:27.304Z",
+        "retrospective": false,
+        "abstained": false,
+        "inputs_hash": "a3b4f87247711d6d03ce9e77f39af8e7d8af12789ddf379a537c2fc23ef2bf29",
+        "snapshot_id": "3b8ee287-e76c-403b-9258-4707ba2805db"
+      }
+    ],
+    "idempotency": "Repeat dry-run IDs stable. Actual duplicate write replay not run; this execution inserted2/duplicates0.",
+    "publicCache": "Older CDN HIT cards initially persisted; parent later observed current classifications after normal expiry/revalidation without final-page cache bypass; browser max-age300/shared s-maxage600. Not universal freshness or cron proof."
+  },
+  "cache": {
+    "observedAt": "2026-11-08T06:16:00Z",
+    "observedAtPrecision": "approximate capture time, parent supplied",
+    "source": "wave174/acceptance/cache.json",
+    "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "status": "BOUNDED_SEQUENCE_PASS",
+    "evidence": {
+      "source": "Parent Chrome logged-in DevTools console via CUA",
+      "runtime": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "observedAt": "2026-11-08T06:16:00Z",
+      "samples": [
+        {
+          "region": "US",
+          "status": 200,
+          "ms": 2629,
+          "memo": "miss",
+          "manifest": "4066e916-85a3-4dd7-880a-4dc5b6302b55"
+        },
+        {
+          "region": "US",
+          "status": 200,
+          "ms": 1164,
+          "memo": "hit"
+        },
+        {
+          "region": "CN",
+          "status": 200,
+          "ms": 1676,
+          "memo": "miss",
+          "manifest": "1747ec6a-33fc-4727-be24-da56b9f056f5"
+        },
+        {
+          "region": "US",
+          "status": 200,
+          "ms": 664,
+          "memo": "hit"
+        }
+      ],
+      "privateNoStoreAll": true,
+      "repeatBodyEqual": true,
+      "regionRoundtripBodyEqual": true,
+      "omitCredentialsAfterWarm": {
+        "status": 401,
+        "noStore": true,
+        "errorOnly": true
+      },
+      "limits": "Single sequence; not cross-account switching or latency SLO proof. observedAt approximate capture time."
+    }
+  },
+  "ui": {
+    "observedAt": null,
+    "observedAtStatus": "Exact capture timestamp not supplied in parent receipt; do not infer from file mtime",
+    "source": "wave174/acceptance/ui.json",
+    "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "status": "SCOPED_INTERACTIVE_PASS_FULL_MATRIX_NOT_GRANTED",
+    "evidence": {
+      "source": "Parent native Chrome CUA logged-in page and screenshots",
+      "runtime": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "asOf": "2026-11-08",
+      "regions": {
+        "CN": {
+          "currentClassification": "Stagflation",
+          "snapshotDate": "2026-11-08",
+          "desktopBreakdown": "six rows with indicator, snapshot value, matched rule, weight and contribution",
+          "coverage": 0.6,
+          "uncertainty": "Zero-margin Stagflation/Recession tie retained"
+        },
+        "US": {
+          "currentClassification": "Overheat",
+          "snapshotDate": "2026-11-08",
+          "mobile375x601Breakdown": "four rows rendered as stacked labeled fields; scroll confirms lower rows/weights/contributions/sourcebuttons visible without horizontal clipping",
+          "uncertainty": "Growth axis missing; no fabricated XY position"
+        }
+      },
+      "sourceDrawer": {
+        "indicator": "CN_PPI_YOY",
+        "publisher": "National Bureau of Statistics of China",
+        "fetchHost": "data.stats.gov.cn",
+        "sha256": "e992b5c4b578b03a77e9e10227bb53ad06d4b056fa4071eac5c6bad1a1d5addc",
+        "locator": "JSON pointer /data/1/values/0/value",
+        "loaded": true,
+        "escapeCloses": true,
+        "focusReturnsToTrigger": true
+      },
+      "cacheVisibility": "Old public cards first remained CDN HIT; source uses browser max-age300 and shared s-maxage600. After normal expiry/revalidation page showed current classifications. No cache bypass in final page evidence.",
+      "limits": "Scoped interactive acceptance; not full browser/a11y matrix, future cron publication validation, real cross-account test, or latencySLO."
+    },
+    "ordinaryFetchBindingReadback": {
+      "observedAt": null,
+      "observedAtStatus": "Not supplied in parent final handoff",
+      "source": "wave174/docs-final/PARENT_UPDATE.md FINAL_READY, W174_FINAL",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "statusBoth": 200,
+      "asOf": "2026-11-08",
+      "retrospectiveBoth": false,
+      "bindingsMatchStoredRecovery": true,
+      "bindings": [
+        {
+          "region": "CN",
+          "judgment_id": "73b9199d-ea83-8a2e-9904-1b63aa9eead0",
+          "snapshot_id": "1624906b-61eb-4f04-b8d1-bab2862069fc"
+        },
+        {
+          "region": "US",
+          "judgment_id": "a213f4fd-ac11-8749-9664-54712842154d",
+          "snapshot_id": "3b8ee287-e76c-403b-9258-4707ba2805db"
+        }
+      ],
+      "cacheMode": "ordinary fetch"
+    }
+  },
+  "manifestDiagnostics": [
+    {
+      "observedAt": "2026-11-08T06:02:25.643Z",
+      "source": "wave174/manifest/gateway-evidence.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "targetBoundary": "Database diagnostic coordinated during wave174; not proof of application runtime or first-insert behavior",
+      "evidence": {
+        "runId": "0b5ccbf7-42ca-4b90-aea4-ae3f2de5363a",
+        "state": "COMPLETE",
+        "postAttempts": 1,
+        "retries": 0,
+        "manifestId": "1aec335b-5920-4659-8715-a3be51e08fcc",
+        "manifestHash": "dd4f7741747e193044bd703c4bc4cb4e34399ecb569ee2b3537c3a8f8950e10b",
+        "inputs": 22451,
+        "requestBytes": 6345793,
+        "pass": true,
+        "finishedAt": "2026-11-08T06:03:09.149Z",
+        "request": {
+          "label": "one_existing_replay",
+          "method": "POST",
+          "startedAt": "2026-11-08T06:02:55.065Z",
+          "requestBytes": 6345793,
+          "timeoutMs": 30000,
+          "events": [
+            {
+              "name": "fetch_start",
+              "ms": 6.346,
+              "at": "2026-11-08T06:02:55.071Z"
+            },
+            {
+              "name": "created",
+              "ms": 17.186,
+              "at": "2026-11-08T06:02:55.082Z"
+            },
+            {
+              "name": "body_sent_local",
+              "ms": 4802.992,
+              "at": "2026-11-08T06:02:59.868Z"
+            },
+            {
+              "name": "response_headers",
+              "ms": 13082.254,
+              "at": "2026-11-08T06:03:08.147Z"
+            },
+            {
+              "name": "fetch_resolved",
+              "ms": 13084.462,
+              "at": "2026-11-08T06:03:08.149Z"
+            },
+            {
+              "name": "response_body_complete",
+              "ms": 13085.538,
+              "at": "2026-11-08T06:03:08.150Z"
+            }
+          ],
+          "status": 200,
+          "headers": {
+            "sb-request-id": "01a1b9c0-c737-7490-ad8a-544cd2bfefd8",
+            "cf-ray": "a5725f292881c10b-LAX",
+            "date": "Sun, 08 Nov 2026 06:03:09 GMT",
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "38"
+          },
+          "responseBytes": 38,
+          "totalMs": 13085.968
+        },
+        "collectionDeadlineMs": 30000,
+        "productionTimeoutChanged": false
+      }
+    },
+    {
+      "observedAt": "2026-11-08T06:03:01.303000Z",
+      "source": "wave174/manifest/gateway-log-correlation.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "targetBoundary": "Database diagnostic coordinated during wave174; not proof of application runtime or first-insert behavior",
+      "evidence": {
+        "source": "Parent CUA Supabase unified logs filtered exactpathname newRPC rawJSON selected safe fields only",
+        "requestId": "01a1b9c0-c737-7490-ad8a-544cd2bfefd8",
+        "timestamp": "2026-11-08T06:03:01.303000Z",
+        "status": 200,
+        "method": "POST",
+        "path": "/rest/v1/rpc/macro_put_manifest_json",
+        "requestContentLength": 6345793,
+        "responseContentLength": 38,
+        "responseOriginTime": 8006,
+        "requestCfRay": "a5725f292881c10b",
+        "responseCfRay": "a5725f452ff4a5f0-LAX",
+        "matchedClientRequestId": true,
+        "scope": "Gateway origin_time numeric reportedms; not isolatedSQLduration"
+      }
+    },
+    {
+      "observedAt": "2026-11-08T05:58:23.664117+00:00",
+      "source": "wave174/manifest/whole-rpc-production.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "targetBoundary": "Database diagnostic coordinated during wave174; not proof of application runtime or first-insert behavior",
+      "evidence": {
+        "timestamp": "2026-11-08T05:58:23.664117+00:00",
+        "source": "Parent CUA productionSupabaseSQL UI mzfcaabhuwtfvsvadvsv",
+        "probe": "whole_existing_rpc_sql_ui",
+        "expectedExistingId": true,
+        "returnedId": "1aec335b-5920-4659-8715-a3be51e08fcc",
+        "constructionPlusRpcMs": 315.86,
+        "guards": [
+          "legacy/wrapperprosrcMD5exact",
+          "oneID+hashexistingrowFORSHARE",
+          "nousertriggers",
+          "8sstatementcap500mslockcap",
+          "finalROLLBACK"
+        ],
+        "scope": "One existingrow fullRPC constructedfromstoredbody; no committed mutation; SQLUIrole not gateway or exactHTTPbind; no firstinsert/rootcause claim"
+      }
+    },
+    {
+      "observedAt": "2026-11-08T06:03:07.994960Z",
+      "source": "wave174/manifest/activity-observation.json",
+      "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+      "targetBoundary": "Database diagnostic coordinated during wave174; not proof of application runtime or first-insert behavior",
+      "evidence": {
+        "source": "Parent CUA SQLUI READONLY 35x0.7s activity sampling with pg_stat_clear_snapshot eachiteration and finalROLLBACK",
+        "first": "2026-11-08T06:03:05.724077Z",
+        "last": "2026-11-08T06:03:07.994960Z",
+        "pids": [
+          1153467
+        ],
+        "samples": 4,
+        "maxElapsedMs": 1576.3,
+        "maxBlockers": 0,
+        "waits": [
+          "none"
+        ],
+        "filter": "state=active AND query LIKE %macro_put_manifest_json% AND pid<>observer",
+        "limitations": [
+          "Filter may include PostgREST setup queries containing RPC path; not exact SQL duration.",
+          "Sampled no blocking does not rule out all transient waits.",
+          "RunID/HTTP sb-request-id captured independently; PID attribution temporal not request-tag joined."
+        ]
+      }
+    }
+  ],
+  "historicalReplayIncident": {
+    "observedAt": "2026-11-08T04:58:26.673Z",
+    "source": "wave169/write-followup/production-error.json; wave169/write-replay/evidence.json",
+    "targetSha": null,
+    "status": "OPEN",
+    "clientAbortMs": 10000,
+    "independentSqlstate": "57014",
+    "exactRequestCorrelation": false,
+    "limitations": "Later one-POST success does not resolve historical cancellation; 8006 gateway origin_time is not SQL duration; sampled PID is temporal only.",
+    "targetBoundary": "Historical database new-RPC cancellation; exact application runtime/request correlation not established."
+  },
+  "documentationAudit": {
+    "observedAt": "2026-11-08T06:23:33.782576+00:00",
+    "source": "wave174/docs-final/mmx-retry-response.json; mmx-final-response.json; mmx-disposition.md; verification.json",
+    "targetSha": "a43f2499a85df0b652d996579ac225a8710a2a84",
+    "stopReason": "end_turn",
+    "nonemptyFinalText": true,
+    "verdict": "No definite correction needed before docs PR",
+    "scope": "Sanitized supplied-text/summary review only; no independent runtime access. One earlier registration-time precision correction applied. Initial max_tokens with no final is not counted."
+  }
+}

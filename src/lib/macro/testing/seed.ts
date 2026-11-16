@@ -5,6 +5,7 @@
 // derived row through Task 6's deriveAndWrite — the same derive path cron and ingest use — so derived rows carry
 // derived_from / transform and their provenance is their ancestors' retrievals.
 import {memoryTableClient} from '../../db/memory-table-client';
+import {randomUUID} from 'node:crypto';
 import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from '../catalog';
 import type {MacroDb} from '../db';
 import type {MemoryMacroDb} from '../memory-db';
@@ -43,9 +44,10 @@ export async function seedPoints(db:MacroDb,points:SeedPoint[],opts:{fetchedAt?:
  // and is success afterwards; a caller-supplied batch keeps whatever status the test declared (open-batch tests leave it running).
  // setBatchStatus exists only on the memory twin (optional call): the SQL-backed MacroDb has no such backdoor and runs real batches
  const twin=db as Partial<MemoryMacroDb>;
- if(opts.batchId===undefined)twin.setBatchStatus?.(SEED_BATCH,'running');
- try{return await seedPointsIn(db,points,opts);}
- finally{if(opts.batchId===undefined)twin.setBatchStatus?.(SEED_BATCH,'success');}
+ const batchId=opts.batchId??((await db.batchFinishedAt([SEED_BATCH]))[SEED_BATCH]?randomUUID():SEED_BATCH);
+ if(opts.batchId===undefined)twin.setBatchStatus?.(batchId,'running');
+ try{return await seedPointsIn(db,points,{...opts,batchId});}
+ finally{if(opts.batchId===undefined)twin.setBatchStatus?.(batchId,'success',undefined,opts.fetchedAt??SEED_FETCHED_AT);}
 }
 async function seedPointsIn(db:MacroDb,points:SeedPoint[],opts:{fetchedAt?:string;batchId?:string}):Promise<Seeded>{
  const fetchedAt=opts.fetchedAt??SEED_FETCHED_AT;const batchId=opts.batchId??SEED_BATCH;

@@ -70,7 +70,7 @@ async function dryRun(client:TableClient,file:string,asOf:string,fetchedAt:strin
  },null,1));
 }
 
-const add=(a:BatchCounts,b:BatchCounts)=>{for(const k of Object.keys(a) as (keyof BatchCounts)[])a[k]+=b[k];};
+const add=(a:BatchCounts,b:BatchCounts)=>{for(const k of Object.keys(a) as (keyof BatchCounts)[])a[k]=(a[k]??0)+(b[k]??0);/* F4: deferred is optional */};
 
 /** Every refusal leaves a rejected batch + a failed freshness attempt, then exits 1. */
 async function refuse(client:TableClient,file:string,asOf:string,fetchedAt:string,code:string,detail:Record<string,unknown>={}):Promise<1>{

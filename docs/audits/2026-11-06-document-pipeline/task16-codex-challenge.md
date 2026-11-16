@@ -1,0 +1,8 @@
+| ID | Sev P1/P2/P3 | file:line | attack/defect | fix |
+|---|---|---|---|---|
+| F1 | P1 | `src/lib/documents/hk-facts/promote.ts:218` | **Changed candidates silently publish an old value.** Reproduced: publish `6256000`, re-extract under a newer extractor, confirm `7000000`, promote without bumping publication generation. Result: both candidates are `promoted`, but the sole public fact remains `6256000`. Key-only duplicate resolution reuses the old fact; line 237 skips its evidence, and SQL validates only facts belonging to the new run. | Before reusing a fact, validate payload and evidence compatibility. Reject incompatible reuse with an explicit generation-bump requirement. Add this re-extraction regression test. |
+| F2 | P2 | `src/lib/documents/candidates/run.ts:235` | **Persistent failures starve healthy issuers.** Reproduced three limit-1 batches: issuer A lacks its stock code and returns `scope_unresolved`; healthy confirmed issuer B is never selected. `promotionDue` always limits the UUID-sorted prefix, without retry backoff or rotation. Excluding quarantine waits does not provide general fairness. SQL and memory share this behavior. | Coordinate a scheduler-contract change providing persisted retry/backoff or fair rotation. Test repeated batches with an unprocessable first issuer and healthy later issuers. |
+
+Read-only memory reproductions completed. Vitest was blocked by sandbox-denied temporary-directory writes.
+
+VERDICT: fail (1 P1, 1 P2)

@@ -1,0 +1,11 @@
+HTTP/2 401
+age: 0
+cache-control: no-store
+content-type: application/json
+date: Sat, 07 Nov 2026 14:24:08 GMT
+server: Vercel
+strict-transport-security: max-age=63072000
+vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch
+x-matched-path: /api/macro/overview
+x-vercel-cache: MISS
+x-vercel-id: sfo1::hnd1::774zw-1794061448224-07974f5dbda7

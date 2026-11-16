@@ -10,15 +10,14 @@
 // or a building/failed run is 'input_not_public' (F4 §3.5 constructor rule). The valuation table is the
 // deferred I-3 pipeline: its natural keys parse but construction answers 'unsupported_deferred_i3'.
 import {digest} from '../research/ingest/pa-v1/json';
-import {schemeDatasetKey} from './licenses';
-import type {DatasetKey,IndustryDb,MetricCellRow} from './types';
+import type {IndustryDb,MetricCellRow} from './types';
 
 export type IndustryTable='industry_metrics'|'industry_valuations';
 export interface IndustryTableRowsRef{table:IndustryTable;natural_key:string}
 export interface IndustryTableRowsSnapshot{table:IndustryTable;natural_key:string;rows:MetricCellRow[]}
 export interface IndustryTableRowsInput{
  kind:'table_rows';ref:IndustryTableRowsRef;snapshot:IndustryTableRowsSnapshot;hash:string;available_at:string;
- origin:{publisher:'OsbornAlpha';adapter:string;locator:string;transform:string;license:DatasetKey};
+ origin:{publisher:'OsbornAlpha';adapter:string;locator:string;transform:string};
 }
 export class IndustryInputError extends Error{constructor(public code:'invalid_natural_key'|'input_not_public'|'input_ambiguous_manifest'|'unsupported_deferred_i3'){super(code);this.name='IndustryInputError';}}
 
@@ -31,7 +30,7 @@ export function parseIndustryNaturalKey(nk:string):{table:IndustryTable;runId:st
  const parts=nk.split(':');
  if(parts.length!==4)return null;
  const [table,runId,code,date]=parts;
- if((table!=='industry_metrics'&&table!=='industry_valuations')||!UUID.test(runId)||!/^[A-Za-z0-9.\-]{1,32}$/.test(code)||!DATE.test(date))return null;
+ if((table!=='industry_metrics'&&table!=='industry_valuations')||!UUID.test(runId)||!/^[A-Za-z0-9.\-]{1,32}$/.test(code)||!DATE.test(date)||Number.isNaN(Date.parse(`${date}T00:00:00Z`))||new Date(`${date}T00:00:00Z`).toISOString().slice(0,10)!==date)return null;
  return {table,runId,code,date};
 }
 /** F4 §3.7: a table_rows input is available at the end of its rows' updated_at UTC day. */
@@ -62,6 +61,6 @@ export async function industryTableRowsInput(db:Pick<IndustryDb,'metricRun'|'met
  return {
   kind:'table_rows',ref:{table:ref.table,natural_key:ref.natural_key},snapshot,hash:digest(snapshot),available_at:endOfUtcDay(latest),
   origin:{publisher:'OsbornAlpha',adapter:run.method_version,locator:`manifest:${hashes[0]}`,
-   transform:run.history_class==='reconstruction'?`${run.config_hash};history_class=reconstruction`:run.config_hash,license:schemeDatasetKey(run.scheme,run.version)},
+   transform:run.history_class==='reconstruction'?`${run.config_hash};history_class=reconstruction`:run.config_hash},
  };
 }

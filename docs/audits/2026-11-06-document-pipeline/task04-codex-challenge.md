@@ -1,0 +1,10 @@
+Read-only probes confirmed the storage boundary defects below; 4,221 signed decimal addition cases passed. Financial values remain exact; `Number` handles only metadata/exponents. The PDF pin and lockfile agree. Hosted Storage behavior was not tested.
+
+| ID | Sev P1/P2/P3 | file:line | attack/defect | fix |
+|---|---|---|---|---|
+| F1 | P2 | src/lib/documents/object-store.ts:98 | Memory accepts a **52,428,801-byte** object and `image/png`, returning `created`. The landed bucket rejects both. Tests can therefore approve ingestion/extraction that fails in production; current tests omit these boundaries. | Share size/MIME validation across implementations. Test 52,428,800 and 52,428,801 bytes, allowed MIME types, and rejection without writes. |
+| F2 | P3 | src/lib/documents/object-store.ts:31 | MIME lookup includes inherited properties: `extOfMime('constructor')` returns a function instead of throwing; `__proto__` also bypasses rejection. Path construction consequently violates its return contract, although `put` subsequently rejects the malformed path. | Use an own-property check or `Map`; test prototype-property names. |
+| F3 | P3 | src/lib/documents/object-store.ts:113 | Signing a missing object throws `object_not_found` in memory, while the Supabase adapter maps signing errors to `signed_url_failed` at line 86. Error-dependent caller behavior cannot be tested consistently. | Choose one missing-object signing error and enforce it in both adapters with shared contract tests. |
+| F4 | P3 | package.json:43 | `pdfjs-dist` was inserted mid-object, contrary to HEAD.md’s explicit coordination rule requiring JSON additions at the object/array end. The commit explanation satisfies only the other half of that rule. | Move the dependency entry to the end of `dependencies`; retain the commit explanation. |
+
+VERDICT: fail (0 P1, 1 P2)

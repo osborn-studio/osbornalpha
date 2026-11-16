@@ -1,0 +1,157 @@
+{
+  "sha": "dc47ba2eb0768971f7362750bf504a90ceb68026",
+  "source": "ROOT native Chrome DevTools CUA observed authenticated same-origin sequential GET, cache:no-store, response body consumed; 2026-11-07",
+  "samples": [
+    {
+      "round": 1,
+      "endpoint": "overview-US",
+      "status": 200,
+      "ms": 861,
+      "cache_control": "private, no-store",
+      "memo": null
+    },
+    {
+      "round": 1,
+      "endpoint": "overview-CN",
+      "status": 200,
+      "ms": 1033,
+      "cache_control": "private, no-store",
+      "memo": null
+    },
+    {
+      "round": 1,
+      "endpoint": "transmission-US",
+      "status": 200,
+      "ms": 2618,
+      "cache_control": "private, no-store",
+      "memo": "miss"
+    },
+    {
+      "round": 1,
+      "endpoint": "transmission-CN",
+      "status": 200,
+      "ms": 1822,
+      "cache_control": "private, no-store",
+      "memo": "miss"
+    },
+    {
+      "round": 1,
+      "endpoint": "policy-response-window3",
+      "status": 200,
+      "ms": 2691,
+      "cache_control": "private, no-store",
+      "memo": "miss"
+    },
+    {
+      "round": 1,
+      "endpoint": "cycle-table-event_day",
+      "status": 200,
+      "ms": 16114,
+      "cache_control": "private, no-store",
+      "memo": "miss"
+    },
+    {
+      "round": 2,
+      "endpoint": "overview-US",
+      "status": 200,
+      "ms": 1691,
+      "cache_control": "private, no-store",
+      "memo": null
+    },
+    {
+      "round": 2,
+      "endpoint": "overview-CN",
+      "status": 200,
+      "ms": 1265,
+      "cache_control": "private, no-store",
+      "memo": null
+    },
+    {
+      "round": 2,
+      "endpoint": "transmission-US",
+      "status": 200,
+      "ms": 1573,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 2,
+      "endpoint": "transmission-CN",
+      "status": 200,
+      "ms": 979,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 2,
+      "endpoint": "policy-response-window3",
+      "status": 200,
+      "ms": 1304,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 2,
+      "endpoint": "cycle-table-event_day",
+      "status": 200,
+      "ms": 1167,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 3,
+      "endpoint": "overview-US",
+      "status": 200,
+      "ms": 1000,
+      "cache_control": "private, no-store",
+      "memo": null
+    },
+    {
+      "round": 3,
+      "endpoint": "overview-CN",
+      "status": 200,
+      "ms": 857,
+      "cache_control": "private, no-store",
+      "memo": null
+    },
+    {
+      "round": 3,
+      "endpoint": "transmission-US",
+      "status": 200,
+      "ms": 849,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 3,
+      "endpoint": "transmission-CN",
+      "status": 200,
+      "ms": 1140,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 3,
+      "endpoint": "policy-response-window3",
+      "status": 200,
+      "ms": 1209,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    },
+    {
+      "round": 3,
+      "endpoint": "cycle-table-event_day",
+      "status": 200,
+      "ms": 663,
+      "cache_control": "private, no-store",
+      "memo": "hit"
+    }
+  ],
+  "limits": [
+    "3 samples per endpoint, not p95 or SLA proof",
+    "memo hit proves process memo response path, not cross-instance persistence",
+    "No logout/account-switch performed",
+    "cycle first observed miss 16.114s remains unacceptable cold latency concern",
+    "142 widget not deployed"
+  ]
+}

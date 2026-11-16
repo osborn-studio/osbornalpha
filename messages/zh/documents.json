@@ -1,0 +1,48 @@
+{
+  "drawer": {
+    "title": "来源",
+    "source": "来源",
+    "publishedAt": "发布时间",
+    "availableAt": "可得时间",
+    "page": "第 {page} 页",
+    "snippet": "引用片段",
+    "periodEvidence": "期间依据",
+    "openOriginal": "在原文打开",
+    "downloadCopy": "下载副本",
+    "oldExtraction": "引用基于旧抽取版本",
+    "integrityFailed": "引用校验失败",
+    "licensedRequired": "需授权",
+    "notFound": "引用不存在",
+    "noTextLayer": "该文件无文本层，只能查看原文第 {page} 页",
+    "loading": "正在加载来源…"
+  },
+  "sources": {
+    "edgar": "SEC EDGAR",
+    "cninfo": "巨潮资讯",
+    "hkexnews": "披露易",
+    "upload": "上传"
+  },
+  "docClass": {
+    "annual_report": "年报",
+    "interim_report": "中期报告",
+    "quarterly_report": "季度报告",
+    "results_announcement": "业绩公告",
+    "current_report": "临时报告",
+    "registration": "注册文件",
+    "proxy": "股东大会材料",
+    "ownership": "权益披露",
+    "other": "其他"
+  },
+  "status": {
+    "stored": "已入库",
+    "extracted": "已抽取",
+    "no_text_layer": "无文本层",
+    "extract_failed": "抽取失败"
+  },
+  "list": {
+    "asOf": "时点",
+    "versions": "全部版本",
+    "replaced": "替换版本",
+    "empty": "该时点没有披露文件"
+  }
+}

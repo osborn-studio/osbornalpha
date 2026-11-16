@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/macro/strategy/transmission.ts:48` | Alias resolution bypasses the target’s catalog status. Reproduced with `CN_CGB_10Y` restricted and `CN_CGB10Y` active: the indicator hides its value, but the asset alias displays `1.85` as observed and freezes the restricted input into the manifest. Existing tests cover only active aliases. | Check the resolved target’s existence and status before reading; propagate missing/restricted status and reason through the alias view. Add regression coverage for restricted, missing, and absent targets. |
+| 2 | P2 | `src/lib/macro/strategy/playbooks.ts:36` | Judgment identity is checked for highlighting but not settlement attribution. Reproduced with card `j1` and detail `j2`: the summary reports `j1` as a hit using `j2`’s settlement. The mismatch branch is untested. | Require matching judgment IDs before consuming detail settlements; return no outcome for mismatched details. Add a settled-card mismatch regression test. |
+
+fix required

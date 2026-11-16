@@ -1,0 +1,1009 @@
+{
+  "recordedAt": "2026-11-08T00:53:36.395457+00:00",
+  "deployedSha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+  "overallProductionAcceptance": false,
+  "disposition": "DEPLOYED; bounded macro HTTP checks pass; authenticated acceptance partial; overall degraded/not granted",
+  "deployment": {
+    "id": "dpl_FNzodKrBGDGKatGHpe1hjuPufDdJ",
+    "url": "stock-monitor-1qylf6awo-gilosbornhellos-projects.vercel.app",
+    "target": "production",
+    "readyState": "READY",
+    "aliases": [
+      "osbornalpha.com",
+      "www.osbornalpha.com",
+      "stock-monitor-nu.vercel.app",
+      "stock-monitor-gilosbornhellos-projects.vercel.app"
+    ]
+  },
+  "releaseReceipt": {
+    "timestamp": "2026-11-08T00:44:03.603246+00:00",
+    "status": "DEPLOYED_MACRO_VERIFIED_OVERALL_DEGRADED",
+    "sha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+    "deploymentId": "dpl_FNzodKrBGDGKatGHpe1hjuPufDdJ",
+    "url": "https://osbornalpha.com",
+    "httpVerificationPass": true,
+    "httpChecks": 9,
+    "migrationState": "unknown; not inspected/applied; missing management/DB credential",
+    "migrationCompletionAccepted": false,
+    "dataGatewaySourceRequirementPass": false,
+    "overallProductionAcceptance": false,
+    "mmxFinalStopReason": "end_turn",
+    "worktreeCleanup": "parent",
+    "sourceChanges": false,
+    "prUrl": null
+  },
+  "ciLiveChecks": [
+    {
+      "conclusion": "success",
+      "databaseId": 42429507803,
+      "headSha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+      "status": "completed",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42429507803"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 42429507792,
+      "headSha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+      "status": "completed",
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42429507792"
+    }
+  ],
+  "publicAnonymousVerification": {
+    "timestamp": "2026-11-08T00:41:40.868Z",
+    "base": "https://www.osbornalpha.com",
+    "expectedSha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+    "expectedFormulaHash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+    "requestMode": "anonymous; no cookies or bearer; Cache-Control: no-cache",
+    "checks": [
+      {
+        "path": "/api/methodologies",
+        "timestamp": "2026-11-08T00:41:37.493Z",
+        "responseSha256": "88e06d5d8079b357ecffea2ff1b2bd4805eed14c9e58b8d4d16575b7c258c810",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "codeVersion",
+          "status",
+          "methodologies"
+        ],
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 819,
+        "codeVersion": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+        "errorCode": null,
+        "v2": {
+          "status": "active",
+          "publishable": true,
+          "formula_hash": "dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba",
+          "registrationCodeVersion": "01308b44347421f061cc03cef36a0f172df41bc6"
+        },
+        "pass": true
+      },
+      {
+        "path": "/api/judgments?subject_type=macro_region&subject_key=US&types=macro_regime",
+        "timestamp": "2026-11-08T00:41:37.923Z",
+        "responseSha256": "d56e361e2dd02fe92d80021be3a4213953f629af1981cc8b26b8e9562fa819e6",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "codeVersion",
+          "subject",
+          "asOf",
+          "view",
+          "cards"
+        ],
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 429,
+        "codeVersion": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+        "errorCode": null,
+        "cards": [
+          {
+            "methodology": {
+              "id": "macro_regime",
+              "version": "v2",
+              "title": {
+                "zh": "宏观象限（当期 nowcast）",
+                "en": "Macro regime (current-period nowcast)"
+              },
+              "href": "/intel/methods/macro_regime/v2"
+            },
+            "value": "overheat",
+            "calibration": "insufficient"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "path": "/api/judgments?subject_type=macro_region&subject_key=CN&types=macro_regime",
+        "timestamp": "2026-11-08T00:41:38.354Z",
+        "responseSha256": "f040bb5bd772dfdf89cda53160d3bd62ffbb220ac094a0c9bf26ed4e676f5a3d",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "codeVersion",
+          "subject",
+          "asOf",
+          "view",
+          "cards"
+        ],
+        "status": 200,
+        "cacheControl": "public, max-age=300",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 431,
+        "codeVersion": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+        "errorCode": null,
+        "cards": [
+          {
+            "methodology": {
+              "id": "macro_regime",
+              "version": "v2",
+              "title": {
+                "zh": "宏观象限（当期 nowcast）",
+                "en": "Macro regime (current-period nowcast)"
+              },
+              "href": "/intel/methods/macro_regime/v2"
+            },
+            "value": "stagflation",
+            "calibration": "insufficient"
+          }
+        ],
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/transmission?region=US",
+        "timestamp": "2026-11-08T00:41:38.707Z",
+        "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "error"
+        ],
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 353,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+        "timestamp": "2026-11-08T00:41:39.354Z",
+        "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "error"
+        ],
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 647,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/policy-response?window=3",
+        "timestamp": "2026-11-08T00:41:39.718Z",
+        "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "error"
+        ],
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 364,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/transmission?region=US",
+        "timestamp": "2026-11-08T00:41:40.040Z",
+        "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "error"
+        ],
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 322,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+        "timestamp": "2026-11-08T00:41:40.560Z",
+        "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "error"
+        ],
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 520,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      },
+      {
+        "path": "/api/macro/strategy/policy-response?window=3",
+        "timestamp": "2026-11-08T00:41:40.868Z",
+        "responseSha256": "6145cc75f5f4e72800e329a24523d50216144f5efc9256616f78ea8f8f3ab3b4",
+        "setCookiePresent": false,
+        "bodyKeys": [
+          "error"
+        ],
+        "status": 401,
+        "cacheControl": "no-store",
+        "age": "0",
+        "vercelCache": "MISS",
+        "ms": 308,
+        "codeVersion": null,
+        "errorCode": "unauthorized",
+        "pass": true
+      }
+    ],
+    "pass": true,
+    "limitations": [
+      "No browser or authenticated-user verification performed.",
+      "Read-only current-state samples do not prove account isolation, cross-instance cache hits, expiry behavior, or latency SLOs.",
+      "No flags/licenses modified and no cron jobs invoked."
+    ]
+  },
+  "migrationAssessment": {
+    "migration": "20261120093000_industry_exact_pair_tolerance.sql",
+    "asOf": "2026-11-08T00:50:37.376137+00:00",
+    "status": "applied_and_verified",
+    "productionHistoryInspected": true,
+    "productionFunctionInspected": true,
+    "pendingSetReviewed": true,
+    "applied": true,
+    "migrationCompletionAccepted": true,
+    "runtimeBlocker": false,
+    "expectedMigrationCount": 65,
+    "missingVersionsBefore": [
+      "20261120093000"
+    ],
+    "sourceHashMatchesGit": true,
+    "readback": {
+      "version": "20261120093000",
+      "name": "industry_exact_pair_tolerance",
+      "sourceSha256": "c29ecd95f18990120738909cfcab16534e9bfcdccce64a8d3d25e20225919bfc",
+      "sourceHashMatchesGit": true,
+      "exactTolerance": true,
+      "securityDefiner": true,
+      "searchPath": "pg_catalog, public",
+      "anonExecute": false,
+      "authenticatedExecute": false,
+      "serviceRoleExecute": true
+    },
+    "access": "existing GitHub OAuth restored Supabase Dashboard; native Chrome CUA SQL Editor; no credentials extracted",
+    "limits": [
+      "No existing valuation pairs rewritten",
+      "No valuation activation or rights change"
+    ],
+    "scope": "Parent authoritative production Dashboard readback; documentation editor checked local merged SQL SHA-256. Industry activation/acceptance remains separate."
+  },
+  "strictWindProbe": {
+    "status": 200,
+    "meta": {
+      "attempted": 2,
+      "failed": 0,
+      "stale": 0,
+      "duration_ms": 3059,
+      "sources": {
+        "datagateway-wind": {
+          "attempted": 2,
+          "succeeded": 0,
+          "failed": 2,
+          "retries": 0,
+          "duration_ms": 6118
+        },
+        "eastmoney": {
+          "attempted": 2,
+          "succeeded": 2,
+          "failed": 0,
+          "retries": 0,
+          "duration_ms": 751
+        }
+      },
+      "failed_tickers": [],
+      "selected_sources": {
+        "600519.SH": "eastmoney",
+        "AAPL": "eastmoney"
+      }
+    },
+    "pass": false
+  },
+  "parentAuthenticatedBrowser": {
+    "observedAt": "2026-11-08T00:44:59.661098+00:00",
+    "sha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+    "method": "native Chrome existing user session, real UI and same-origin DevTools GET, no credential extraction",
+    "passed": [
+      "CN clock stagflation21/recession21 tie and60% coverage",
+      "CN quantitative PPI5 weight15 contribution9; PMI49.3 weight15 contribution6",
+      "CN PPI drawer index_minus_100@1; NBS raw parent locator /data/1/values/0/value",
+      "US clock overheat19,60% coverage,missing growth axis",
+      "US CPI3.72 weight15 contribution9 quantitative breakdown",
+      "Transmission destination redirected /intel/macro/transmission to /macro/transmission and rendered observed values and policy event table",
+      "Later history page event_day successfully rendered full9episode table and manifest1aec335b-5920-4659-8715-a3be51e08fcc; earlier3 failures unresolved"
+    ],
+    "apiSamples": [
+      {
+        "path": "transmission?region=US",
+        "status": 200,
+        "ms": 1466
+      },
+      {
+        "path": "transmission?region=CN",
+        "status": 200,
+        "ms": 935
+      },
+      {
+        "path": "policy-response?window=3",
+        "status": 200,
+        "ms": 1118
+      }
+    ],
+    "failed": [
+      {
+        "path": "cycle-table?boundary=event_day",
+        "status": 500,
+        "code": "strategy_failed",
+        "observedCountAtLeast": 3,
+        "firstObservedMs": 16017
+      }
+    ],
+    "rawEvidence": {
+      "metadataEndpointStatus": 200,
+      "metadataResponseBytes": 1476,
+      "originalBytesDownloaded": false,
+      "note": "Initial hash comparison used JSON metadata response, not signed original download; mismatch is not evidence corruption. Original hash verification remains unperformed."
+    },
+    "notVerified": [
+      "complete production mobile matrix",
+      "logout/account switch",
+      "raw original-byte hash",
+      "p95/cross-instance/controlled cold-start performance"
+    ],
+    "acceptance": "partial; cycle history failure blocks full acceptance"
+  },
+  "cycleFailure": {
+    "observedAt": "2026-11-08T00:43:48.078452+00:00",
+    "method": "native Chrome DevTools same-origin fetch with existing user session; no credentials extracted",
+    "deployment": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+    "path": "/api/macro/strategy/cycle-table?boundary=event_day",
+    "status": 500,
+    "body": {
+      "error": {
+        "code": "strategy_failed",
+        "message": "macro strategy request failed"
+      }
+    },
+    "countAtLeast": 3,
+    "followup": "Native Chrome navigation to /intel/macro/history redirected /macro/history and successfully rendered full event_day cycle table with manifest 1aec335b-5920-4659-8715-a3be51e08fcc after earlier three500s. Failure may be intermittent/cold path, NOT consistent total outage."
+  },
+  "cycleInvestigation": {
+    "asOf": "2026-11-08T00:54:56.230522+00:00",
+    "finalReportPresent": true,
+    "reportState": "REPORT.md final handoff; MiniMax-M2.5 re-audit actual end_turn, nonempty text, NO BLOCKING FINDINGS for diagnostics only",
+    "status": "Original 500 root cause UNKNOWN; narrow fixed-stage diagnostics proposed only; no production failure fix, deployment or acceptance closure",
+    "statusSource": "cycle500/progress.md and REPORT.md read by documentation editor",
+    "reportedChecks": {
+      "testsPassed": 632,
+      "environmentGatedSkipped": 42,
+      "typecheck": "pass",
+      "scopedLint": "pass"
+    },
+    "evidenceScope": "Production-backed builder/persist/evaluate succeeded; successful persisted manifest body hash independently verified and old/current complete views equal. These probes do not identify failed request stage or close authenticated route acceptance.",
+    "pullRequest": {
+      "headRefOid": "04d3ea134eb43fc5656eaba970cf77f644b4d32d",
+      "isDraft": true,
+      "mergedAt": null,
+      "number": 166,
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431821712/job/128582195081",
+          "name": "test",
+          "startedAt": "2026-11-08T00:53:33Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431821706/job/128582194862",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-08T00:53:33Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Macro source fixture checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:53:51Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431821732/job/128582194974",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-08T00:53:33Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        }
+      ],
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/166"
+    },
+    "remoteCiCompletionClaimed": false
+  },
+  "pullRequestsLiveChecked": [
+    {
+      "headRefOid": "5ad67c576146204c1d565e6c8b2f748f8b82c21e",
+      "mergeCommit": {
+        "oid": "68a96afa9636d1f3af0586c29c5e3486cfb720ca"
+      },
+      "mergedAt": "2026-11-08T00:20:28Z",
+      "number": 159,
+      "state": "MERGED",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T17:04:25Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393503333/job/128465835162",
+          "name": "test",
+          "startedAt": "2026-11-07T16:52:54Z",
+          "status": "COMPLETED",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:53:15Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393503249/job/128465834896",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-07T16:52:54Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:54:15Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393503331/job/128465835364",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-07T16:52:55Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "fix(evals): fail closed on malformed gold lock registries",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/159",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "headRefOid": "55045f12888b89e1a107aaff77215e4302f26317",
+      "mergeCommit": {
+        "oid": "aefe1f96be73f30e742acdde02cabba3897d6410"
+      },
+      "mergedAt": "2026-11-08T00:22:09Z",
+      "number": 160,
+      "state": "MERGED",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:58:48Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393074078/job/128464545675",
+          "name": "test",
+          "startedAt": "2026-11-07T16:47:44Z",
+          "status": "COMPLETED",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:48:09Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393074074/job/128464545556",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-07T16:47:43Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:49:01Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393074075/job/128464545405",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-07T16:47:43Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "test: benchmark full macro cycle cold and warm paths",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/160",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "headRefOid": "f5a51d327a44f33cb4fc8053abf2215cfa6d0c12",
+      "mergeCommit": {
+        "oid": "a4fafbab0190604f282f3c101a7312fe4b1db415"
+      },
+      "mergedAt": "2026-11-08T00:23:08Z",
+      "number": 161,
+      "state": "MERGED",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:59:11Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393252382/job/128465089089",
+          "name": "test",
+          "startedAt": "2026-11-07T16:49:54Z",
+          "status": "COMPLETED",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:50:15Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393252461/job/128465089109",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-07T16:49:54Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-07T16:50:51Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42393252411/job/128465089393",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-07T16:49:54Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "docs: reconcile #154–158 delivery and release hold",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/161",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "headRefOid": "87d0a3ca99503be41b2645b6fc6641112c21d2d5",
+      "mergeCommit": null,
+      "mergedAt": null,
+      "number": 162,
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:49:40Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42430890776/job/128579308006",
+          "name": "test",
+          "startedAt": "2026-11-08T00:41:21Z",
+          "status": "COMPLETED",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:41:40Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42430890807/job/128579308267",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-08T00:41:21Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:42:39Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42430890834/job/128579308195",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-08T00:41:21Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "fix(s4): avoid false quarantine during concurrent anchor drain",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/162"
+    },
+    {
+      "headRefOid": "f6262064fffcb0109a426a1ac36b681c32cb09bb",
+      "mergeCommit": null,
+      "mergedAt": null,
+      "number": 163,
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42430908451/job/128579365614",
+          "name": "test",
+          "startedAt": "2026-11-08T00:41:42Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:42:01Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42430908410/job/128579365445",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-08T00:41:37Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:42:56Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42430908646/job/128579366259",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-08T00:41:37Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "fix: prevent macro coverage text clipping on mobile",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/163"
+    },
+    {
+      "headRefOid": "26d08eaf9eabe45f27d950ff6b9ffefefff808df",
+      "mergeCommit": null,
+      "mergedAt": null,
+      "number": 164,
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:52:48Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431026967/job/128579717877",
+          "name": "test",
+          "startedAt": "2026-11-08T00:43:07Z",
+          "status": "COMPLETED",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:43:25Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431026834/job/128579717446",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-08T00:43:07Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:44:03Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431026995/job/128579718108",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-08T00:43:07Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "fix(company): include predecessor filings in lineage reads",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/164"
+    },
+    {
+      "headRefOid": "769db104724741f0114b2554b0abd44180c06b36",
+      "mergeCommit": null,
+      "mergedAt": null,
+      "number": 165,
+      "state": "OPEN",
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "completedAt": "0001-01-01T00:00:00Z",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431185041/job/128580204876",
+          "name": "test",
+          "startedAt": "2026-11-08T00:45:12Z",
+          "status": "IN_PROGRESS",
+          "workflowName": "Application checks"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:45:30Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431184973/job/128580204664",
+          "name": "provider-date-ingress",
+          "startedAt": "2026-11-08T00:45:12Z",
+          "status": "COMPLETED",
+          "workflowName": "Industry release audit"
+        },
+        {
+          "__typename": "CheckRun",
+          "completedAt": "2026-11-08T00:46:07Z",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42431185031/job/128580204756",
+          "name": "source-fixtures",
+          "startedAt": "2026-11-08T00:45:12Z",
+          "status": "COMPLETED",
+          "workflowName": "Macro source fixture checks"
+        }
+      ],
+      "title": "test(documents): isolate HK promotion worker from citation leases",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/165"
+    }
+  ],
+  "provenance": {
+    "releaseReport": "/tmp/osstack/osbornalpha-wave162/release/REPORT.md",
+    "browserEvidence": "/tmp/osstack/osbornalpha-wave162/browser-acceptance.json",
+    "cycleFailure": "/tmp/osstack/osbornalpha-wave162/cycle500/browser-evidence.json",
+    "documentationEditorLimits": "Read supplied production/browser artifacts and live GitHub state. Did not rerun deployment, browser flows, quote probe or DB operations. responseSha256 fields hash HTTP bodies, not original source downloads. CI test counts are reported execution evidence, not local reruns."
+  },
+  "mergedAncestry142Through161": [
+    {
+      "mergeCommit": {
+        "oid": "279b0e32ec9b5882e494285bdccf80f53fe589ec"
+      },
+      "mergedAt": "2026-11-07T15:24:03Z",
+      "number": 142,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/142",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "bab393b68ba1ad64b2ab9d446eaec658f06df335"
+      },
+      "mergedAt": "2026-11-07T15:55:01Z",
+      "number": 143,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/143",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "98e9a819d8f8ccc73de8f69df9feac09690014f3"
+      },
+      "mergedAt": "2026-11-07T15:24:34Z",
+      "number": 144,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/144",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "ddae7c460374ce8635e388b8b8dcd7d7b482661d"
+      },
+      "mergedAt": "2026-11-07T15:22:11Z",
+      "number": 145,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/145",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "4682f21a08eccb252b87996ab6de89e96547c6b5"
+      },
+      "mergedAt": "2026-11-07T15:27:38Z",
+      "number": 146,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/146",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "695c50e5276c6e4474f0b04ecdd1a14efe40b992"
+      },
+      "mergedAt": "2026-11-07T15:54:26Z",
+      "number": 147,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/147",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "7adb54293a405d8c8a36783296e5ec904582d084"
+      },
+      "mergedAt": "2026-11-07T15:21:40Z",
+      "number": 148,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/148",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "5d4e81832cd7cdaa30a38e9470c9be03c6d064a4"
+      },
+      "mergedAt": "2026-11-07T15:44:14Z",
+      "number": 149,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/149",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "5501b41de82b405a4f10313c9b9702011c3b7fb7"
+      },
+      "mergedAt": "2026-11-07T15:45:59Z",
+      "number": 150,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/150",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "aaec7c796af37b115b7839f9b8967f8bac4ef727"
+      },
+      "mergedAt": "2026-11-07T15:28:03Z",
+      "number": 151,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/151",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "e03ad747a55ae184f77026a20e1f4a11881ceccf"
+      },
+      "mergedAt": "2026-11-07T15:46:25Z",
+      "number": 152,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/152",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "ab11d6e3b41a603169fda19df2db2d69fdad70c9"
+      },
+      "mergedAt": "2026-11-07T16:12:49Z",
+      "number": 153,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/153",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "2bdd097d8065ed4fa0a5f70dc2f46f913dbb74e3"
+      },
+      "mergedAt": "2026-11-07T16:35:42Z",
+      "number": 154,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/154",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "8fab2b678455a4ddea7a5b87a2e5454b2e8c167d"
+      },
+      "mergedAt": "2026-11-07T16:36:08Z",
+      "number": 155,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/155",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "df10989b5012c8aa6b5ab68faf27cddb1bfe34ad"
+      },
+      "mergedAt": "2026-11-07T16:37:10Z",
+      "number": 156,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/156",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "a6b18d904b4fdbdead3b9c68502e02b767ce6f04"
+      },
+      "mergedAt": "2026-11-07T16:36:49Z",
+      "number": 157,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/157",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "3f14ec4a075f8bc200681929e887ceff92892d5e"
+      },
+      "mergedAt": "2026-11-07T16:37:34Z",
+      "number": 158,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/158",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "68a96afa9636d1f3af0586c29c5e3486cfb720ca"
+      },
+      "mergedAt": "2026-11-08T00:20:28Z",
+      "number": 159,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/159",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "aefe1f96be73f30e742acdde02cabba3897d6410"
+      },
+      "mergedAt": "2026-11-08T00:22:09Z",
+      "number": 160,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/160",
+      "mergeIsAncestorOfDeployedSha": true
+    },
+    {
+      "mergeCommit": {
+        "oid": "a4fafbab0190604f282f3c101a7312fe4b1db415"
+      },
+      "mergedAt": "2026-11-08T00:23:08Z",
+      "number": 161,
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/161",
+      "mergeIsAncestorOfDeployedSha": true
+    }
+  ],
+  "documentationFactualAudit": {
+    "model": "MiniMax-M2.5",
+    "initialResolutionStopReason": "end_turn",
+    "finalStopReason": "end_turn",
+    "finalTextPresent": true,
+    "boundedVerdict": "NO BLOCKING FINDINGS for corrected documentation only; not release approval or original500 remedy",
+    "artifact": "mmx-wave162-docs-audit.md",
+    "rawResponseSha256": "7a80e1f3304343a48c4c2c24e68f697540b75aeb204f24d449e8e4fbcfa62f09",
+    "supersedes": "Earlier documentation audit before authoritative migration resolution"
+  },
+  "historicalMigrationAssessment": {
+    "candidateSha": "a4fafbab0190604f282f3c101a7312fe4b1db415",
+    "migration": "20261120093000_industry_exact_pair_tolerance.sql",
+    "productionHistoryInspected": false,
+    "productionFunctionInspected": false,
+    "applied": false,
+    "missingCapability": "project-authorized Supabase management token with SQL/migration access or production PostgreSQL connection credential",
+    "localDiscovery": [
+      "Supabase projects list: access token not provided",
+      "~/.supabase contains traces and telemetry only",
+      "no ~/.pgpass or ~/.pg_service.conf",
+      "main checkout supabase/.temp contains cli-latest only",
+      "production Vercel env has no DB connection credential; 22 sensitive values unavailable as placeholders"
+    ],
+    "runtimeBlocker": false,
+    "runtimeBlockerAssessment": "Code evidence only: sole migration added since deployed baseline; CREATE OR REPLACE same signature/security/grants, exact predicate correction, no data rewrite; no application stage_industry_valuation_pairs caller; official/valuation deferred_i3 before dependency creation; no macro runtime dependency. Does not prove authoritative database state or migration completion.",
+    "evidence": [
+      "src/lib/industry/jobs.ts:37,80",
+      "src/app/api/cron/industry-sync/route.ts:40",
+      "src/lib/industry/judgment-input.ts:50",
+      "supabase/migrations/20261120093000_industry_exact_pair_tolerance.sql"
+    ],
+    "pendingSetReviewed": false,
+    "reasonNoApply": "Cannot enumerate authoritative pending set or inspect installed function without credentials."
+  },
+  "historicalReceiptScope": "releaseReceipt is the unchanged 00:44:03 UTC receipt before the 00:50:37 UTC migration resolution. Its migrationState/migrationCompletionAccepted fields are historical only; current state is migrationAssessment.",
+  "migrationProductionCua": {
+    "timestamp": "2026-11-08T00:50:37.376137+00:00",
+    "projectRef": "mzfcaabhuwtfvsvadvsv",
+    "projectName": "stock-monitor",
+    "branch": "main PRODUCTION",
+    "access": "existing GitHub OAuth restored Supabase Dashboard; native Chrome CUA SQL Editor; no credentials extracted",
+    "preflight": {
+      "expectedMigrationCount": 65,
+      "missingVersions": [
+        "20261120093000"
+      ],
+      "exactToleranceBefore": false
+    },
+    "action": "Applied unchanged merged migration and schema_migrations record atomically in BEGIN/COMMIT, lock_timeout5s, statement_timeout30s",
+    "result": "Success. No rows returned",
+    "readback": {
+      "version": "20261120093000",
+      "name": "industry_exact_pair_tolerance",
+      "sourceSha256": "c29ecd95f18990120738909cfcab16534e9bfcdccce64a8d3d25e20225919bfc",
+      "sourceHashMatchesGit": true,
+      "exactTolerance": true,
+      "securityDefiner": true,
+      "searchPath": "pg_catalog, public",
+      "anonExecute": false,
+      "authenticatedExecute": false,
+      "serviceRoleExecute": true
+    },
+    "limits": [
+      "No existing valuation pairs rewritten",
+      "No valuation activation or rights change"
+    ],
+    "status": "applied_and_verified"
+  },
+  "followupPrCheckedAt": "2026-11-08T00:52:52.875735+00:00"
+}

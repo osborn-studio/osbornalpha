@@ -4,14 +4,15 @@
 // buildRegimeInput + classifyRegime: there is exactly one classification function. Server-only: stored judgments come from
 // the service-only macro_regime_results (admin) and only when judgments are enabled (第 6 稿 P1-2); F4 builds its macro
 // snapshot inputs through this API, never with anon table reads.
-// Known limitation: classifyAsOf evaluates publication eligibility (batch status, ancestor eligibility) NOW, not as of the
-// cutoff; only available_at and period_end are cut off. A batch finalized after the cutoff therefore still contributes.
+// Historical reads select only batches finalized by the cutoff, then verify their receipts.
+// No migration currently freezes ingest_batches.finished_at after terminal status; a service-role edit could rewrite history.
 import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
 import type {MacroDb} from './db';
 import {monthEnd} from './freshness';
 import type {MacroObservationRef,MacroReadApi,MacroSnapshotRow} from './judgment-contract';
 import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime,regionWeights} from './regime';
 import {buildRegimeInput} from './snapshots';
+import {verifyHistoricalBatches} from './regime-selection';
 import type {ObservationRow,Region,SnapshotRecord} from './types';
 
 export const MAX_SNAPSHOTS_PAGE=200;
@@ -58,9 +59,9 @@ export async function snapshotAvailableAt(db:MacroDb,snapshot:Pick<SnapshotRecor
  for(const r of rows)if(best===null||Date.parse(r.available_at)>Date.parse(best))best=r.available_at;
  return best;
 }
-/** judgments: whether stored regimes are read (default MACRO_JUDGMENTS_ENABLED === '1'; 第 6 稿 P1-2). */
+/** judgments: whether stored regimes are read (default false; callers pass the flag explicitly; 第 6 稿 P1-2). */
 export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadApi{
- const judgments=opts.judgments??process.env.MACRO_JUDGMENTS_ENABLED==='1';
+ const judgments=opts.judgments??false;
  return {
   async observation(observationId){
    if(typeof observationId!=='string')return null;
@@ -95,7 +96,11 @@ export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadA
    const m=PERIOD_RE.exec(referencePeriod);
    if(!m)throw new Error('invalid_reference_period');
    if(!CUTOFF_RE.test(cutoff)||!Number.isFinite(Date.parse(cutoff)))throw new Error('invalid_cutoff');
-   const built=await buildRegimeInput(db,region as Region,{asOf:cutoff,periodEndLte:monthEnd(Number(m[1]),Number(m[2]))});
+   let built:Awaited<ReturnType<typeof buildRegimeInput>>;
+   try{built=await buildRegimeInput(db,region as Region,{asOf:cutoff,periodEndLte:monthEnd(Number(m[1]),Number(m[2]))});}
+   catch(e){if(e instanceof Error&&e.message==='historical_cutoff_unsupported')throw new MacroUnavailable('historical_cutoff_unsupported');throw e;}
+   try{await verifyHistoricalBatches(built,cutoff,db.observationsByIds.bind(db),db.batchFinishedAt.bind(db));}
+   catch(e){if(e instanceof Error&&e.message==='historical_cutoff_unsupported')throw new MacroUnavailable('historical_cutoff_unsupported');throw e;}
    const regime=judgments?classifyRegime(built.input).regime:null;        // judgments disabled: no classification (regime = null)
    return {regime,observation_refs:built.observations.map(toRef),catalog:{version:CATALOG_VERSION,weights:regionWeights(region as Region),rules_version:RULES_VERSION}};
   },

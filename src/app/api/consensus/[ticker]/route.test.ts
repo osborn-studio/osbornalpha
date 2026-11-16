@@ -1,32 +1,31 @@
-// Consensus fallback behavior after removing mock broker reports (spec §9.4).
+// src/app/api/consensus/[ticker]/route.test.ts
 import {beforeEach,describe,expect,it,vi} from 'vitest';
-const mocks=vi.hoisted(()=>({configured:vi.fn(),fetch:vi.fn()}));
+
+const mocks=vi.hoisted(()=>({configured:vi.fn(),reportRc:vi.fn(),stub:vi.fn()}));
 vi.mock('@/lib/data/sources/tushare-cached',async()=>{
- class TushareError extends Error{constructor(public code:number,msg:string){super(msg);}}
- return {isTushareConfigured:mocks.configured,fetchTushareReportRc:mocks.fetch,TushareError};
+ const {TushareError}=await vi.importActual<typeof import('@/lib/data/sources/tushare')>('@/lib/data/sources/tushare');
+ return {isTushareConfigured:mocks.configured,fetchTushareReportRc:mocks.reportRc,TushareError};
 });
+vi.mock('@/lib/data/mock',()=>({getStockOrStub:mocks.stub}));
 import {GET} from './route';
-import {TushareError} from '@/lib/data/sources/tushare-cached';
+import {TushareError} from '@/lib/data/sources/tushare';
 
-const call=(t:string)=>GET(new Request(`http://localhost/api/consensus/${t}`),{params:Promise.resolve({ticker:t})});
-beforeEach(()=>{vi.clearAllMocks();mocks.configured.mockReturnValue(false);});
+const get=(t:string)=>GET(new Request(`https://alpha.example/api/consensus/${t}`),{params:Promise.resolve({ticker:t})});
 
-describe('GET /api/consensus/[ticker] without the mock fallback (spec §9.4)',()=>{
- it('returns source none for tickers whose mock stub has broker reports',async()=>{
-  for(const t of ['00700.HK','NVDA','600519.SH']){
-   const res=await call(t);
-   expect(res.status).toBe(200);expect(await res.json()).toEqual({source:'none',ticker:t,consensus:null});
-  }
+describe('GET /api/consensus/[ticker] (decision D: no mock fallback)',()=>{
+ beforeEach(()=>{vi.clearAllMocks();mocks.stub.mockReturnValue({broker_reports:[{target_price:100}]});});
+ it('non-A-share or no token → {source:none, consensus:null}; the mock universe is never read',async()=>{
+  mocks.configured.mockReturnValue(false);
+  for(const t of ['AAPL','600519.SH'])expect(await (await get(t)).json()).toEqual({source:'none',ticker:t,consensus:null});
+  expect(mocks.stub).not.toHaveBeenCalled();
  });
- it('falls to none (not mock) on a Tushare error or zero usable reports',async()=>{
+ it('Tushare with zero usable reports or a TushareError → none; other errors → 502',async()=>{
   mocks.configured.mockReturnValue(true);
-  mocks.fetch.mockRejectedValueOnce(new TushareError(40203,'quota'));
-  expect((await (await call('600519.SH')).json()).source).toBe('none');
-  mocks.fetch.mockResolvedValueOnce([]);
-  expect((await (await call('600519.SH')).json()).source).toBe('none');
- });
- it('keeps 502 for unexpected errors',async()=>{
-  mocks.configured.mockReturnValue(true);mocks.fetch.mockRejectedValueOnce(new Error('boom'));
-  expect((await call('600519.SH')).status).toBe(502);
+  mocks.reportRc.mockResolvedValue([]);
+  expect((await (await get('600519.SH')).json()).source).toBe('none');
+  mocks.reportRc.mockRejectedValue(new TushareError(1,'quota'));
+  expect((await (await get('600519.SH')).json()).source).toBe('none');
+  mocks.reportRc.mockRejectedValue(new Error('boom'));
+  expect((await get('600519.SH')).status).toBe(502);
  });
 });

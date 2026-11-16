@@ -123,3 +123,24 @@
 | R4-5 `promotionDue` 漏重试 | implemented per Codex's prescribed fix (round 4), not re-audited | §4.11 (a)(b) 合并为"活动候选 `status in ('confirmed','promoted')` 且无 `pub_gen=pubGen and state in ('staged','published')` 行"；保留 (c)；新增 (d) 物化标记 |
 | R4-6 `storedDue` 残留 attempts 过滤 | implemented per Codex's prescribed fix (round 4), not re-audited | §7.3 去掉过滤；claim 返回 false 即跳过该文档全部写入 |
 | R4-7 发布后物化丢失 | implemented per Codex's prescribed fix (round 4), not re-audited | §7.7 第 0 步 `needs_materialization`；空运行退出前物化；§4.9 新表 `hk_materialization_due` 由 `publish_hk_run` 原子置位、`clear_materialization_due` 修订号校验后清除；`promotionDue` 条件 (d) |
+
+## 第五轮（06，2026-11-06，增量 + 落地代码核对）
+
+报告：`06-codex-round5.md`（提示词 `06-codex-round5-prompt.md`）。结论 "not ready"，13 项（R5-1–R5-13；P1 ×8，P2 ×4，P3 ×1）。第 6 稿按 Codex 给定修法逐条落入（规格 §0 列出每项位置），未再跑第六轮；实施计划的 Codex 审计轮次会覆盖这些修订。
+
+| # | 决定 | 第 6 稿处理 |
+|---|---|---|
+| R5-1 stage_facts 返回数 | ACCEPT | §7.7 第 1–2 步：`fact_id` 由 `plan.inserts` ∪ 快照推出，返回数校验，`plan_inconsistent` |
+| R5-2 HK 市场约束与类型 | ACCEPT | §4.9 约束扩展四表 + source/origin；`facts-port.ts`；`ensure_hk_fact_scope` |
+| R5-3 HK 物化不可行 | ACCEPT | 删除物化标记与调用；接口请求 §16 |
+| R5-4 公共路由拒绝 HK | ACCEPT | `GET /api/citations?factId=`；样例 3/9 改写 |
+| R5-5 跨批次 abandonRun | ACCEPT | §7.7 第 0 步 a/b/c |
+| R5-6 filings 触发器冲突 | ACCEPT | `filing_documents` + `bind_filing_documents`；US/CN 绑定列为后续 |
+| R5-7 expected_rev | ACCEPT | `publish_hk_run` 必传；`stale_plan` 处理 |
+| R5-8 精确十进制 | ACCEPT | §7.6 |
+| R5-9 时间戳 | ACCEPT | `20261108090000/091000` |
+| R5-10 INFO_CODES | ACCEPT | 复用 |
+| R5-11 scope 行 | ACCEPT | `ensure_hk_fact_scope` |
+| R5-12 HK 隔离裁决 | ACCEPT | `resolve_hk_facts_quarantine` + 专用路由 + cron 收尾 |
+| R5-13 零输出代激活 | ACCEPT | `promotionDue` 条件 (d) |
+| 补：18 概念未列出 | commander | §7.5 第 4 条表格 |

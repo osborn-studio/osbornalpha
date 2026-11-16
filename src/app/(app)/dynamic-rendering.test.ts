@@ -13,6 +13,7 @@ const SERVER_PAGES = [
   'briefs/[date]/page.tsx',
   'copilot/page.tsx',
   'skills/page.tsx',
+  'stock/[ticker]/page.tsx',
 ];
 
 describe('auth-gated server pages are force-dynamic', () => {

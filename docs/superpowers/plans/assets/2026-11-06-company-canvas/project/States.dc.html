@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司页 缺失与特殊状态</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1440px; height: 2200px; padding: 32px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-content: start">
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">有行情无发行人 · quote, no issuer</div>
+    <div class="row"><span class="h3">NVTS</span><span class="tiny">页头只有行情（若决策 J 例外）</span></div>
+    <div class="callout">该证券尚未登记到发行人主数据（规格一），无披露事实。<span class="fog">Not yet registered in issuer master data.</span></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">发行人无事实 · no facts</div>
+    <div class="callout">尚无披露事实（不在同步范围或尚未同步）。<span class="fog">No disclosure facts yet.</span></div>
+    <div class="row"><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><a href="#" style="font-size: 13px">/admin/dq 查看同步范围 →</a></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">港股 · HK only</div>
+    <div class="row"><span class="chip m">00700.HK</span><span class="h3">腾讯控股</span></div>
+    <div class="callout">港股披露事实待文档管道（F3）。<span class="fog">HK filings await the document pipeline (F3).</span> 不拿第三方指标顶替。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">A 股引用待挂接 · citation pending</div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+      <div><div class="tiny" style="margin-bottom: 6px">公共端点（不看会话）</div><div class="card" style="padding: 10px; background: #141417; display: flex; justify-content: space-between"><span class="cap">营业收入 2025-09-30</span><span class="wh">— 引用待挂接</span></div></div>
+      <div><div class="tiny" style="margin-bottom: 6px">admin 路由 /api/admin/companies/…</div><div class="card" style="padding: 10px; background: #141417; display: flex; justify-content: space-between"><span class="cap">营业收入 2025-09-30</span><span><span class="m">1,309.04</span><span class="bdg warn">!</span></span></div></div>
+    </div>
+    <div class="tiny">变体：linked 但该值无 locator.pdf → “— 待逐值核对”。文件视图显示灰徽标，页头计数 pending +1。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">来源记录不完整 · evidence incomplete</div>
+    <div class="row" style="padding: 8px 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px; font-size: 12px"><span class="dot warn"></span><span class="m">4</span> 格来源记录不完整（证据 DTO 缺失或 codeVersion 为空），不显示数值</div>
+    <div class="card" style="padding: 10px; background: #141417; display: flex; justify-content: space-between"><span class="cap">归母净利润 2023-12-31</span><span class="wh">来源记录不完整</span></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">回放早于首个文件 · replay before first filing</div>
+    <div class="row" style="padding: 8px 12px; border: 1px solid #ca8a04; border-radius: 6px; background: rgba(202,138,4,.12); font-size: 13px">回放：截至 <span class="m">2001-06-30</span> 可见的披露<a class="btn sm" href="#" style="margin-left: auto">回到最新</a></div>
+    <div class="callout">截至该日尚无可见披露。<span class="fog">No disclosures visible as of this date.</span></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">概念缺失 · concept missing</div>
+    <div class="row"><span class="cap">研发费用 2025-03-31</span><span class="m fog" style="margin-left: auto">—</span></div>
+    <div class="card" style="padding: 8px 10px; background: #23232a; font-size: 12px; align-self: flex-end">该期无此概念的可见披露</div>
+    <div class="tiny">title 固定，不推断原因。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">读取被截断 · truncated</div>
+    <div class="errcard" style="display: flex; flex-direction: column; gap: 6px"><div class="row"><span class="dot err"></span><strong>读取被截断，未显示部分数据</strong></div><span class="cap">truncated = true：整张网格不渲染，不显示部分数据。缩小期数后重试。</span><div class="row"><button class="btn sm">改为 8 期</button><button class="btn sm ghost">重试</button></div></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">规格二路由 5xx · route error</div>
+    <div class="errcard row"><span class="dot err"></span><span>报表加载失败（internal）。页头仍显示发行人。不回退到其他数据源。</span><button class="btn sm" style="margin-left: auto">重试 Retry</button></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">loading · 网格骨架</div>
+    <div style="display: grid; grid-template-columns: 160px repeat(6, minmax(0, 1fr)); gap: 6px">
+      <div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div>
+      <div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div>
+      <div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div><div class="sk" style="height: 18px"></div>
+    </div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">判断视图 · F4 落地前</div>
+    <div class="callout">判断层（F4）尚未上线：这里只渲染 F4 登记、可结算的判断卡。<span class="fog">Judgments appear once F4 ships.</span> 不显示 recommendations。</div>
+    <div class="tiny">F4 上线后按 JudgmentCard 渲染；客户端再加一道失败关闭：calibration ≠ calibrated、lifecycle ∉ {open, settled} 或 percent 非有限数 → 不显示百分比。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">判断视图 · 回放读取失败</div>
+    <div class="errcard">回放读取失败：响应 view ≠ as_known 或 asOf 与请求不符，不渲染判断区。</div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">跟踪视图 · 回放</div>
+    <div class="row"><button class="btn sm dis" disabled>标记本页已读</button><span class="cap">回放模式不记录已读 · Read receipts are off in replay</span></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">模型观点 / 信号 / 持仓 · 回放</div>
+    <div class="row" style="padding: 10px 12px; border: 1px dashed rgba(255,255,255,.2); border-radius: 6px"><span class="h3">不支持回放</span><span class="cap">Replay not supported · 显示的是今天的内容</span><a class="btn sm" href="#" style="margin-left: auto">回到最新</a></div>
+  </section>
+
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+    <div class="lbl-state">跟踪上限 · watch limit</div>
+    <div class="errcard">已达跟踪上限 200 家（watch_limit）。先取消跟踪其他公司。</div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

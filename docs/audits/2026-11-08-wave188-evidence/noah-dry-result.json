@@ -1,0 +1,17 @@
+{
+  "at": "2026-11-08T15:55:00.772Z",
+  "dryRun": true,
+  "status": "dry_run",
+  "streams": [
+    {
+      "issuerId": "16a8c8be-c550-43d9-9e73-d6da958aa394",
+      "outcome": "planned",
+      "events": 59,
+      "evidence": {
+        "indexed": 709,
+        "facts": 709
+      }
+    }
+  ],
+  "errorCodes": []
+}

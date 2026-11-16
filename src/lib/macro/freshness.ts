@@ -6,7 +6,9 @@
 import {freshnessOf} from '../dq/freshness';
 import type {FreshnessStatus} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
-import type {MacroSeriesDef,PeriodKind,Region,Timeliness} from './types';
+import type {MacroSeriesDef,Region,Timeliness} from './types';
+import {nextPeriodEnd} from './regime-selection';
+export {monthEnd,shiftMonthEnd,nextPeriodEnd} from './regime-selection';
 
 const DAY=86_400_000;
 const GRACE_DAYS=3;
@@ -16,19 +18,6 @@ function parseDate(d:string):number{
  const t=Date.parse(`${d}T00:00:00Z`);
  if(!Number.isFinite(t)||new Date(t).toISOString().slice(0,10)!==d)throw new Error(`invalid_date:${d}`);
  return t;
-}
-const iso=(t:number)=>new Date(t).toISOString().slice(0,10);
-/** Last day of month `month1` (1–12). */
-export const monthEnd=(year:number,month1:number):string=>iso(Date.UTC(year,month1,0));
-/** Month end `months` calendar months away from the month containing `periodEnd` (negative = earlier). */
-export function shiftMonthEnd(periodEnd:string,months:number):string{
- parseDate(periodEnd);
- const idx=Number(periodEnd.slice(0,4))*12+Number(periodEnd.slice(5,7))-1+months;
- return monthEnd(Math.floor(idx/12),(idx%12)+1);
-}
-export function nextPeriodEnd(period:PeriodKind,periodEnd:string):string{
- if(period==='day')return iso(parseDate(periodEnd)+DAY);
- return shiftMonthEnd(periodEnd,period==='month'?1:3);
 }
 /** current | late | missing | n/a. Repeated fetches of an old value never make it current: only period_end counts. */
 export function releaseTimeliness(def:Pick<MacroSeriesDef,'nativeFrequency'|'period'|'releaseLagDays'>,latestPeriodEnd:string|null,today:string):Timeliness{

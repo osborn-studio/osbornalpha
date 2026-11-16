@@ -1,12 +1,13 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
+import { loginReturnDestination } from '@/lib/auth/return-destination';
 import { isScannerPath } from '@/lib/security/scanner-paths';
 
 /**
  * Auth gate. The product is NOT publicly browsable — only the marketing landing
  * (`/`) and the auth pages are public; everything else requires a Supabase
  * session. Unauthenticated requests to protected paths are redirected to /login;
- * authenticated users hitting /login or /register are sent to /today.
+ * authenticated users hitting /login or /register are sent to /macro.
  * When Supabase env vars are absent (local dev), the gate is disabled so the app
  * still runs. The (app)/layout.tsx server guard is the belt-and-suspenders backup.
  */
@@ -57,6 +58,9 @@ export async function middleware(request: NextRequest) {
     });
   }
 
+  // Public static web manifest: browsers fetch it without a session.
+  if (rawPathname === '/manifest.json') return NextResponse.next({ request });
+
   const isEnPrefixed = EN_PREFIX.test(rawPathname);
   const pathname = isEnPrefixed ? stripEnPrefix(rawPathname) : rawPathname;
 
@@ -65,12 +69,17 @@ export async function middleware(request: NextRequest) {
   // path. Locale preference is carried by the NEXT_LOCALE cookie, not the URL,
   // for anything behind the auth gate.
   if (isEnPrefixed && !isPublic(pathname)) {
-    return NextResponse.redirect(new URL(pathname, request.url));
+    return NextResponse.redirect(new URL(loginReturnDestination(pathname + request.nextUrl.search), request.url));
   }
 
   const response = isEnPrefixed
     ? rewriteWithLocale(request, pathname, 'en')
     : NextResponse.next({ request });
+
+  // COMPANY: public composed company routes are session-independent (shared-cache safe): the
+  // gate must not run getUser() (it may Set-Cookie). /api/admin/companies and /api/tracking are NOT exempt.
+  if (pathname === '/api/companies' || pathname.startsWith('/api/companies/')) return response;
+  // END COMPANY
 
   const sbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const sbKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -91,11 +100,11 @@ export async function middleware(request: NextRequest) {
   // Note: `pathname` here is already the stripped (unprefixed) path, so the
   // `next` query param never carries an /en prefix into /login.
   if (user && (pathname === '/login' || pathname === '/register')) {
-    return NextResponse.redirect(new URL('/today', request.url));
+    return NextResponse.redirect(new URL('/macro', request.url));
   }
   if (!user && !isPublic(pathname)) {
     const url = new URL('/login', request.url);
-    url.searchParams.set('next', pathname);
+    url.searchParams.set('next', loginReturnDestination(pathname + request.nextUrl.search));
     return NextResponse.redirect(url);
   }
   return response;

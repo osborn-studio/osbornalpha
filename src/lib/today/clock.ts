@@ -1,7 +1,7 @@
 /**
  * Multi-market trading-hours clock (A/HK/US) — pure functions, no I/O.
  *
- * Drives the /today page's market clock strip. All 判定 based on each
+ * Provides market-phase calculations for kline reliability. All 判定 based on each
  * exchange's local wall-clock time (IANA tz via Intl), so it is correct
  * whether the process runs in UTC (Vercel) or CST (local dev), and US
  * DST transitions are handled automatically.

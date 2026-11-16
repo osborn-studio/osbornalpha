@@ -1,0 +1,4 @@
+Read-only. Commit ba92c1e fixes review findings on F3 Task 1 (migration one `supabase/migrations/20261108090000_disclosure_documents.sql` + `src/lib/documents/documents.integration.test.ts`). Findings: `docs/audits/2026-11-06-document-pipeline/task01-codex-review.md`, `task01-codex-challenge.md`, plus Opus findings (auto-decide NULL concept; for share on approval/inheritance reads; duplicate issuer ids in reconcile; for no key update on disclosure_documents). Diff: `git show ba92c1e`.
+1. For each finding (review P2 x2, challenge F1–F5) say CLOSED / NOT CLOSED.
+2. Adversarially look for regressions the fix introduced (e.g. candidate_citation_ids change now rejecting valid shapes for non-financial kinds; cursor_regression blocking legitimate completion; renew functions; ec_decision_shape coalesce rejecting valid rows).
+Output `| ID | CLOSED? | note |`, then any new `| ID | Sev | file:line | defect | fix |`, then `VERDICT: pass` or `VERDICT: fail (N P1, M P2)`.

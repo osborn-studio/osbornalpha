@@ -1,21 +1,19 @@
 import { NextResponse } from 'next/server';
 import { isTushareConfigured, fetchTushareReportRc, TushareError } from '@/lib/data/sources/tushare-cached';
 import { deriveConsensus } from '@/lib/stocks/consensus';
-// FOREIGN: mock imports removed (spec §9.4)
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 3600; // 1h cache — mirrors /api/financials
+export const revalidate = 3600; // 1h cache
 
 interface Ctx { params: Promise<{ ticker: string }> }
 
 /**
  * GET /api/consensus/[ticker]
  *
- * Broker consensus target price, with graceful degradation:
+ * Broker consensus target price from a licensed source only (company-research spec §9.4, decision D):
  *   1. A-share + TUSHARE_TOKEN configured → report_rc (real broker research)
- *   2. Otherwise (non-A-share, no token, Tushare error, or Tushare returned no
- *      usable reports) → { source: 'none', consensus: null }.
- *      FOREIGN: library reports now come from /api/broker-research/by-ticker.
+ *   2. Anything else (non-A-share, no token, Tushare error, no usable reports) → { source: 'none', consensus: null }
+ * The former mock fallback (fabricated broker_reports) is closed.
  */
 export async function GET(_req: Request, { params }: Ctx) {
   const { ticker: raw } = await params;
@@ -26,10 +24,7 @@ export async function GET(_req: Request, { params }: Ctx) {
     try {
       const reports = await fetchTushareReportRc(ticker);
       const consensus = deriveConsensus(reports);
-      // Zero usable reports (no broker coverage) → fall through to source none below.
-      if (consensus !== null) {
-        return NextResponse.json({ source: 'tushare', ticker, consensus });
-      }
+      if (consensus !== null) return NextResponse.json({ source: 'tushare', ticker, consensus });
     } catch (e: any) {
       if (!(e instanceof TushareError)) {
         return NextResponse.json(
@@ -37,11 +32,7 @@ export async function GET(_req: Request, { params }: Ctx) {
           { status: 502 }
         );
       }
-      // fall through to source none below
     }
   }
-
-  // FOREIGN ↓ no mock fallback (spec §9.4)
-  // FOREIGN ↑
   return NextResponse.json({ source: 'none', ticker, consensus: null });
 }

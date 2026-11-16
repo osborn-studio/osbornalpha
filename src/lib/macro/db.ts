@@ -1,5 +1,5 @@
 // src/lib/macro/db.ts
-// MacroDb (plan shared contract; spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4…P2-4): the only way macro
+// MacroDb (plan shared contract; spec §4.3, §0.2 M10, M16, M24, N2, N3; 第 4 稿 P1-4…P2-4) is the only way macro
 // code touches the database. supabaseMacroDb writes through the service-role client's RPCs (no role has table
 // writes) and reads through the anon client, so RLS applies (ok observations only); publish state, chunk
 // receipts, ingest runs, quarantine members, judgments (regimeOf: macro_regime_results is service-only, 第 6 稿 P1-2) and the
@@ -10,11 +10,15 @@
 // MacroDbError codes; any other failure is rpc_failed with the original message (invalid_value_text, member_ineligible, chunk_total_mismatch,
 // chunk_not_processing, not_quarantined, evidence_mismatch, catalog_version_conflict, constraint texts, …). The new RPCs are not in
 // Database['public']['Functions']; a narrow structural client calls them (as src/lib/facts/db.ts).
+// Counted strategy histories use bounded parallel pages; id chunks preserve result order.
 import type {SupabaseClient} from '@supabase/supabase-js';
+import {MacroDbError,selectEligibleHistoryAsOf} from './regime-selection';
+export {MacroDbError,selectEligibleHistoryAsOf} from './regime-selection';
 import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceObject,FinalizeResult,FinishProgress,IngestRunState,Locator,ObservationRow,ObservationStatus,ObservationWrite,PublishInput,QuarantineMember,RegimeRecord,Region,Retrieval,SnapshotRecord,WriteResult} from './types';
 
-export class MacroDbError extends Error{constructor(readonly code:'stale_publisher'|'invalid_manifest'|'quota_exceeded'|'not_found'|'truncated'|'already_resolved'|'reject_only'|'fenced'|'quarantine_closed'|'rpc_failed',message?:string){super(message??code);this.name='MacroDbError';}}
 export interface MacroDb{
+ /** Finalization receipts for candidate observations; null means the cutoff cannot be proven. service */
+ batchFinishedAt(batchIds:string[]):Promise<Record<string,string|null>>;
  /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
  upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
  /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id.
@@ -69,6 +73,8 @@ export interface MacroDb{
  /** Highest eligible version per period, ascending, paged to completion via RPC macro_eligible_history (throws truncated
   *  beyond maxRows periods). Publication and derivation read through this. service (第 4 稿 P1-5/P1-7) */
  eligibleHistory(seriesId:string,opts:{from?:string;to?:string;asOf?:string;includeBatch?:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
+ /** Point-in-time eligible vintages, with each candidate and ancestor batch finalized by cutoff. service. */
+ eligibleHistoryAsOf(seriesId:string,opts:{to:string;asOf:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
  /** Highest ok version per period, ascending period_end, paged to completion (throws truncated beyond maxRows). anon. */
  seriesHistory(seriesId:string,opts:{from?:string;to?:string;asOf?:string;maxRows:number}):Promise<import('./types').ObservationRow[]>;
  /** All ok versions of one series (revision history for the drawer). anon. */
@@ -179,7 +185,11 @@ export function publishArgs(i:PublishInput){
 /** Interval literal for the lease RPC (ms precision; PostgreSQL parses 'N milliseconds'). */
 const msInterval=(ms:number)=>`${Math.max(1,Math.round(ms))} milliseconds`;
 
-interface Res{data:unknown;error:PgErrorLike|null}
+// MACRO-P3-LATENCY
+/** Conservative per-adapter HTTP budget for counted/RLS history reads, not a measured latency optimum. */
+export const HISTORY_PAGE_CONCURRENCY=2;
+interface Res{data:unknown;error:PgErrorLike|null;count?:number|null}
+// /MACRO-P3-LATENCY
 // The query builder is left untyped on purpose (same as src/lib/facts/db.ts): the hand-maintained
 // Database type lacks the Relationships/Views that supabase-js inference now needs.
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<Res>;from:(table:string)=>any}
@@ -187,6 +197,15 @@ type Query=PromiseLike<Res>&{range:(from:number,to:number)=>Query};
 
 export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClient}):MacroDb{
  const admin=clients.admin as unknown as NarrowClient;const anon=clients.anon as unknown as NarrowClient;
+ // One budget per adapter: first pages, column histories and policy histories all compete here.
+ // Transferring a released permit directly to the next waiter prevents new callers overtaking it.
+ let historyPages=0;const historyWaiters:(()=>void)[]=[];
+ const historyPage=async(q:Query):Promise<Res>=>{
+  if(historyPages>=HISTORY_PAGE_CONCURRENCY)await new Promise<void>(resolve=>historyWaiters.push(resolve));
+  else historyPages++;
+  try{return await q;}
+  finally{const next=historyWaiters.shift();if(next)next();else historyPages--;}
+ };
  const call=async<T>(c:NarrowClient,fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toMacroDbError(error);return data as T;};
  const rows=async(q:PromiseLike<Res>):Promise<Record<string,unknown>[]>=>{const {data,error}=await q;if(error)throw toMacroDbError(error);return (data??[]) as Record<string,unknown>[];};
  const maybe=async(q:PromiseLike<Res>):Promise<Record<string,unknown>|null>=>{const {data,error}=await q;if(error)throw toMacroDbError(error);return (data??null) as Record<string,unknown>|null;};
@@ -201,7 +220,35 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    if(part.length<size)return out;
   }
  };
+ const asOfReads={
+  async candidates(id:string,o:{to:string;asOf:string},offset:number):Promise<ObservationRow[]>{
+   return (await rows(admin.from('macro_observations').select('*,batch:ingest_batches!inner(status,finished_at)')
+    .eq('series_id',id).eq('status','ok').lte('period_end',o.to).lte('available_at',o.asOf)
+    .in('batch.status',['success','partial']).or(`finished_at.lte.${o.asOf},finished_at.is.null`,{referencedTable:'batch'})
+    .order('period_end',{ascending:false}).order('version',{ascending:false}).range(offset,offset+READ_PAGE-1))).map(observationFromRow);
+  },
+  async observations(ids:string[]):Promise<ObservationRow[]>{
+   const out:ObservationRow[]=[];
+   for(let i=0;i<ids.length;i+=IN_CHUNK)out.push(...(await rows(admin.from('macro_observations').select('*').in('observation_id',ids.slice(i,i+IN_CHUNK)))).map(observationFromRow));
+   return out;
+  },
+  async receipts(ids:string[]):Promise<Record<string,{status:string;finished_at:string|null}>>{
+   const out:Record<string,{status:string;finished_at:string|null}>={};
+   for(let i=0;i<ids.length;i+=IN_CHUNK)for(const r of await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',ids.slice(i,i+IN_CHUNK))))
+    out[String(r.batch_id)]={status:String(r.status),finished_at:r.finished_at==null?null:iso(r.finished_at)};
+   return out;
+  },
+ };
  return {
+  async batchFinishedAt(batchIds){
+   const out:Record<string,string|null>={};
+   for(const id of [...new Set(batchIds)])out[id]=null;
+   for(let i=0;i<batchIds.length;i+=IN_CHUNK){
+    const got=await rows(admin.from('ingest_batches').select('batch_id,status,finished_at').in('batch_id',batchIds.slice(i,i+IN_CHUNK)));
+    for(const r of got)out[String(r.batch_id)]=(r.status==='success'||r.status==='partial')&&r.finished_at!=null?iso(r.finished_at):null;
+   }
+   return out;
+  },
   async upsertCatalog(defs,catalogVersion,rulesVersion){await call(admin,'macro_upsert_catalog',{p_catalog_version:catalogVersion,p_rules_version:rulesVersion,p_defs:defs});},
   async putRetrieval(obj,r,ownerToken){
    return String(await call<string>(admin,'macro_put_retrieval',{p_sha256:obj.sha256,p_object_path:obj.object_path,p_adapter:obj.adapter,p_content_type:obj.content_type,p_byte_length:obj.byte_length,
@@ -291,16 +338,67 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
     after=lastPeriod;
    }
   },
+  async eligibleHistoryAsOf(id,o){
+   if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+   const out:ObservationRow[]=[];let group:ObservationRow[]=[];let offset=0;
+   const flush=async()=>{if(!group.length)return;out.push(...await selectEligibleHistoryAsOf(group,o.asOf,1,asOfReads.observations,asOfReads.receipts));group=[];if(out.length>o.maxRows)throw new MacroDbError('truncated',`eligible_history_asof:${id}:>${o.maxRows}`);};
+   for(;;){
+    const part=await asOfReads.candidates(id,o,offset);
+    for(const candidate of part){if(group.length&&candidate.period_end!==group[0].period_end)await flush();group.push(candidate);}
+    if(part.length<READ_PAGE){await flush();return out.sort((a,b)=>a.period_end.localeCompare(b.period_end));}
+    offset+=READ_PAGE;
+   }
+  },
   async seriesHistory(id,o){
    if(!Number.isInteger(o.maxRows)||o.maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
-   const make=()=>{
-    let q=anon.from('macro_observations').select('*').eq('series_id',id).eq('status','ok');
+   // MACRO-P3-LATENCY
+   const filtered=(q:any)=>{
+    q=q.eq('series_id',id).eq('status','ok');
     if(o.from)q=q.gte('period_end',o.from);
     if(o.to)q=q.lte('period_end',o.to);
     if(o.asOf)q=q.lte('available_at',o.asOf);
+    return q;
+   };
+   const make=(counted=false)=>{
+    const q=filtered(counted?anon.from('macro_observations').select('*',{count:'exact'}):anon.from('macro_observations').select('*'));
     return q.order('period_end',{ascending:true}).order('version',{ascending:true}) as Query;
    };
-   const got=await pageAll(make,o.maxRows+1);
+   const limit=o.maxRows+1;
+   // Page zero and its count share one filtered request / database statement. Later pages stay bounded and concurrent.
+   const countResult=await historyPage(make(true).range(0,Math.min(READ_PAGE,limit)-1));
+   if(countResult.error)throw toMacroDbError(countResult.error);
+   const first=(countResult.data??[]) as Record<string,unknown>[];
+   // The cap counts visible raw vintages. Do not download pages already proven to exceed it; callers may retry a larger cap.
+   // Exact-count cardinalities are our completeness proof, even if PostgREST's page cap is lower
+   // than READ_PAGE. A missing count or short slice must never become a successful prefix.
+   const count=countResult.count;
+   if(typeof count!=='number'||!Number.isSafeInteger(count)||count<0)throw new MacroDbError('rpc_failed','incomplete_series_history');
+   if(count>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
+   const check=(result:Res,expected:number)=>{
+    if(!Array.isArray(result.data)||result.data.length!==expected||
+       (result.count!=null&&result.count!==count))throw new MacroDbError('rpc_failed','incomplete_series_history');
+    return result.data as Record<string,unknown>[];
+   };
+   check(countResult,Math.min(READ_PAGE,count));
+   const starts=Array.from({length:Math.max(0,Math.ceil(count/READ_PAGE)-1)},(_,i)=>(i+1)*READ_PAGE);
+   const pages:Record<string,unknown>[][]=Array(starts.length);let next=0;
+   let failed=false,firstError:unknown;
+   await Promise.all(Array.from({length:Math.min(HISTORY_PAGE_CONCURRENCY,starts.length)},async()=>{
+    try{
+     while(!failed){
+      const index=next++;if(index>=starts.length)return;
+      const from=starts[index],size=Math.min(READ_PAGE,count-from);
+      const result=await historyPage(make().range(from,from+size-1));
+      if(result.error)throw toMacroDbError(result.error);
+      pages[index]=check(result,size);
+     }
+    }catch(error){if(!failed){failed=true;firstError=error;}}
+   }));
+   // Do not leave page workers claiming work after the caller sees a failure. Already admitted
+   // jobs drain normally; no upstream cancellation, retry or partial result is implied.
+   if(failed)throw firstError;
+   const got=[...first,...pages.flat()];
+   // /MACRO-P3-LATENCY
    if(got.length>o.maxRows)throw new MacroDbError('truncated',`series_history:${id}:>${o.maxRows}`);
    return highestPerPeriod(got.map(observationFromRow));
   },
@@ -310,10 +408,12 @@ export function supabaseMacroDb(clients:{admin:SupabaseClient;anon:SupabaseClien
    return got.map(observationFromRow);
   },
   async observationsByIds(ids){
+   // MACRO-P3-LATENCY
    const uniq=[...new Set(ids)];const found=new Map<string,ObservationRow>();
-   for(let i=0;i<uniq.length;i+=IN_CHUNK){
-    for(const r of await rows(anon.from('macro_observations').select('*').in('observation_id',uniq.slice(i,i+IN_CHUNK)).eq('status','ok')))found.set(String(r.observation_id),observationFromRow(r));
-   }
+   const chunks=[] as Promise<Record<string,unknown>[]>[];
+   for(let i=0;i<uniq.length;i+=IN_CHUNK)chunks.push(rows(anon.from('macro_observations').select('*').in('observation_id',uniq.slice(i,i+IN_CHUNK)).eq('status','ok')));
+   for(const part of await Promise.all(chunks))for(const r of part)found.set(String(r.observation_id),observationFromRow(r));
+   // /MACRO-P3-LATENCY
    return uniq.flatMap(id=>{const o=found.get(id);return o?[o]:[];});
   },
   async publishState(region){

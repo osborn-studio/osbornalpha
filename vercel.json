@@ -57,6 +57,34 @@
     {
       "path": "/api/cron/macro-sync",
       "schedule": "30 5 * * *"
+    },
+    {
+      "path": "/api/cron/macro-review",
+      "schedule": "0 6 3 * *"
+    },
+    {
+      "path": "/api/cron/documents-sync?source=hkexnews",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/documents-sync?source=cninfo",
+      "schedule": "20 16 * * *"
+    },
+    {
+      "path": "/api/cron/documents-sync?source=edgar",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/company-digest",
+      "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/judgments-settle",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/judgments-calibrate",
+      "schedule": "0 4 * * 1"
     }
   ]
 }

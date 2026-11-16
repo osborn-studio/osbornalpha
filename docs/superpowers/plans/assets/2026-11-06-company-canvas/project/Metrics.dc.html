@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司页 指标视图</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 2000px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav"><a href="#">首页</a><a class="on" href="#">自选</a><a href="#">雷达</a><a href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 20px">
+    <section class="row" style="gap: 16px">
+      <h1 class="h1">贵州茅台 <span class="en" style="font-size: 16px">Kweichow Moutai</span></h1>
+      <span class="chip ac m">600519.SH ◉</span>
+      <span class="tiny" style="margin-left: auto">最近财期 <span class="m" style="color: #fafafa">2025-09-30</span> · facts.cn <span class="dot ok"></span> fresh</span>
+    </section>
+    <nav class="tabs"><a href="Overview.dc.html">概览</a><a href="Main.dc.html">报表</a><a class="on" href="#">指标</a><a href="Filings.dc.html">文件</a><a href="#">跟踪</a><a href="#">判断</a><a href="#">模型观点（未校准）</a><a href="#">信号</a><a href="#">持仓</a></nav>
+    <div class="row" style="gap: 12px">
+      <div class="seg"><button class="on">8</button><button>20</button><button>40</button></div>
+      <div class="seg"><button>原值</button><button>百万</button><button class="on">亿</button></div>
+      <span class="chip">读物化表 · basedOnRev <span class="m">rev 4182</span> · formula_version <span class="m">m-2</span></span>
+      <span class="tiny" style="margin-left: auto">比率两位小数；货币按缩放；shares 原值</span>
+    </div>
+    <section class="card scrollx" style="padding: 0">
+      <table class="t">
+        <thead><tr>
+          <th style="padding-left: 16px; min-width: 240px">指标 Metric</th>
+          <th class="n"><span class="m" style="color: #fafafa">2025-09-30</span><span class="en">9M</span></th><th class="n"><span class="m" style="color: #fafafa">2025-06-30</span><span class="en">6M</span></th><th class="n"><span class="m" style="color: #fafafa">2025-03-31</span><span class="en">3M</span></th><th class="n"><span class="m" style="color: #fafafa">2024-12-31</span><span class="en">12M</span></th><th class="n"><span class="m" style="color: #fafafa">2024-09-30</span><span class="en">9M</span></th><th class="n"><span class="m" style="color: #fafafa">2024-06-30</span><span class="en">6M</span></th>
+        </tr></thead>
+        <tbody>
+          <tr><td style="padding-left: 16px"><button class="src" style="font-family: inherit; color: #fafafa">毛利率</button><span class="en">gross_margin</span></td><td class="n wh">— 待挂接</td><td class="n"><button class="src">91.86%</button></td><td class="n"><button class="src">92.05%</button></td><td class="n"><button class="src">91.93%</button></td><td class="n"><button class="src">91.81%</button></td><td class="n"><button class="src">91.94%</button></td></tr>
+          <tr><td style="padding-left: 16px"><button class="src" style="font-family: inherit; color: #fafafa">营收同比</button><span class="en">revenue_yoy</span></td><td class="n wh">— 待挂接</td><td class="n"><button class="src">9.16%</button></td><td class="n"><button class="src">10.67%</button></td><td class="n"><button class="src">15.66%</button></td><td class="n"><button class="src">16.91%</button></td><td class="n"><button class="src">17.76%</button></td></tr>
+          <tr><td style="padding-left: 16px"><button class="src" style="font-family: inherit; color: #fafafa">归母净利同比</button><span class="en">net_income_yoy</span></td><td class="n wh">— 待挂接</td><td class="n"><button class="src">8.89%</button></td><td class="n"><button class="src">11.56%</button></td><td class="n"><button class="src">15.38%</button></td><td class="n"><button class="src">15.04%</button></td><td class="n"><button class="src">15.88%</button></td></tr>
+          <tr><td style="padding-left: 16px"><button class="src" style="font-family: inherit; color: #fafafa">单季营收</button><span class="en">q_single_revenue</span></td><td class="n wh">— 待挂接</td><td class="n"><button class="src">396.49</button></td><td class="n"><button class="src">514.43</button></td><td class="n"><button class="src">510.23</button></td><td class="n"><button class="src">396.75</button></td><td class="n"><button class="src">369.66</button></td></tr>
+          <tr><td style="padding-left: 16px"><button class="src" style="font-family: inherit; color: #fafafa">TTM 归母净利</button><span class="en">ttm_net_income_parent</span></td><td class="n wh">— 待挂接</td><td class="n"><button class="src">893.21</button></td><td class="n"><button class="src">880.44</button></td><td class="n"><button class="src">862.28</button></td><td class="n"><button class="src">834.47</button></td><td class="n" title="缺输入、单位不一致、分母为 0、期间匹配不唯一或版本不一致（规格二 §8）"><span class="wh">未产出</span></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <div class="tiny">行点击 → 公式抽屉（公式、basis、inputUnit、inputs 可逐个点进披露历史）。“未产出”的说明固定，不推断具体原因。</div>
+
+    <div style="display: flex; align-items: center; gap: 12px; margin-top: 24px">
+      <hr class="hr" style="flex: 1">
+      <span class="fog" style="font-size: 12px">以下不是事实 · Below is a model, not facts</span>
+      <hr class="hr" style="flex: 1">
+    </div>
+
+    <section class="card pad" aria-label="估值模型区" style="background: #141417; display: flex; flex-direction: column; gap: 16px">
+      <div class="row"><h2 class="h2">估值模型 <span class="en">Valuation model</span></h2><span class="chip">假设含模型 / 默认 / 用户估计；不是事实</span></div>
+      <p class="cap" style="margin: 0">进入时不运行。先确认股权桥输入：三项都有 fact 或 user 来源才出现“运行”。</p>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px">
+        <div class="card pad" style="display: flex; flex-direction: column; gap: 14px">
+          <div class="lbl-state">状态 A · 缺一项</div>
+          <div class="row" style="justify-content: space-between"><span>基期收入 Base revenue</span><span class="row"><button class="src">1,741.44 亿</button><span class="chip sq">fact</span><a href="#" style="font-size: 12px">FY2024 年报 ↗</a></span></div>
+          <div class="row" style="justify-content: space-between"><span>在外股数 Shares diluted</span><span class="row"><button class="src">12.56 亿股</button><span class="chip sq">fact</span><a href="#" style="font-size: 12px">BS 末行 ↗</a></span></div>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <div class="row" style="justify-content: space-between"><span>净债务 Net debt</span><span class="chip warn">缺事实</span></div>
+            <div class="field"><label for="nd">无披露事实，需手工填写并确认 · 单位 亿元</label><input id="nd" class="inp m" placeholder="例如 -1,500.00"></div>
+            <div class="help">填写即成为 user 来源，在估值结果里标注“用户估计”。</div>
+          </div>
+          <button class="btn pri dis" disabled style="align-self: flex-start">运行 Run</button>
+        </div>
+        <div class="card pad" style="display: flex; flex-direction: column; gap: 14px">
+          <div class="lbl-state">状态 B · 可运行</div>
+          <div class="row" style="justify-content: space-between"><span>基期收入</span><span class="row"><button class="src">1,741.44 亿</button><span class="chip sq">fact</span></span></div>
+          <div class="row" style="justify-content: space-between"><span>在外股数</span><span class="row"><button class="src">12.56 亿股</button><span class="chip sq">fact</span></span></div>
+          <div class="row" style="justify-content: space-between"><span>净债务</span><span class="row"><span class="m">-1,500.00 亿</span><span class="chip ac">user 用户估计</span><button class="btn ghost sm">修改</button></span></div>
+          <button class="btn pri" style="align-self: flex-start">运行 Run</button>
+          <div class="tiny">收入行由事实种子；LLM 试图改写收入行时丢弃并提示（dcf_revenue_line_rejected）。</div>
+        </div>
+      </div>
+      <div class="callout" style="font-size: 12px">回放模式：本区整块隐藏，替换为“回放模式下不运行估值模型 · Valuation model is not run in replay”。</div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2000}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

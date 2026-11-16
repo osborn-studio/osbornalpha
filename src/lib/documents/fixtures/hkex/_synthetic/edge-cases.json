@@ -1,0 +1,1821 @@
+{
+ "extractor_version": "docs-extract/1.0",
+ "table_algo_version": "tables/1.0",
+ "code_version": "synthetic",
+ "content_sha256": "632c117a57fa35e5a7a0218b29b810a65e362e9c2ffef22a4b34ed7b45ee69af",
+ "has_text_layer": true,
+ "pages": [
+  {
+   "page_no": 1,
+   "width": 595,
+   "height": 842,
+   "text": "損益表\n截至二零二五年十二月三十一日止年度\n二零二五年 二零二四年\n人民幣千元 人民幣千元\n收益 100 90\n年內溢利 10 9",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 68,
+     "text": "損益表",
+     "char_start": 0,
+     "char_end": 3,
+     "items": [
+      {
+       "text": "損益表",
+       "x0": 50,
+       "x1": 68,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 3
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 50,
+     "x1": 152,
+     "text": "截至二零二五年十二月三十一日止年度",
+     "char_start": 4,
+     "char_end": 21,
+     "items": [
+      {
+       "text": "截至二零二五年十二月三十一日止年度",
+       "x0": 50,
+       "x1": 152,
+       "y": 786,
+       "h": 10,
+       "char_start": 4,
+       "char_end": 21
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 390,
+     "x1": 500,
+     "text": "二零二五年 二零二四年",
+     "char_start": 22,
+     "char_end": 33,
+     "items": [
+      {
+       "text": "二零二五年",
+       "x0": 390,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 22,
+       "char_end": 27
+      },
+      {
+       "text": "二零二四年",
+       "x0": 470,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 28,
+       "char_end": 33
+      }
+     ]
+    },
+    {
+     "index": 3,
+     "y": 758,
+     "x0": 390,
+     "x1": 500,
+     "text": "人民幣千元 人民幣千元",
+     "char_start": 34,
+     "char_end": 45,
+     "items": [
+      {
+       "text": "人民幣千元",
+       "x0": 390,
+       "x1": 420,
+       "y": 758,
+       "h": 10,
+       "char_start": 34,
+       "char_end": 39
+      },
+      {
+       "text": "人民幣千元",
+       "x0": 470,
+       "x1": 500,
+       "y": 758,
+       "h": 10,
+       "char_start": 40,
+       "char_end": 45
+      }
+     ]
+    },
+    {
+     "index": 4,
+     "y": 744,
+     "x0": 50,
+     "x1": 500,
+     "text": "收益 100 90",
+     "char_start": 46,
+     "char_end": 55,
+     "items": [
+      {
+       "text": "收益",
+       "x0": 50,
+       "x1": 62,
+       "y": 744,
+       "h": 10,
+       "char_start": 46,
+       "char_end": 48
+      },
+      {
+       "text": "100",
+       "x0": 402,
+       "x1": 420,
+       "y": 744,
+       "h": 10,
+       "char_start": 49,
+       "char_end": 52
+      },
+      {
+       "text": "90",
+       "x0": 488,
+       "x1": 500,
+       "y": 744,
+       "h": 10,
+       "char_start": 53,
+       "char_end": 55
+      }
+     ]
+    },
+    {
+     "index": 5,
+     "y": 730,
+     "x0": 50,
+     "x1": 500,
+     "text": "年內溢利 10 9",
+     "char_start": 56,
+     "char_end": 65,
+     "items": [
+      {
+       "text": "年內溢利",
+       "x0": 50,
+       "x1": 74,
+       "y": 730,
+       "h": 10,
+       "char_start": 56,
+       "char_end": 60
+      },
+      {
+       "text": "10",
+       "x0": 408,
+       "x1": 420,
+       "y": 730,
+       "h": 10,
+       "char_start": 61,
+       "char_end": 63
+      },
+      {
+       "text": "9",
+       "x0": 494,
+       "x1": 500,
+       "y": 730,
+       "h": 10,
+       "char_start": 64,
+       "char_end": 65
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 68,
+       "text": "損益表",
+       "char_start": 0,
+       "char_end": 3,
+       "items": [
+        {
+         "text": "損益表",
+         "x0": 50,
+         "x1": 68,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 3
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 50,
+       "x1": 152,
+       "text": "截至二零二五年十二月三十一日止年度",
+       "char_start": 4,
+       "char_end": 21,
+       "items": [
+        {
+         "text": "截至二零二五年十二月三十一日止年度",
+         "x0": 50,
+         "x1": 152,
+         "y": 786,
+         "h": 10,
+         "char_start": 4,
+         "char_end": 21
+        }
+       ]
+      },
+      {
+       "index": 2,
+       "y": 772,
+       "x0": 390,
+       "x1": 500,
+       "text": "二零二五年 二零二四年",
+       "char_start": 22,
+       "char_end": 33,
+       "items": [
+        {
+         "text": "二零二五年",
+         "x0": 390,
+         "x1": 420,
+         "y": 772,
+         "h": 10,
+         "char_start": 22,
+         "char_end": 27
+        },
+        {
+         "text": "二零二四年",
+         "x0": 470,
+         "x1": 500,
+         "y": 772,
+         "h": 10,
+         "char_start": 28,
+         "char_end": 33
+        }
+       ]
+      },
+      {
+       "index": 3,
+       "y": 758,
+       "x0": 390,
+       "x1": 500,
+       "text": "人民幣千元 人民幣千元",
+       "char_start": 34,
+       "char_end": 45,
+       "items": [
+        {
+         "text": "人民幣千元",
+         "x0": 390,
+         "x1": 420,
+         "y": 758,
+         "h": 10,
+         "char_start": 34,
+         "char_end": 39
+        },
+        {
+         "text": "人民幣千元",
+         "x0": 470,
+         "x1": 500,
+         "y": 758,
+         "h": 10,
+         "char_start": 40,
+         "char_end": 45
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "收益",
+       "bbox": {
+        "x0": 50,
+        "y0": 744,
+        "x1": 62,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 46,
+       "char_end": 48,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "100",
+       "bbox": {
+        "x0": 402,
+        "y0": 744,
+        "x1": 420,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 49,
+       "char_end": 52,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "90",
+       "bbox": {
+        "x0": 488,
+        "y0": 744,
+        "x1": 500,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 53,
+       "char_end": 55,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 0,
+       "text": "年內溢利",
+       "bbox": {
+        "x0": 50,
+        "y0": 730,
+        "x1": 74,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 56,
+       "char_end": 60,
+       "numeric": false
+      },
+      {
+       "row": 1,
+       "col": 1,
+       "text": "10",
+       "bbox": {
+        "x0": 408,
+        "y0": 730,
+        "x1": 420,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 61,
+       "char_end": 63,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 2,
+       "text": "9",
+       "bbox": {
+        "x0": 494,
+        "y0": 730,
+        "x1": 500,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 64,
+       "char_end": 65,
+       "numeric": true
+      }
+     ],
+     "row_count": 2,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      402,
+      488
+     ]
+    }
+   ]
+  },
+  {
+   "page_no": 2,
+   "width": 595,
+   "height": 842,
+   "text": "綜合財務狀況表\n於二零二五年十二月三十一日\n二零二五年 二零二四年\n人民幣千元 人民幣千元\n現金及現金等價物 – 250\n資產總值 2,000 1,800\n資產總值 2,100 1,800\n負債總額 800 750\n權益總額 1,200 1,050\n負債總額 800 750",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 92,
+     "text": "綜合財務狀況表",
+     "char_start": 0,
+     "char_end": 7,
+     "items": [
+      {
+       "text": "綜合財務狀況表",
+       "x0": 50,
+       "x1": 92,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 7
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 50,
+     "x1": 128,
+     "text": "於二零二五年十二月三十一日",
+     "char_start": 8,
+     "char_end": 21,
+     "items": [
+      {
+       "text": "於二零二五年十二月三十一日",
+       "x0": 50,
+       "x1": 128,
+       "y": 786,
+       "h": 10,
+       "char_start": 8,
+       "char_end": 21
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 390,
+     "x1": 500,
+     "text": "二零二五年 二零二四年",
+     "char_start": 22,
+     "char_end": 33,
+     "items": [
+      {
+       "text": "二零二五年",
+       "x0": 390,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 22,
+       "char_end": 27
+      },
+      {
+       "text": "二零二四年",
+       "x0": 470,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 28,
+       "char_end": 33
+      }
+     ]
+    },
+    {
+     "index": 3,
+     "y": 758,
+     "x0": 390,
+     "x1": 500,
+     "text": "人民幣千元 人民幣千元",
+     "char_start": 34,
+     "char_end": 45,
+     "items": [
+      {
+       "text": "人民幣千元",
+       "x0": 390,
+       "x1": 420,
+       "y": 758,
+       "h": 10,
+       "char_start": 34,
+       "char_end": 39
+      },
+      {
+       "text": "人民幣千元",
+       "x0": 470,
+       "x1": 500,
+       "y": 758,
+       "h": 10,
+       "char_start": 40,
+       "char_end": 45
+      }
+     ]
+    },
+    {
+     "index": 4,
+     "y": 744,
+     "x0": 50,
+     "x1": 500,
+     "text": "現金及現金等價物 – 250",
+     "char_start": 46,
+     "char_end": 60,
+     "items": [
+      {
+       "text": "現金及現金等價物",
+       "x0": 50,
+       "x1": 98,
+       "y": 744,
+       "h": 10,
+       "char_start": 46,
+       "char_end": 54
+      },
+      {
+       "text": "–",
+       "x0": 414,
+       "x1": 420,
+       "y": 744,
+       "h": 10,
+       "char_start": 55,
+       "char_end": 56
+      },
+      {
+       "text": "250",
+       "x0": 482,
+       "x1": 500,
+       "y": 744,
+       "h": 10,
+       "char_start": 57,
+       "char_end": 60
+      }
+     ]
+    },
+    {
+     "index": 5,
+     "y": 730,
+     "x0": 50,
+     "x1": 500,
+     "text": "資產總值 2,000 1,800",
+     "char_start": 61,
+     "char_end": 77,
+     "items": [
+      {
+       "text": "資產總值",
+       "x0": 50,
+       "x1": 74,
+       "y": 730,
+       "h": 10,
+       "char_start": 61,
+       "char_end": 65
+      },
+      {
+       "text": "2,000",
+       "x0": 390,
+       "x1": 420,
+       "y": 730,
+       "h": 10,
+       "char_start": 66,
+       "char_end": 71
+      },
+      {
+       "text": "1,800",
+       "x0": 470,
+       "x1": 500,
+       "y": 730,
+       "h": 10,
+       "char_start": 72,
+       "char_end": 77
+      }
+     ]
+    },
+    {
+     "index": 6,
+     "y": 716,
+     "x0": 50,
+     "x1": 500,
+     "text": "資產總值 2,100 1,800",
+     "char_start": 78,
+     "char_end": 94,
+     "items": [
+      {
+       "text": "資產總值",
+       "x0": 50,
+       "x1": 74,
+       "y": 716,
+       "h": 10,
+       "char_start": 78,
+       "char_end": 82
+      },
+      {
+       "text": "2,100",
+       "x0": 390,
+       "x1": 420,
+       "y": 716,
+       "h": 10,
+       "char_start": 83,
+       "char_end": 88
+      },
+      {
+       "text": "1,800",
+       "x0": 470,
+       "x1": 500,
+       "y": 716,
+       "h": 10,
+       "char_start": 89,
+       "char_end": 94
+      }
+     ]
+    },
+    {
+     "index": 7,
+     "y": 702,
+     "x0": 50,
+     "x1": 500,
+     "text": "負債總額 800 750",
+     "char_start": 95,
+     "char_end": 107,
+     "items": [
+      {
+       "text": "負債總額",
+       "x0": 50,
+       "x1": 74,
+       "y": 702,
+       "h": 10,
+       "char_start": 95,
+       "char_end": 99
+      },
+      {
+       "text": "800",
+       "x0": 402,
+       "x1": 420,
+       "y": 702,
+       "h": 10,
+       "char_start": 100,
+       "char_end": 103
+      },
+      {
+       "text": "750",
+       "x0": 482,
+       "x1": 500,
+       "y": 702,
+       "h": 10,
+       "char_start": 104,
+       "char_end": 107
+      }
+     ]
+    },
+    {
+     "index": 8,
+     "y": 688,
+     "x0": 50,
+     "x1": 500,
+     "text": "權益總額 1,200 1,050",
+     "char_start": 108,
+     "char_end": 124,
+     "items": [
+      {
+       "text": "權益總額",
+       "x0": 50,
+       "x1": 74,
+       "y": 688,
+       "h": 10,
+       "char_start": 108,
+       "char_end": 112
+      },
+      {
+       "text": "1,200",
+       "x0": 390,
+       "x1": 420,
+       "y": 688,
+       "h": 10,
+       "char_start": 113,
+       "char_end": 118
+      },
+      {
+       "text": "1,050",
+       "x0": 470,
+       "x1": 500,
+       "y": 688,
+       "h": 10,
+       "char_start": 119,
+       "char_end": 124
+      }
+     ]
+    },
+    {
+     "index": 9,
+     "y": 674,
+     "x0": 50,
+     "x1": 500,
+     "text": "負債總額 800 750",
+     "char_start": 125,
+     "char_end": 137,
+     "items": [
+      {
+       "text": "負債總額",
+       "x0": 50,
+       "x1": 74,
+       "y": 674,
+       "h": 10,
+       "char_start": 125,
+       "char_end": 129
+      },
+      {
+       "text": "800",
+       "x0": 402,
+       "x1": 420,
+       "y": 674,
+       "h": 10,
+       "char_start": 130,
+       "char_end": 133
+      },
+      {
+       "text": "750",
+       "x0": 482,
+       "x1": 500,
+       "y": 674,
+       "h": 10,
+       "char_start": 134,
+       "char_end": 137
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 92,
+       "text": "綜合財務狀況表",
+       "char_start": 0,
+       "char_end": 7,
+       "items": [
+        {
+         "text": "綜合財務狀況表",
+         "x0": 50,
+         "x1": 92,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 7
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 50,
+       "x1": 128,
+       "text": "於二零二五年十二月三十一日",
+       "char_start": 8,
+       "char_end": 21,
+       "items": [
+        {
+         "text": "於二零二五年十二月三十一日",
+         "x0": 50,
+         "x1": 128,
+         "y": 786,
+         "h": 10,
+         "char_start": 8,
+         "char_end": 21
+        }
+       ]
+      },
+      {
+       "index": 2,
+       "y": 772,
+       "x0": 390,
+       "x1": 500,
+       "text": "二零二五年 二零二四年",
+       "char_start": 22,
+       "char_end": 33,
+       "items": [
+        {
+         "text": "二零二五年",
+         "x0": 390,
+         "x1": 420,
+         "y": 772,
+         "h": 10,
+         "char_start": 22,
+         "char_end": 27
+        },
+        {
+         "text": "二零二四年",
+         "x0": 470,
+         "x1": 500,
+         "y": 772,
+         "h": 10,
+         "char_start": 28,
+         "char_end": 33
+        }
+       ]
+      },
+      {
+       "index": 3,
+       "y": 758,
+       "x0": 390,
+       "x1": 500,
+       "text": "人民幣千元 人民幣千元",
+       "char_start": 34,
+       "char_end": 45,
+       "items": [
+        {
+         "text": "人民幣千元",
+         "x0": 390,
+         "x1": 420,
+         "y": 758,
+         "h": 10,
+         "char_start": 34,
+         "char_end": 39
+        },
+        {
+         "text": "人民幣千元",
+         "x0": 470,
+         "x1": 500,
+         "y": 758,
+         "h": 10,
+         "char_start": 40,
+         "char_end": 45
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "現金及現金等價物",
+       "bbox": {
+        "x0": 50,
+        "y0": 744,
+        "x1": 98,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 46,
+       "char_end": 54,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "–",
+       "bbox": {
+        "x0": 414,
+        "y0": 744,
+        "x1": 420,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 55,
+       "char_end": 56,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "250",
+       "bbox": {
+        "x0": 482,
+        "y0": 744,
+        "x1": 500,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 57,
+       "char_end": 60,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 0,
+       "text": "資產總值",
+       "bbox": {
+        "x0": 50,
+        "y0": 730,
+        "x1": 74,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 61,
+       "char_end": 65,
+       "numeric": false
+      },
+      {
+       "row": 1,
+       "col": 1,
+       "text": "2,000",
+       "bbox": {
+        "x0": 390,
+        "y0": 730,
+        "x1": 420,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 66,
+       "char_end": 71,
+       "numeric": true
+      },
+      {
+       "row": 1,
+       "col": 2,
+       "text": "1,800",
+       "bbox": {
+        "x0": 470,
+        "y0": 730,
+        "x1": 500,
+        "y1": 740
+       },
+       "line_index": 5,
+       "char_start": 72,
+       "char_end": 77,
+       "numeric": true
+      },
+      {
+       "row": 2,
+       "col": 0,
+       "text": "資產總值",
+       "bbox": {
+        "x0": 50,
+        "y0": 716,
+        "x1": 74,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 78,
+       "char_end": 82,
+       "numeric": false
+      },
+      {
+       "row": 2,
+       "col": 1,
+       "text": "2,100",
+       "bbox": {
+        "x0": 390,
+        "y0": 716,
+        "x1": 420,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 83,
+       "char_end": 88,
+       "numeric": true
+      },
+      {
+       "row": 2,
+       "col": 2,
+       "text": "1,800",
+       "bbox": {
+        "x0": 470,
+        "y0": 716,
+        "x1": 500,
+        "y1": 726
+       },
+       "line_index": 6,
+       "char_start": 89,
+       "char_end": 94,
+       "numeric": true
+      },
+      {
+       "row": 3,
+       "col": 0,
+       "text": "負債總額",
+       "bbox": {
+        "x0": 50,
+        "y0": 702,
+        "x1": 74,
+        "y1": 712
+       },
+       "line_index": 7,
+       "char_start": 95,
+       "char_end": 99,
+       "numeric": false
+      },
+      {
+       "row": 3,
+       "col": 1,
+       "text": "800",
+       "bbox": {
+        "x0": 402,
+        "y0": 702,
+        "x1": 420,
+        "y1": 712
+       },
+       "line_index": 7,
+       "char_start": 100,
+       "char_end": 103,
+       "numeric": true
+      },
+      {
+       "row": 3,
+       "col": 2,
+       "text": "750",
+       "bbox": {
+        "x0": 482,
+        "y0": 702,
+        "x1": 500,
+        "y1": 712
+       },
+       "line_index": 7,
+       "char_start": 104,
+       "char_end": 107,
+       "numeric": true
+      },
+      {
+       "row": 4,
+       "col": 0,
+       "text": "權益總額",
+       "bbox": {
+        "x0": 50,
+        "y0": 688,
+        "x1": 74,
+        "y1": 698
+       },
+       "line_index": 8,
+       "char_start": 108,
+       "char_end": 112,
+       "numeric": false
+      },
+      {
+       "row": 4,
+       "col": 1,
+       "text": "1,200",
+       "bbox": {
+        "x0": 390,
+        "y0": 688,
+        "x1": 420,
+        "y1": 698
+       },
+       "line_index": 8,
+       "char_start": 113,
+       "char_end": 118,
+       "numeric": true
+      },
+      {
+       "row": 4,
+       "col": 2,
+       "text": "1,050",
+       "bbox": {
+        "x0": 470,
+        "y0": 688,
+        "x1": 500,
+        "y1": 698
+       },
+       "line_index": 8,
+       "char_start": 119,
+       "char_end": 124,
+       "numeric": true
+      },
+      {
+       "row": 5,
+       "col": 0,
+       "text": "負債總額",
+       "bbox": {
+        "x0": 50,
+        "y0": 674,
+        "x1": 74,
+        "y1": 684
+       },
+       "line_index": 9,
+       "char_start": 125,
+       "char_end": 129,
+       "numeric": false
+      },
+      {
+       "row": 5,
+       "col": 1,
+       "text": "800",
+       "bbox": {
+        "x0": 402,
+        "y0": 674,
+        "x1": 420,
+        "y1": 684
+       },
+       "line_index": 9,
+       "char_start": 130,
+       "char_end": 133,
+       "numeric": true
+      },
+      {
+       "row": 5,
+       "col": 2,
+       "text": "750",
+       "bbox": {
+        "x0": 482,
+        "y0": 674,
+        "x1": 500,
+        "y1": 684
+       },
+       "line_index": 9,
+       "char_start": 134,
+       "char_end": 137,
+       "numeric": true
+      }
+     ],
+     "row_count": 6,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      390,
+      470
+     ]
+    }
+   ]
+  },
+  {
+   "page_no": 3,
+   "width": 595,
+   "height": 842,
+   "text": "綜合現金流量表\n截至二零二五年十二月三十一日止年度\n二零二五年 二零二四年\n人民幣千元 人民幣千元\n經營活動所得現金淨額 50 40",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 92,
+     "text": "綜合現金流量表",
+     "char_start": 0,
+     "char_end": 7,
+     "items": [
+      {
+       "text": "綜合現金流量表",
+       "x0": 50,
+       "x1": 92,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 7
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 50,
+     "x1": 152,
+     "text": "截至二零二五年十二月三十一日止年度",
+     "char_start": 8,
+     "char_end": 25,
+     "items": [
+      {
+       "text": "截至二零二五年十二月三十一日止年度",
+       "x0": 50,
+       "x1": 152,
+       "y": 786,
+       "h": 10,
+       "char_start": 8,
+       "char_end": 25
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 390,
+     "x1": 500,
+     "text": "二零二五年 二零二四年",
+     "char_start": 26,
+     "char_end": 37,
+     "items": [
+      {
+       "text": "二零二五年",
+       "x0": 390,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 26,
+       "char_end": 31
+      },
+      {
+       "text": "二零二四年",
+       "x0": 470,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 32,
+       "char_end": 37
+      }
+     ]
+    },
+    {
+     "index": 3,
+     "y": 758,
+     "x0": 390,
+     "x1": 500,
+     "text": "人民幣千元 人民幣千元",
+     "char_start": 38,
+     "char_end": 49,
+     "items": [
+      {
+       "text": "人民幣千元",
+       "x0": 390,
+       "x1": 420,
+       "y": 758,
+       "h": 10,
+       "char_start": 38,
+       "char_end": 43
+      },
+      {
+       "text": "人民幣千元",
+       "x0": 470,
+       "x1": 500,
+       "y": 758,
+       "h": 10,
+       "char_start": 44,
+       "char_end": 49
+      }
+     ]
+    },
+    {
+     "index": 4,
+     "y": 744,
+     "x0": 50,
+     "x1": 500,
+     "text": "經營活動所得現金淨額 50 40",
+     "char_start": 50,
+     "char_end": 66,
+     "items": [
+      {
+       "text": "經營活動所得現金淨額",
+       "x0": 50,
+       "x1": 110,
+       "y": 744,
+       "h": 10,
+       "char_start": 50,
+       "char_end": 60
+      },
+      {
+       "text": "50",
+       "x0": 408,
+       "x1": 420,
+       "y": 744,
+       "h": 10,
+       "char_start": 61,
+       "char_end": 63
+      },
+      {
+       "text": "40",
+       "x0": 488,
+       "x1": 500,
+       "y": 744,
+       "h": 10,
+       "char_start": 64,
+       "char_end": 66
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 92,
+       "text": "綜合現金流量表",
+       "char_start": 0,
+       "char_end": 7,
+       "items": [
+        {
+         "text": "綜合現金流量表",
+         "x0": 50,
+         "x1": 92,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 7
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 50,
+       "x1": 152,
+       "text": "截至二零二五年十二月三十一日止年度",
+       "char_start": 8,
+       "char_end": 25,
+       "items": [
+        {
+         "text": "截至二零二五年十二月三十一日止年度",
+         "x0": 50,
+         "x1": 152,
+         "y": 786,
+         "h": 10,
+         "char_start": 8,
+         "char_end": 25
+        }
+       ]
+      },
+      {
+       "index": 2,
+       "y": 772,
+       "x0": 390,
+       "x1": 500,
+       "text": "二零二五年 二零二四年",
+       "char_start": 26,
+       "char_end": 37,
+       "items": [
+        {
+         "text": "二零二五年",
+         "x0": 390,
+         "x1": 420,
+         "y": 772,
+         "h": 10,
+         "char_start": 26,
+         "char_end": 31
+        },
+        {
+         "text": "二零二四年",
+         "x0": 470,
+         "x1": 500,
+         "y": 772,
+         "h": 10,
+         "char_start": 32,
+         "char_end": 37
+        }
+       ]
+      },
+      {
+       "index": 3,
+       "y": 758,
+       "x0": 390,
+       "x1": 500,
+       "text": "人民幣千元 人民幣千元",
+       "char_start": 38,
+       "char_end": 49,
+       "items": [
+        {
+         "text": "人民幣千元",
+         "x0": 390,
+         "x1": 420,
+         "y": 758,
+         "h": 10,
+         "char_start": 38,
+         "char_end": 43
+        },
+        {
+         "text": "人民幣千元",
+         "x0": 470,
+         "x1": 500,
+         "y": 758,
+         "h": 10,
+         "char_start": 44,
+         "char_end": 49
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "經營活動所得現金淨額",
+       "bbox": {
+        "x0": 50,
+        "y0": 744,
+        "x1": 110,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 50,
+       "char_end": 60,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "50",
+       "bbox": {
+        "x0": 408,
+        "y0": 744,
+        "x1": 420,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 61,
+       "char_end": 63,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "40",
+       "bbox": {
+        "x0": 488,
+        "y0": 744,
+        "x1": 500,
+        "y1": 754
+       },
+       "line_index": 4,
+       "char_start": 64,
+       "char_end": 66,
+       "numeric": true
+      }
+     ],
+     "row_count": 1,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      408,
+      488
+     ]
+    }
+   ]
+  },
+  {
+   "page_no": 4,
+   "width": 595,
+   "height": 842,
+   "text": "五年財務概要\n二零二五年 二零二四年\n收益 100 90",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 86,
+     "text": "五年財務概要",
+     "char_start": 0,
+     "char_end": 6,
+     "items": [
+      {
+       "text": "五年財務概要",
+       "x0": 50,
+       "x1": 86,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 6
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 390,
+     "x1": 500,
+     "text": "二零二五年 二零二四年",
+     "char_start": 7,
+     "char_end": 18,
+     "items": [
+      {
+       "text": "二零二五年",
+       "x0": 390,
+       "x1": 420,
+       "y": 786,
+       "h": 10,
+       "char_start": 7,
+       "char_end": 12
+      },
+      {
+       "text": "二零二四年",
+       "x0": 470,
+       "x1": 500,
+       "y": 786,
+       "h": 10,
+       "char_start": 13,
+       "char_end": 18
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 50,
+     "x1": 500,
+     "text": "收益 100 90",
+     "char_start": 19,
+     "char_end": 28,
+     "items": [
+      {
+       "text": "收益",
+       "x0": 50,
+       "x1": 62,
+       "y": 772,
+       "h": 10,
+       "char_start": 19,
+       "char_end": 21
+      },
+      {
+       "text": "100",
+       "x0": 402,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 22,
+       "char_end": 25
+      },
+      {
+       "text": "90",
+       "x0": 488,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 26,
+       "char_end": 28
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 86,
+       "text": "五年財務概要",
+       "char_start": 0,
+       "char_end": 6,
+       "items": [
+        {
+         "text": "五年財務概要",
+         "x0": 50,
+         "x1": 86,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 6
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 390,
+       "x1": 500,
+       "text": "二零二五年 二零二四年",
+       "char_start": 7,
+       "char_end": 18,
+       "items": [
+        {
+         "text": "二零二五年",
+         "x0": 390,
+         "x1": 420,
+         "y": 786,
+         "h": 10,
+         "char_start": 7,
+         "char_end": 12
+        },
+        {
+         "text": "二零二四年",
+         "x0": 470,
+         "x1": 500,
+         "y": 786,
+         "h": 10,
+         "char_start": 13,
+         "char_end": 18
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "收益",
+       "bbox": {
+        "x0": 50,
+        "y0": 772,
+        "x1": 62,
+        "y1": 782
+       },
+       "line_index": 2,
+       "char_start": 19,
+       "char_end": 21,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "100",
+       "bbox": {
+        "x0": 402,
+        "y0": 772,
+        "x1": 420,
+        "y1": 782
+       },
+       "line_index": 2,
+       "char_start": 22,
+       "char_end": 25,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "90",
+       "bbox": {
+        "x0": 488,
+        "y0": 772,
+        "x1": 500,
+        "y1": 782
+       },
+       "line_index": 2,
+       "char_start": 26,
+       "char_end": 28,
+       "numeric": true
+      }
+     ],
+     "row_count": 1,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      402,
+      488
+     ]
+    }
+   ]
+  },
+  {
+   "page_no": 5,
+   "width": 595,
+   "height": 842,
+   "text": "綜合現金流量表（續）\n二零二五年 二零二四年\n現金及現金等價物增加淨額 5 4",
+   "lines": [
+    {
+     "index": 0,
+     "y": 800,
+     "x0": 50,
+     "x1": 110,
+     "text": "綜合現金流量表（續）",
+     "char_start": 0,
+     "char_end": 10,
+     "items": [
+      {
+       "text": "綜合現金流量表（續）",
+       "x0": 50,
+       "x1": 110,
+       "y": 800,
+       "h": 10,
+       "char_start": 0,
+       "char_end": 10
+      }
+     ]
+    },
+    {
+     "index": 1,
+     "y": 786,
+     "x0": 390,
+     "x1": 500,
+     "text": "二零二五年 二零二四年",
+     "char_start": 11,
+     "char_end": 22,
+     "items": [
+      {
+       "text": "二零二五年",
+       "x0": 390,
+       "x1": 420,
+       "y": 786,
+       "h": 10,
+       "char_start": 11,
+       "char_end": 16
+      },
+      {
+       "text": "二零二四年",
+       "x0": 470,
+       "x1": 500,
+       "y": 786,
+       "h": 10,
+       "char_start": 17,
+       "char_end": 22
+      }
+     ]
+    },
+    {
+     "index": 2,
+     "y": 772,
+     "x0": 50,
+     "x1": 500,
+     "text": "現金及現金等價物增加淨額 5 4",
+     "char_start": 23,
+     "char_end": 39,
+     "items": [
+      {
+       "text": "現金及現金等價物增加淨額",
+       "x0": 50,
+       "x1": 122,
+       "y": 772,
+       "h": 10,
+       "char_start": 23,
+       "char_end": 35
+      },
+      {
+       "text": "5",
+       "x0": 414,
+       "x1": 420,
+       "y": 772,
+       "h": 10,
+       "char_start": 36,
+       "char_end": 37
+      },
+      {
+       "text": "4",
+       "x0": 494,
+       "x1": 500,
+       "y": 772,
+       "h": 10,
+       "char_start": 38,
+       "char_end": 39
+      }
+     ]
+    }
+   ],
+   "tables": [
+    {
+     "header_lines": [
+      {
+       "index": 0,
+       "y": 800,
+       "x0": 50,
+       "x1": 110,
+       "text": "綜合現金流量表（續）",
+       "char_start": 0,
+       "char_end": 10,
+       "items": [
+        {
+         "text": "綜合現金流量表（續）",
+         "x0": 50,
+         "x1": 110,
+         "y": 800,
+         "h": 10,
+         "char_start": 0,
+         "char_end": 10
+        }
+       ]
+      },
+      {
+       "index": 1,
+       "y": 786,
+       "x0": 390,
+       "x1": 500,
+       "text": "二零二五年 二零二四年",
+       "char_start": 11,
+       "char_end": 22,
+       "items": [
+        {
+         "text": "二零二五年",
+         "x0": 390,
+         "x1": 420,
+         "y": 786,
+         "h": 10,
+         "char_start": 11,
+         "char_end": 16
+        },
+        {
+         "text": "二零二四年",
+         "x0": 470,
+         "x1": 500,
+         "y": 786,
+         "h": 10,
+         "char_start": 17,
+         "char_end": 22
+        }
+       ]
+      }
+     ],
+     "cells": [
+      {
+       "row": 0,
+       "col": 0,
+       "text": "現金及現金等價物增加淨額",
+       "bbox": {
+        "x0": 50,
+        "y0": 772,
+        "x1": 122,
+        "y1": 782
+       },
+       "line_index": 2,
+       "char_start": 23,
+       "char_end": 35,
+       "numeric": false
+      },
+      {
+       "row": 0,
+       "col": 1,
+       "text": "5",
+       "bbox": {
+        "x0": 414,
+        "y0": 772,
+        "x1": 420,
+        "y1": 782
+       },
+       "line_index": 2,
+       "char_start": 36,
+       "char_end": 37,
+       "numeric": true
+      },
+      {
+       "row": 0,
+       "col": 2,
+       "text": "4",
+       "bbox": {
+        "x0": 494,
+        "y0": 772,
+        "x1": 500,
+        "y1": 782
+       },
+       "line_index": 2,
+       "char_start": 38,
+       "char_end": 39,
+       "numeric": true
+      }
+     ],
+     "row_count": 1,
+     "col_count": 3,
+     "col_x0": [
+      50,
+      414,
+      494
+     ]
+    }
+   ]
+  }
+ ]
+}

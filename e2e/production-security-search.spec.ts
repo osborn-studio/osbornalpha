@@ -32,7 +32,7 @@ test('a signed-in user adds 002463 without confirmation and the server keeps it'
   await page.locator('input[type="email"]').fill(process.env.E2E_EMAIL!);
   await page.locator('input[type="password"]').fill(process.env.E2E_PASSWORD!);
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await page.waitForURL('**/today');
+  await page.waitForURL('**/macro');
 
   const seedResponse = await page.request.put('/api/watchlist/sync', {
     data: { groups: [{ id: 'production-e2e', name: '生产验收', tickers: [] }] },

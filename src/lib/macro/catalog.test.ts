@@ -76,6 +76,15 @@ describe('MACRO_CATALOG invariants',()=>{
  });
 });
 
+describe('MACRO-P3 catalog addition (WP-S6)',()=>{
+ it('US_FED_TARGET_D: FRED DFEDTAR, event_source, immutable, weight 0, daily, never a regime input',()=>{
+  expect(catalogById('US_FED_TARGET_D')).toMatchObject({region:'US',role:'event_source',type:'policy_rate',unit:'pct',nativeFrequency:'daily',period:'day',status:'active',revisionPolicy:'immutable',weight:0,changeKind:'bp',
+   source:{adapter:'fred_csv',seriesKey:'DFEDTAR',fetchHost:'fred.stlouisfed.org',rights:'public_domain',publisher:{en:'Board of Governors of the Federal Reserve System'}}});
+  expect(regimeInputsOf('US').map(d=>d.id)).not.toContain('US_FED_TARGET_D');
+  expect(indicatorsOf('US').map(d=>d.id)).not.toContain('US_FED_TARGET_D');
+ });
+});
+
 describe('catalog helpers',()=>{
  it('indicatorsOf lists display indicators (no derive inputs, no event sources); regimeInputsOf keeps active weighted monthly/quarterly ones',()=>{
   expect(indicatorsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX']);
@@ -85,7 +94,7 @@ describe('catalog helpers',()=>{
   for(const r of ['US','CN'] as const)for(const d of regimeInputsOf(r))expect(d.nativeFrequency).not.toBe('daily');
  });
  it('collectableOf lists active native (own-evidence) series per adapter',()=>{
-  expect(collectableOf('fred_csv').map(d=>d.source!.seriesKey)).toEqual(['DFF','DFEDTARU','DFEDTARL','DGS10','DTWEXBGS','CPIAUCSL','UNRATE','PPIFIS','DCOILWTICO']);
+  expect(collectableOf('fred_csv').map(d=>d.source!.seriesKey)).toEqual(['DFF','DFEDTARU','DFEDTARL','DFEDTAR','DGS10','DTWEXBGS','CPIAUCSL','UNRATE','PPIFIS','DCOILWTICO']);
   expect(collectableOf('akshare').map(d=>d.id)).toEqual(['CN_CPI_INDEX','CN_PPI_INDEX','CN_PMI_MFG','CN_GDP_INDEX','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y_D','CN_USDCNY_CP_D']);
   for(const d of [...collectableOf('fred_csv'),...collectableOf('akshare')]){expect(d.derive).toBeUndefined();expect(d.aliasOf).toBeUndefined();}
  });

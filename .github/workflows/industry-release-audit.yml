@@ -1,0 +1,26 @@
+name: Industry release audit
+
+on:
+  push:
+    branches: [codex/industry-release-audit]
+  pull_request:
+    branches: [main, codex/industry-valuation-next]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-date-ingress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      # This node:test suite is outside the default src/**/*.test.ts Vitest glob.
+      - name: Strict provider date ingress regressions
+        run: node --import tsx --test --test-concurrency=1 tests/industry-release-audit/provider-date-ingress.test.ts

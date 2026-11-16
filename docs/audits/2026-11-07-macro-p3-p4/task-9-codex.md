@@ -1,0 +1,6 @@
+| # | Sev P1/P2/P3 | File:line | Defect | Fix |
+|---|---|---|---|---|
+| 1 | P2 | `src/lib/macro/strategy/review.ts:86` | An incomplete baseline becomes a false `release_first`. Reproduced with identical CPI observations in both snapshots and one unrelated unresolved baseline ID: the builder records `review_base` as `truncated`, but the review publishes unchanged CPI as newly available. Existing tests miss this branch. | Check frozen read states before classifying releases. Distinguish unavailable baseline evidence from confirmed absence; suppress unsupported comparisons and expose the evidence gap. Add an incomplete-baseline regression test. |
+| 2 | P2 | `src/lib/macro/strategy/facts.ts:41`; `src/lib/macro/strategy/review.ts:73` | Policy-event and episode facts put **observation IDs** into `source_inputs`, which §6.1 defines as manifest **roles**. In the committed replay fixture, none of these references resolves against input roles, breaking the documented evidence linkage. | Resolve evidence IDs to manifest input roles before constructing facts, retaining exact observation IDs separately if needed. Assert that every emitted `source_inputs` reference resolves. |
+
+fix required

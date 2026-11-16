@@ -1,0 +1,44 @@
+name: Macro source fixture checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OSSTACK_SCRATCH_ROOT: /tmp/osstack
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci
+      - name: Install headless Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Actual handler contracts
+        run: node node_modules/vitest/vitest.mjs run --config tests/macro-source-integration/audit.vitest.config.ts --maxWorkers=1
+      - name: Registered transport contracts
+        run: node node_modules/vitest/vitest.mjs run --config tests/macro-source-integration/transport.vitest.config.ts --maxWorkers=1
+      - name: Fixture lineage consistency
+        run: node node_modules/vitest/vitest.mjs run --config tests/macro-source-integration/lineage.vitest.config.ts --maxWorkers=1
+      - name: Source, destinations and registry rendering
+        run: node node_modules/@playwright/test/cli.js test --config tests/macro-source-integration/playwright.config.ts --workers=1
+      - name: Scoped TypeScript
+        run: node node_modules/typescript/bin/tsc --noEmit -p tests/macro-source-integration/tsconfig.json
+      - name: Scoped lint
+        run: node node_modules/eslint/bin/eslint.js tests/macro-source-integration --max-warnings=0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macro-source-fixture-evidence
+          path: /tmp/osstack/macro-source-integration/playwright-results*

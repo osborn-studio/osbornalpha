@@ -1,0 +1,87 @@
+{
+ "fixture_version": "judgment-replay/1",
+ "description": "recommendation_call@v1 · private · 600519 buy (synthetic); inputs_only — tampering the frozen fill → input_hash_mismatch on legacy_fill",
+ "expect": "inputs_only",
+ "judgment": {
+  "judgment_id": "f9e599a3-d2fd-840a-a4e0-228a5a818d02",
+  "subject_type": "security",
+  "subject_key": "A:600519",
+  "judgment_type": "recommendation_call",
+  "methodology_id": "recommendation_call",
+  "methodology_version": "v1",
+  "kind": "probability",
+  "producer_kind": "human",
+  "producer_ref": {
+   "analyst_id": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+   "source_record": {
+    "table": "recommendations",
+    "id": "0b7d6c2e-3f41-4a8b-9c55-6e2a1d3f4b01"
+   }
+  },
+  "producer_nonce": "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b:recommendations:0b7d6c2e-3f41-4a8b-9c55-6e2a1d3f4b01",
+  "as_of": "2026-09-14",
+  "registered_at": "2026-09-14T01:30:00.000Z",
+  "retrospective": false,
+  "inputs": [
+   {
+    "kind": "legacy_fill",
+    "ref": {
+     "recommendation_id": "0b7d6c2e-3f41-4a8b-9c55-6e2a1d3f4b01"
+    },
+    "snapshot": {
+     "recommendation_id": "0b7d6c2e-3f41-4a8b-9c55-6e2a1d3f4b01",
+     "fill_price": 1452.1,
+     "fill_date": "2026-09-14",
+     "market": "A",
+     "ticker": "600519"
+    },
+    "hash": "7d5f42bd4af63befd7389c9c0b6d67001f863b799da84133689cc5109ed0ca81",
+    "available_at": "2026-09-14T07:00:00.000Z",
+    "origin": {
+     "publisher": "交易所行情（经东方财富转发；分析师评分层冻结的成交价）",
+     "adapter": "eastmoney",
+     "locator": "recommendations:0b7d6c2e-3f41-4a8b-9c55-6e2a1d3f4b01"
+    }
+   }
+  ],
+  "inputs_hash": "0c6b2c9e90077afcd74ce2d4d420327cc417ec0a96a97482480bff1b719bd505",
+  "abstained": false,
+  "abstain_reason": null,
+  "claim": {
+   "p": 0.72,
+   "event": {
+    "zh": "第 5 个后续交易日收盘价高于基准日收盘（看多）",
+    "en": "Close on the 5th following session above the base-date close (long)"
+   }
+  },
+  "condition": {
+   "resolver": "recommendation_hit",
+   "params": {
+    "recommendation_id": "0b7d6c2e-3f41-4a8b-9c55-6e2a1d3f4b01"
+   },
+   "predicate": {
+    "op": "eq",
+    "rhs": true
+   },
+   "text": {
+    "zh": "第 5 个后续交易日收盘价高于基准日收盘（看多）",
+    "en": "Close on the 5th following session above the base-date close (long)"
+   }
+  },
+  "horizon": {
+   "unit": "trading_sessions",
+   "n": 5
+  },
+  "target": {
+   "kind": "session_index",
+   "base_date": "2026-09-14",
+   "n": 5
+  },
+  "label_policy": "first_observed",
+  "settle_after": "2026-09-19T00:00:00.000Z",
+  "settle_by": "2026-11-18T00:00:00.000Z",
+  "code_version": "private-adapter",
+  "batch_id": "00000000-0000-4000-8000-000000000000",
+  "created_at": "2026-09-14T01:30:00.000Z"
+ }
+}

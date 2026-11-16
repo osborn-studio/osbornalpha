@@ -1,0 +1,16 @@
+{
+  "scope": "Installed Supabase client + real StrategyDb adapter with simulated HTTP; JSON UTF-8 bytes, uncompressed, excluding headers. Synthetic real-builder cycle manifest. No production latency measurement.",
+  "inputs": 22433,
+  "manifestHash": "220cd6ee43ba381dd2e36b41f7c245d1f0059622e9b98a6733d7dd971ef47434",
+  "bodyBytes": 6338036,
+  "before": {
+    "responseBytes": 6338261,
+    "requestBytes": 6338323,
+    "localMs": 318.936375
+  },
+  "after": {
+    "responseBytes": 217,
+    "requestBytes": 6338323,
+    "localMs": 171.11870799999997
+  }
+}

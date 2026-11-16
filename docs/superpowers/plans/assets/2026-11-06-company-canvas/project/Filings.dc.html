@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司页 文件视图</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/26081b9d90b25062b1ddd32660ab7062">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1300px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav"><a href="#">首页</a><a class="on" href="#">自选</a><a href="#">雷达</a><a href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 20px">
+    <section class="row" style="gap: 16px">
+      <h1 class="h1">贵州茅台 <span class="en" style="font-size: 16px">Kweichow Moutai</span></h1>
+      <span class="chip ac m">600519.SH ◉</span>
+    </section>
+    <nav class="tabs"><a href="Overview.dc.html">概览</a><a href="Main.dc.html">报表</a><a href="Metrics.dc.html">指标</a><a class="on" href="#">文件</a><a href="#">跟踪</a><a href="#">判断</a><a href="#">模型观点（未校准）</a><a href="#">信号</a><a href="#">持仓</a></nav>
+    <div class="row cap"><span>按可得日期降序 · available_date desc</span><span class="tiny" style="margin-left: auto">mapping_gen = 0 的文件不列（尚无已发布运行覆盖）</span></div>
+    <section class="card" style="padding: 0">
+      <div class="ml" style="padding: 14px 16px 4px">定期报告 Periodic reports</div>
+      <table class="t">
+        <thead><tr><th style="padding-left: 16px">可得日期<span class="en">Available</span></th><th>类型<span class="en">Type</span></th><th>财期<span class="en">Fiscal period</span></th><th>period_end</th><th>来源<span class="en">Source</span></th><th>引用<span class="en">Citation</span></th><th class="n">事实数<span class="en">Facts</span></th><th style="padding-right: 16px">操作<span class="en">Actions</span></th></tr></thead>
+        <tbody>
+          <tr><td class="m" style="padding-left: 16px">2025-10-25</td><td>三季报</td><td class="m">2025 Q3</td><td class="m dim">2025-09-30</td><td class="cap">Tushare → 巨潮</td><td><span class="chip">巨潮公告未挂接</span></td><td class="n m">212</td><td style="padding-right: 16px"><div class="row"><button class="btn ghost sm">在报表中高亮</button></div></td></tr>
+          <tr><td class="m" style="padding-left: 16px">2025-08-13</td><td>半年报</td><td class="m">2025 H1</td><td class="m dim">2025-06-30</td><td class="cap">Tushare → 巨潮</td><td><a class="chip ac" href="#" style="text-decoration: none">linked · 巨潮 PDF ↗</a></td><td class="n m">344</td><td style="padding-right: 16px"><div class="row"><button class="btn ghost sm">在报表中高亮</button><a class="btn ghost sm" href="#">原文 ↗</a></div></td></tr>
+          <tr><td class="m" style="padding-left: 16px">2025-04-29</td><td>一季报</td><td class="m">2025 Q1</td><td class="m dim">2025-03-31</td><td class="cap">Tushare → 巨潮</td><td><a class="chip ac" href="#" style="text-decoration: none">linked · 巨潮 PDF ↗</a></td><td class="n m">205</td><td style="padding-right: 16px"><div class="row"><button class="btn ghost sm">在报表中高亮</button><a class="btn ghost sm" href="#">原文 ↗</a></div></td></tr>
+          <tr><td class="m" style="padding-left: 16px">2025-04-03</td><td>年报</td><td class="m">2024 FY</td><td class="m dim">2024-12-31</td><td class="cap">Tushare → 巨潮</td><td><a class="chip ac" href="#" style="text-decoration: none">linked · 巨潮 PDF ↗</a></td><td class="n m">418</td><td style="padding-right: 16px"><div class="row"><button class="btn ghost sm">在报表中高亮</button><a class="btn ghost sm" href="#">原文 ↗</a></div></td></tr>
+          <tr><td class="m" style="padding-left: 16px">2025-03-12</td><td>更正</td><td class="m">2024 Q3</td><td class="m dim">2024-09-30</td><td class="cap">Tushare → 巨潮</td><td><span class="chip warn">挂接失败，待人工（5 次）</span></td><td class="n m">3</td><td style="padding-right: 16px"><div class="row"><button class="btn ghost sm">在报表中高亮</button></div></td></tr>
+          <tr><td class="m" style="padding-left: 16px">2024-10-26</td><td>三季报</td><td class="m">2024 Q3</td><td class="m dim">2024-09-30</td><td class="cap">Tushare → 巨潮</td><td><a class="chip ac" href="#" style="text-decoration: none">linked · 巨潮 PDF ↗</a></td><td class="n m">209</td><td style="padding-right: 16px"><div class="row"><button class="btn ghost sm">在报表中高亮</button><a class="btn ghost sm" href="#">原文 ↗</a></div></td></tr>
+        </tbody>
+      </table>
+      <div class="ml" style="padding: 18px 16px 4px">纪要与其他 Transcripts &amp; other</div>
+      <div class="cap" style="padding: 0 16px 16px">待文档管道（F3）。Pending document pipeline (F3).</div>
+    </section>
+
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+      <div class="lbl-state">美股流示例 · US stream (EDGAR)</div>
+      <table class="t dense">
+        <thead><tr><th>可得日期</th><th>类型</th><th>财期</th><th>来源</th><th>引用</th><th class="n">事实数</th></tr></thead>
+        <tbody>
+          <tr><td class="m">2025-11-06</td><td class="m">10-Q</td><td class="m">2025 Q3</td><td class="cap">EDGAR</td><td><a class="chip ac" href="#" style="text-decoration: none">edgar · 索引页 ↗</a></td><td class="n m">164</td></tr>
+          <tr><td class="m">2025-02-27</td><td class="m">10-K</td><td class="m">2024 FY</td><td class="cap">EDGAR</td><td><a class="chip ac" href="#" style="text-decoration: none">edgar · 索引页 ↗</a></td><td class="n m">502</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

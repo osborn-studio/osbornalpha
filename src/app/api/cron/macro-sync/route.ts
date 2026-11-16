@@ -136,7 +136,7 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
  // native outcome leaves the last active snapshot serving.
  const publish=batchStatus==='failed'||!nativeLanded
   ?{status:'skipped' as const,region:'US' as const,reason:nativeLanded?'batch_failed':'no_native_outcomes'}
-  :await publishRegion({db:deps.db},'US',today,{publishKey:`cron:${batchId}`});
+  :await publishRegion({db:deps.db,onPublished:deps.onPublished},'US',today,{publishKey:`cron:${batchId}`});
  return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,publish,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
 }
 
@@ -149,7 +149,7 @@ async function run(request:Request):Promise<NextResponse>{
  const isPreview=flags.length===1;
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion&&!isPreview)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
- const deps=productionMacroDeps({codeVersion:codeVersion??'preview'});
+ const deps=productionMacroDeps({codeVersion:codeVersion??'preview',triggeredBy:'cron'});
  const defs=collectableOf('fred_csv');
  const signal=AbortSignal.timeout(DEADLINE_MS);
  try{
