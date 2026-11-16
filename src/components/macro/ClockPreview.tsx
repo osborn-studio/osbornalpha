@@ -2,6 +2,8 @@
 /** Local-only preview, bundled by scripts/preview/macro-clock.ts; never mounted by Next. */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { NextIntlClientProvider } from "next-intl";
+import { AllocationTemplateCard } from "./AllocationTemplateCard";
 import { MacroRegimeClock } from "./MacroRegimeClock";
 import { clockFrom, clockMetadataFrom, parseJudgments } from "./judgment-view";
 import { weightedClockFrom } from "./clock-weighted";
@@ -109,6 +111,9 @@ function Preview() {
             loading={!data || mode === "loading"}
             t={t}
           />
+          <NextIntlClientProvider locale={locale} messages={{ macro: locale === "en" ? en : zh }} timeZone="UTC">
+            <AllocationTemplateCard current={clock.selected} />
+          </NextIntlClientProvider>
         </div>
       </div>
     </main>

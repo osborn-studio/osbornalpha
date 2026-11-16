@@ -713,11 +713,128 @@
 .clock-breakdown .clock-table-scroll { overflow-x: auto; }
 .clock-breakdown table { min-width: 900px; table-layout: auto; }
 @container clock-phase (max-width: 560px) {
-  .clock-breakdown .clock-table-scroll { overflow-x: auto; }
-  .clock-breakdown table { display: table; min-width: 900px; }
-  .clock-breakdown thead { position: static; clip-path: none; height: auto; width: auto; overflow: visible; }
-  .clock-breakdown tbody { display: table-row-group; }
-  .clock-breakdown tr { display: table-row; }
-  .clock-breakdown tbody th, .clock-breakdown td { display: table-cell; padding: 10px 8px; border-bottom: 1px solid var(--border); }
-  .clock-breakdown td:before { content: none; }
+  .clock-breakdown table { min-width: 0; table-layout: fixed; }
+}
+@media (min-width: 900px) {
+  .clock-grid:has(.clock-panel[data-expanded]) .clock-panel {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .clock-grid:has(.clock-panel[data-expanded]) .clock-panel[data-expanded] {
+    grid-column: 1 / -1;
+  }
+}
+
+.allocation-template {
+  min-width: 0;
+  margin-top: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+}
+.allocation-header {
+  display: grid;
+  gap: 8px;
+}
+.allocation-labels,
+.allocation-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.allocation-labels,
+.allocation-title,
+.allocation-regime-name,
+.allocation-scope,
+.allocation-note,
+.allocation-version,
+.allocation-assets,
+.allocation-ratio {
+  margin: 0;
+}
+.allocation-pill {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.allocation-title,
+.allocation-regime-name {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.allocation-scope,
+.allocation-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.allocation-regimes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  padding: 0;
+  margin: 12px 0;
+  list-style: none;
+}
+.allocation-regime {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+.allocation-regime[data-current] {
+  border-color: var(--border-active);
+  background: var(--accent-wash);
+}
+.allocation-current {
+  color: var(--accent);
+  border-color: var(--border-active);
+}
+.allocation-assets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.allocation-asset {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.allocation-asset-label {
+  color: var(--text-dim);
+}
+.allocation-ratio,
+.allocation-version {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.allocation-version {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+@media (min-width: 640px) {
+  .allocation-regimes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 900px) {
+  .allocation-regimes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }

@@ -44,6 +44,7 @@ export function ClockPhasePanel({
     <article
       data-phase={regime}
       data-current={current || undefined}
+      data-expanded={expanded || undefined}
       className="clock-panel"
       onKeyDown={(e) => {
         if (expanded && e.key === "Escape") {
