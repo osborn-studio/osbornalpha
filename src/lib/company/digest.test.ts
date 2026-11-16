@@ -193,7 +193,7 @@ describe('runCompanyDigest',()=>{
    const r=await runCompanyDigest(deps,{mode:'full',market:'US'});
    expect(r.status).toBe('failed');expect(r.streams[0].outcome).toBe('failed');
    const failure=error.mock.calls.find(c=>c[1]?.stage===stage)?.[1];expect(failure).toMatchObject({stage,outcome:'failed',category:'unknown'});
-   const sanitize=(receipt:typeof r)=>({...receipt,batchId:null,streams:receipt.streams.map(s=>({...s,attemptId:null}))});
+   const sanitize=(receipt:typeof r)=>({...receipt,detail:{...receipt.detail,failedStreams:receipt.detail.failedStreams.map(s=>({...s,consecutiveFailures:0,lastAttemptAt:null,nextAttemptAt:null}))},batchId:null,streams:receipt.streams.map(s=>({...s,attemptId:null}))});
    info.mockImplementation(()=>{throw new Error('sink down');});error.mockImplementation(()=>{throw new Error('sink down');});
    const again=await runCompanyDigest(deps,{mode:'full',market:'US'});
    expect(sanitize(again)).toEqual(sanitize(r));
@@ -295,6 +295,7 @@ describe('runCompanyDigest',()=>{
   const r=await runCompanyDigest({...h.deps,db:{...h.db,markDigestFailed:async()=>{throw new Error('mark down');}},readSnapshot:async(...x)=>({...(await h.deps.readSnapshot(...x)),rows:[],truncated:true})},{mode:'incremental'});
   expect(r.streams[0]).toMatchObject({outcome:'failed',code:'read_truncated',markFailedError:true});
   expect(r.errors).toContainEqual({code:'read_truncated',key:`${a}:US`});expect(r.errors).toContainEqual({code:'mark_failed_error',key:`${a}:US`});
+  expect(freshness(h).consecutive_errors).toBe(1);
   expect(r.counts).toMatchObject({fetched:1,failed:1});
  });
  it('stale_computation twice → failed and backed off',async()=>{
@@ -317,20 +318,20 @@ describe('runCompanyDigest',()=>{
    expect((batchRow(h).errors as {code:string}[]).some(e=>e.code==='unaccounted')).toBe(false);
   }
  });
- it('read_truncated → failed, markDigestFailed with the attempt id, backoff; the backed-off stream keeps freshness not ok while idle',async()=>{
+ it('read_truncated → failed, markDigestFailed with the attempt id, backoff; the backed-off stream stays visible while freshness is ok',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
   const mark=vi.spyOn(h.db,'markDigestFailed');
   const r=await runCompanyDigest({...h.deps,db:{...h.db,markDigestFailed:mark},readSnapshot:async(...x)=>({...(await h.deps.readSnapshot(...x)),rows:[],truncated:true})},{mode:'incremental'});
   expect(r.streams[0]).toMatchObject({outcome:'failed',code:'read_truncated'});
   expect(mark).toHaveBeenCalledWith(a,'US',r.streams[0].attemptId,expect.any(Date));
   expect(r.counts).toMatchObject({fetched:1,failed:1});expect(r.status).toBe('failed');
-  expect(freshness(h).consecutive_errors).toBe(1);
+  expect(freshness(h).consecutive_errors).toBe(0);
   const st=await h.db.digestState(a,'US');
   expect(st).toMatchObject({last_status:'failed',consecutive_failures:1});
   expect(Date.parse(st!.next_attempt_at)).toBeGreaterThan(Date.now()+50*60_000);
   const idle=await runCompanyDigest(h.deps,{mode:'incremental'});
   expect(idle).toMatchObject({idle:true});expect(idle.detail.backlogFailed).toBe(1);
-  expect(freshness(h).consecutive_errors).toBe(2);
+  expect(freshness(h).consecutive_errors).toBe(0);
  });
  it('invalid_event → failed and recorded (module bug signal)',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
@@ -340,13 +341,13 @@ describe('runCompanyDigest',()=>{
   expect(r.errors).toContainEqual({code:'invalid_event',key:`${a}:US`,message:'invalid_event'});
   expect(mark).toHaveBeenCalledTimes(1);
  });
- it('a sweep failing on the same state_rev is recorded (failed, backoff) and makes freshness not ok',async()=>{
+ it('a sweep failing on the same state_rev is recorded (failed, backoff) and keeps freshness ok within tolerance',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
   await runCompanyDigest(h.deps,{mode:'incremental',limit:4});   // no sweep quota: swept_at stays null
   const r=await runCompanyDigest({...h.deps,db:{...h.db,replaceDigest:async()=>{throw new Error('boom');}}},{mode:'incremental'});
   expect(r.streams[0]).toMatchObject({sweep:true,outcome:'failed',code:'digest_issuer_failed'});
   expect((await h.db.digestState(a,'US'))?.last_status).toBe('failed');
-  expect(freshness(h).consecutive_errors).toBe(1);
+  expect(freshness(h).consecutive_errors).toBe(0);
  });
  it('a late failure report after a later success is ignored (attempt identity, §0 #70)',async()=>{
   const h=harness();const a=await stream(h);await disclose(h.facts,a,'2024-02-01','100');
@@ -392,5 +393,15 @@ describe('runCompanyDigest',()=>{
   expect(r.streams).toEqual([expect.objectContaining({issuerId:a,outcome:'planned',events:2})]);
   expect(replace).not.toHaveBeenCalled();expect(begin).not.toHaveBeenCalled();expect(ev).not.toHaveBeenCalled();
   expect(h.tables.rows('ingest_batches')).toEqual([]);
+ });
+});
+
+describe('dataset backlog tolerance',()=>{
+ it.each([[200,1,true],[200,3,false],[3,1,true],[3,2,false],[3,0,true]] as const)('%i active, %i failed: freshness ok=%s',async(activeStreams,failedStreams,ok)=>{
+  const h=harness();const streams=failedStreams?[{issuerId:randomUUID(),market:'US' as const,consecutiveFailures:2,lastAttemptAt:null,nextAttemptAt:'2030-01-01T00:00:00.000Z'}]:[];
+  const r=await runCompanyDigest({...h.deps,db:{...h.db,digestDue:async()=>[],sweepDue:async()=>[],backlog:async()=>({failedStreams,activeStreams,streams})}},{mode:'incremental'});
+  expect(freshness(h).consecutive_errors).toBe(ok?0:1);
+  expect(r.detail).toMatchObject({degraded:failedStreams>0,backlogFailed:failedStreams,backlogTolerance:activeStreams===200?2:1,activeStreams,failedStreams:streams});
+  expect(freshness(h).detail).toEqual(r.detail);
  });
 });

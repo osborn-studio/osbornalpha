@@ -46,9 +46,9 @@ async function runCli(evidenceResponse:()=>Response,args=['--apply','--limit','1
    case 'POST rpc/company_digest_due':return json([{issuerId:ISSUER,market:'US',stateRev:1,digestedRev:0}]);
    case 'POST rpc/begin_company_digest_attempt':return json(1);
    case 'POST rpc/company_read_snapshot':return json({facts:{state_rev:1,rows:[],truncated:false},filings:[]});
-   case 'POST rpc/replace_company_fact_evidence':return evidenceResponse();
+   case 'POST rpc/prune_company_fact_evidence':return evidenceResponse();
    case 'POST rpc/mark_company_digest_failed':return json(true);
-   case 'POST rpc/company_digest_backlog':return json(calls.some(c=>c.path==='rpc/mark_company_digest_failed')?1:0);
+   case 'POST rpc/company_digest_backlog_detail':return json({failedStreams:calls.some(c=>c.path==='rpc/mark_company_digest_failed')?1:0,activeStreams:1,streams:[]});
    case 'POST rpc/replace_company_digest':return json({upserted:0,changed:0,retired:0,revived:0});
    default:throw new Error(`unexpected fixture request: ${method} ${path}`);
   }
@@ -80,7 +80,7 @@ describe('company digest CLI evidence writes',()=>{
   expect(cli.exitCode).toBe(1);
   expect(cli.receipt).toMatchObject({status:'failed',counts:{failed:1},detail:{backlogFailed:1},
    streams:[{issuerId:ISSUER,outcome:'failed',code:'evidence_index_failed',attemptId:1}]});
-  expect(cli.calls('replace_company_fact_evidence')).toHaveLength(1);
+  expect(cli.calls('prune_company_fact_evidence')).toHaveLength(1);
   expect(cli.calls('mark_company_digest_failed')).toEqual([
    expect.objectContaining({body:expect.objectContaining({p_issuer:ISSUER,p_market:'US',p_attempt_id:1})}),
   ]);
@@ -96,7 +96,7 @@ describe('company digest CLI evidence writes',()=>{
   const cli=await runCli(response);
   expect(cli.exitCode).toBe(1);
   expect(cli.events.some(e=>'upstream_request_id' in e)).toBe(false);
-  expect(cli.calls('replace_company_fact_evidence')).toHaveLength(1);
+  expect(cli.calls('prune_company_fact_evidence')).toHaveLength(1);
   expect(cli.calls('replace_company_digest')).toHaveLength(0);
   expect(cli.output).not.toContain(RAW_MESSAGE);
   expect(cli.output).not.toContain(RAW_DETAIL);
@@ -118,7 +118,7 @@ describe('company digest CLI evidence writes',()=>{
   );
   expect(cli.exitCode,cli.output).toBe(0);
   expect(cli.receipt).toMatchObject({status:'success',streams:[{issuerId:ISSUER,outcome:'unchanged'}]});
-  expect(cli.calls('replace_company_fact_evidence')).toHaveLength(1);
+  expect(cli.calls('prune_company_fact_evidence')).toHaveLength(1);
   expect(cli.calls('mark_company_digest_failed')).toHaveLength(0);
   expect(cli.calls('replace_company_digest')).toHaveLength(1);
   expect(cli.events.some(e=>'upstream_request_id' in e)).toBe(false);
