@@ -79,11 +79,11 @@ export function mulDecimalText(a:string,b:string):string{
  return (neg?'-':'')+s;
 }
 const sha256=(s:string)=>createHash('sha256').update(s,'utf8').digest('hex');
-const AGG_METRICS=['revenue_sum','net_income_parent_sum','gross_margin','roe','revenue_yoy','net_income_yoy','member_count'];
+const AGG_METRICS=['net_margin','revenue_sum','net_income_parent_sum','gross_margin','roe','revenue_yoy','net_income_yoy','member_count'];
 const MISSING=['empty_set','zero_denominator','no_members','financial_excluded','unresolved_over_limit','manifest_mismatch'];
 const VAL_METRICS=['pe_ttm','pe_static','pb','market_cap'];
 /** Completeness of activate_industry_metric_run per (metric, duration); true = December 31 period ends only (= method.ts::cellSpecs, Task 10). */
-const REQUIRED_DURATIONS:Record<AggMetric,readonly (readonly [AggDuration,boolean])[]>={revenue_sum:[['3M',false],['12M',true]],net_income_parent_sum:[['3M',false],['12M',true]],
+const REQUIRED_DURATIONS:Partial<Record<AggMetric,readonly (readonly [AggDuration,boolean])[]>>={revenue_sum:[['3M',false],['12M',true]],net_income_parent_sum:[['3M',false],['12M',true]],
  gross_margin:[['12M',true]],roe:[['TTM',false]],revenue_yoy:[['3M',false],['12M',true]],net_income_yoy:[['3M',false],['12M',true]],member_count:[['INSTANT',false]]};
 
 export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'scopeAll'>}={}):MemoryIndustryDb{
@@ -470,8 +470,12 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   activateMetricRun:run=>atomic(s=>{
    const r=lockRun(s,run);if(r.status!=='building')fail('run_not_building');
    const cells=[...s.cells.get(run)!.values()];
+   const {cell_rule:rule,membership_on:on}=r.expected_grid;
+   if(on!=null&&(on>r.facts_as_of||r.history_class!=='reconstruction'||r.scheme!=='sic'))fail('invalid_membership_basis');
+   if(rule==='fiscal_year_bucket/1'&&on==null)fail('invalid_membership_basis');
+   if(rule!=null&&rule!=='fiscal_year_bucket/1')fail('invalid_cell_rule');
    for(const code of r.expected_grid.codes)for(const pe of r.expected_grid.period_ends)for(const metric of r.expected_grid.metrics)
-    for(const [duration,decOnly] of REQUIRED_DURATIONS[metric]??[]){   // a metric the grid names but the method does not know has no required cells (SQL: join finds nothing)
+    for(const [duration,decOnly] of (rule==='fiscal_year_bucket/1'?[[metric==='member_count'?'INSTANT':'12M',false] as const]:REQUIRED_DURATIONS[metric]??[])){   // a metric the grid names but the method does not know has no required cells (SQL: join finds nothing)
      if(decOnly&&pe.slice(5)!=='12-31')continue;
      if(!cells.some(c=>c.code===code&&c.metric===metric&&c.duration===duration&&c.period_end===pe))fail('incomplete_run');
     }
@@ -480,7 +484,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
    for(const c of cells){const k=`${c.code}:${c.period_end}`;perCell.set(k,Math.max(perCell.get(k)??0,c.n_members));cellAt.set(k,{code:c.code,pe:c.period_end});}
    for(const [k,n] of perCell)if(deps.filter(d=>d.cell_key===k).length!==n)fail('dependencies_incomplete');
    // the dependency issuers of each cell equal its candidate members known by facts_as_of (both directions); no dependency of a cell without rows
-   for(const [k,{code,pe}] of cellAt)if(!sameSet(new Set(deps.filter(d=>d.cell_key===k).map(d=>d.issuer_id)),candidateIssuers(s,r,code,pe,r.facts_as_of)))fail('dependencies_incomplete');
+   for(const [k,{code,pe}] of cellAt)if(!sameSet(new Set(deps.filter(d=>d.cell_key===k).map(d=>d.issuer_id)),candidateIssuers(s,r,code,on??pe,r.facts_as_of)))fail('dependencies_incomplete');
    if(deps.some(d=>!cellAt.has(d.cell_key)))fail('dependencies_incomplete');
    const active=[...s.runs.values()].find(a=>a.scheme===r.scheme&&a.version===r.version&&a.level===r.level&&a.status==='active');
    if(active){

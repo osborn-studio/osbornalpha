@@ -60,6 +60,7 @@ function requirements(spec:CellSpec):Req[]{
    const py=(d:string)=>shiftYears(d,-1);
    return duration==='12M'?[fact(c!,'12M',ps,pe),fact(c!,'12M',py(ps),py(pe),true)]:[der(`q_single_${c}`,'3M',ps,pe),der(`q_single_${c}`,'3M',py(ps),py(pe),true)];
   }
+  case 'net_margin':throw new Error('unsupported_cn_metric');
   case 'member_count':return [];
  }
 }
@@ -88,6 +89,7 @@ function combine(metric:AggMetric,inc:readonly string[][]):{value:string}|{missi
    return {value:decDiv(decMul('2',decSum(col(0))),den)!};
   }
   case 'revenue_yoy':case 'net_income_yoy':{const cur=decSum(col(0)),prior=decSum(col(1));const v=decDiv(decSub(cur,prior),decAbs(prior));return v===null?{missing:'zero_denominator'}:{value:v};}
+  case 'net_margin':{const v=decDiv(decSum(col(0)),decSum(col(1)));return v===null?{missing:'zero_denominator'}:{value:v};}
   case 'member_count':throw new Error('combine_member_count');
  }
 }

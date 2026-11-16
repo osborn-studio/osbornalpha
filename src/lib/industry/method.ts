@@ -61,7 +61,7 @@ export const METHOD_CONFIG={
 } as const;
 export const CONFIG_HASH=sha256Hex(canonicalJson(METHOD_CONFIG));
 
-export interface CellSpec{metric:AggMetric;duration:AggDuration;period_start:string;period_end:string;unit:'CNY'|'ratio'|'count'}
+export interface CellSpec{metric:AggMetric;duration:AggDuration;period_start:string;period_end:string;unit:'CNY'|'USD'|'ratio'|'count'}
 
 const DAY=/^\d{4}-\d{2}-\d{2}$/;
 export function assertDay(name:string,v:string):void{

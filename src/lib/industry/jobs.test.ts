@@ -1,7 +1,7 @@
 // src/lib/industry/jobs.test.ts
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 
-const runners=vi.hoisted(()=>({loadAShare:vi.fn(),universe:vi.fn(),reconcile:vi.fn(),swClass:vi.fn(),sw:vi.fn(),resolve:vi.fn(),sicClass:vi.fn(),sic:vi.fn(),marks:vi.fn(),agg:vi.fn()}));
+const runners=vi.hoisted(()=>({loadAShare:vi.fn(),universe:vi.fn(),reconcile:vi.fn(),swClass:vi.fn(),sw:vi.fn(),resolve:vi.fn(),sicClass:vi.fn(),sic:vi.fn(),marks:vi.fn(),aggUs:vi.fn(),agg:vi.fn()}));
 vi.mock('./load-a-share',()=>({runLoadAShare:runners.loadAShare}));
 vi.mock('./facts-scope',()=>({industryCnUniverse:runners.universe}));
 vi.mock('../facts/scope',()=>({reconcileScope:runners.reconcile}));
@@ -10,6 +10,7 @@ vi.mock('./source-memberships',()=>({runMembershipsSw:runners.sw}));
 vi.mock('./resolve-memberships',()=>({runResolveMemberships:runners.resolve}));
 vi.mock('./sic',()=>({runClassificationsSic:runners.sicClass,runMembershipsSic:runners.sic}));
 vi.mock('./marks',()=>({runMarks:runners.marks}));
+vi.mock('./run-aggregation-us',()=>({runIndustryAggregationUs:runners.aggUs}));
 vi.mock('./run-aggregation',()=>({runIndustryAggregation:runners.agg}));
 vi.mock('./memberships',()=>({isMemberAt:()=>true}));
 vi.mock('./replay',()=>({replayFromManifest:vi.fn((m:{cells:unknown[]})=>({cells:m.cells,reproduced:true,mismatches:[]}))}));
@@ -103,12 +104,21 @@ describe('runIndustryJob (adapts each runner of Tasks 5–13 to a RunnerReceipt)
   expect(await runIndustryJob('facts-scope',deps,{dryRun:false,triggeredBy:'script'})).toMatchObject({receipt:{status:'success',counts:{desired:10,retired:1,changed:2,'skipped.no_cn_ticker':1}}});
   expect(runners.reconcile).toHaveBeenCalledWith({tables:deps.tables,db:deps.scopeDb},'CN',{today:'2026-11-07'});
  });
+ it('aggregate-sic has no env gate, parses dates, and supports genuine dry runs',async()=>{
+  expect(jobGate('aggregate-sic',{},{apply:true})).toBeNull();
+  expect(parseSyncArgs(['--job','aggregate-sic','--facts-as-of','2026-04-01'])).toMatchObject({ok:true,args:{job:'aggregate-sic',factsAsOf:'2026-04-01',apply:false}});
+  runners.aggUs.mockResolvedValue({status:'dry_run',batchId:null,batchStatus:null,runId:null,groups:6,reusedGroups:0,cells:{ok:21,missing:21},manifestMismatches:0,truncatedIssuers:[],preview:{industriesMinMembers:1,displayableValueCells:18,sample:[]}});
+  expect(await runIndustryJob('aggregate-sic',deps,{dryRun:true,triggeredBy:'script'})).toMatchObject({receipt:{status:'dry_run',counts:{groups:6,industries_min_members:1,displayable_value_cells:18},preview:{sample:[]}}});
+  expect(runners.aggUs).toHaveBeenCalledWith(deps,{factsAsOf:'2026-11-07',triggeredBy:'script',dryRun:true});
+ });
  it('aggregate: level 1, factsAsOf defaults to today (UTC); failures carry the run code',async()=>{
   expect(await runIndustryJob('aggregate',deps,{dryRun:false,triggeredBy:'script'})).toMatchObject({job:'aggregate',receipt:{batchId:'a',status:'success',counts:{groups:8,reused_groups:5,cells_ok:30}}});
   expect(runners.agg).toHaveBeenCalledWith(deps,{scheme:'sw2021',version:'2021',level:1,factsAsOf:'2026-11-07',triggeredBy:'script'});
   runners.agg.mockResolvedValueOnce({status:'failed',code:'facts_scope_not_ready',batchId:'a',batchStatus:'failed',runId:RUN_ID,generation:3,activatedAt:null,historyClass:'reconstruction',groups:8,reusedGroups:0,cells:{ok:0,missing:0},manifestMismatches:0,truncatedIssuers:[]});
   expect(await runIndustryJob('aggregate',deps,{dryRun:false,triggeredBy:'cron'})).toMatchObject({receipt:{status:'failed',errors:[{code:'facts_scope_not_ready',key:RUN_ID}]}});
-  expect(await runIndustryJob('aggregate',deps,{dryRun:true,triggeredBy:'script'})).toMatchObject({receipt:{status:'dry_run',errors:[{code:'dry_run_unsupported'}]}});
+  runners.agg.mockResolvedValue({status:'dry_run',batchId:null,batchStatus:null,runId:null,groups:8,reusedGroups:0,cells:{ok:30,missing:28},manifestMismatches:0,truncatedIssuers:[]});
+  expect(await runIndustryJob('aggregate',deps,{dryRun:true,triggeredBy:'script'})).toMatchObject({receipt:{status:'dry_run',errors:[]}});
+  expect(runners.agg).toHaveBeenLastCalledWith(deps,expect.objectContaining({dryRun:true}));
  });
  it('official and valuation are deferred (I-3) and touch nothing',async()=>{
   expect(await runIndustryJob('official',deps,{dryRun:false,triggeredBy:'cron'})).toEqual({job:'official',skipped:'deferred_i3'});

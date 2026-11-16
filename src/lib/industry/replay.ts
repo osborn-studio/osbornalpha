@@ -9,6 +9,8 @@
 // replayCell validates ONLY the requested cell (the single-cell payload the replay endpoint returns); the
 // full-grid check stays in replayFromManifest (ingestion).
 // No database, no clock, no METHOD_CONFIG: an old manifest replays under the code that reads it.
+import {pickInputsUs,finalizeCellUs} from './aggregate-us';
+import {METHOD_VERSION_US,cellSpecsUs} from './method-us';
 import {InputIndex,finalizeCell,pickInputs} from './aggregate';
 import type {PoolDerived,PoolFact} from './aggregate';
 import {canonicalJson} from './canonical-json';
@@ -22,14 +24,15 @@ export interface CellReplay{cell:ManifestCell|null;reproduced:boolean;mismatches
 type CellKey=Pick<ManifestCell,'metric'|'duration'|'period_start'>;
 const cellId=(c:CellKey)=>`${c.metric}:${c.duration}:${c.period_start}`;
 
-interface Ctx{m:AggregateManifest;nMembers:number;nUnresolved:number;idx:InputIndex<PoolFact,PoolDerived>;expected:Map<string,CellSpec>}
+interface Ctx{m:AggregateManifest;nMembers:number;nUnresolved:number;facts:Map<string,PoolFact[]>;us:boolean;idx:InputIndex<PoolFact,PoolDerived>;expected:Map<string,CellSpec>}
 function contextOf(m:AggregateManifest):Ctx{
  if(m.schema!==MANIFEST_SCHEMA||m.kind!=='aggregate')throw new Error('unsupported_manifest');
  const facts:PoolFact[]=m.facts.map(f=>({issuer_id:f.issuer_id,concept:f.concept,period_start:f.period_start,period_end:f.period_end,duration:f.duration,unit:f.unit,value:f.value_text}));
  const derived:PoolDerived[]=m.derived.map(d=>({issuer_id:d.issuer_id,metric:d.metric,period_start:d.period_start,period_end:d.period_end,duration:d.duration,unit:d.unit,value:d.value}));
- return {m,nMembers:new Set(m.members.map(x=>x.issuer_id)).size,nUnresolved:new Set(m.unresolved.map(u=>u.ts_code)).size,idx:new InputIndex(facts,derived),
+ const byIssuer=new Map<string,PoolFact[]>();for(const f of facts){const xs=byIssuer.get(f.issuer_id);if(xs)xs.push(f);else byIssuer.set(f.issuer_id,[f]);}
+ return {m,facts:byIssuer,us:m.method_version===METHOD_VERSION_US,nMembers:new Set(m.members.map(x=>x.issuer_id)).size,nUnresolved:new Set(m.unresolved.map(u=>u.ts_code)).size,idx:new InputIndex(facts,derived),
   // the grid and the units are method facts, not manifest claims: the stored cells must be exactly cellSpecs(period_end)
-  expected:new Map(cellSpecs(m.period_end).map(s=>[cellId(s),s]))};
+  expected:new Map((m.method_version===METHOD_VERSION_US?cellSpecsUs(m.period_end):cellSpecs(m.period_end)).map(s=>[cellId(s),s]))};
 }
 /** Recomputes one stored cell from the manifest's roles and inputs; pushes unexpected_cell / value mismatches. */
 function replayStored(c:Ctx,stored:ManifestCell,mismatches:string[]):ManifestCell{
@@ -42,14 +45,14 @@ function replayStored(c:Ctx,stored:ManifestCell,mismatches:string[]):ManifestCel
  if(stored.metric!=='member_count'){
   for(const r of roles){
    if(r.role!=='included')continue;
-   const p=pickInputs(spec,r.issuer_id,c.idx);
+   const p=c.us?pickInputsUs(spec,r.issuer_id,c.facts.get(r.issuer_id)??[]):pickInputs(spec,r.issuer_id,c.idx);
    if(!p.ok){broken=true;break;}
    included.push(p.values);
   }
  }
  const cell:ManifestCell=broken
   ?{metric:stored.metric,duration:stored.duration,period_start:stored.period_start,status:'missing',missing_reason:'manifest_mismatch',n_members:c.nMembers,n_with_data:0,n_unresolved:c.nUnresolved,unit:stored.unit}
-  :finalizeCell(spec,c.nMembers,c.nUnresolved,financial,included);
+  :c.us?finalizeCellUs(spec,c.nMembers,financial,included):finalizeCell(spec,c.nMembers,c.nUnresolved,financial,included);
  if(known&&canonicalJson(cell)!==canonicalJson(stored))mismatches.push(cellId(stored));
  return cell;
 }

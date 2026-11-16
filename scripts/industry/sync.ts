@@ -11,9 +11,10 @@
  * For memberships-sw, --l1 limits source fetch only: apply loads all
  * SW2021 classifications and runs the global resolver, in separate batches, with no job deadline.
  * Its dry run plans sources from stored classifications; it does not preview the full apply scope.
- * Jobs: load-a-share | facts-scope | memberships-sw | memberships-sic | marks | aggregate, plus the
+ * Jobs: load-a-share | facts-scope | memberships-sw | memberships-sic | marks | aggregate | aggregate-sic, plus the
  * deferred official | valuation (I-3: printed as skipped deferred_i3, exit 0). --recompute-from belongs
- * to valuation only. Gates (src/lib/industry/jobs.ts::jobGate): Tushare jobs need TUSHARE_TOKEN even
+ * to valuation only. aggregate and aggregate-sic dry runs compute all cells/manifests without writes;
+ * aggregate-sic has no env gate. Gates (src/lib/industry/jobs.ts::jobGate): Tushare jobs need TUSHARE_TOKEN even
  * for a dry run; --apply of facts-scope needs FACTS_CN_INDUSTRY_UNIVERSE=1 and of aggregate needs
  * FACTS_CN_ENABLED=1 (spec §4.10 V4). --apply needs a code version (VERCEL_GIT_COMMIT_SHA or a git
  * checkout). The weekly aggregate runs here (Mac Studio launchd, spec §5.4), never concurrently with

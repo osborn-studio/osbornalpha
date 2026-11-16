@@ -26,7 +26,7 @@ export const SCHEME_VERSION:Record<Scheme,SchemeVersion>={sw2021:'2021',sic:'sec
 export const AGG_METRICS:readonly AggMetric[]=['revenue_sum','net_income_parent_sum','gross_margin','roe','revenue_yoy','net_income_yoy','member_count'];
 export const AGG_DURATIONS:readonly AggDuration[]=['12M','3M','TTM','INSTANT'];
 /** Spec §5.2: the durations each metric is computed for (first = page default). */
-export const METRIC_DURATIONS:Record<AggMetric,readonly AggDuration[]>={revenue_sum:['12M','3M'],net_income_parent_sum:['12M','3M'],gross_margin:['12M'],roe:['TTM'],revenue_yoy:['12M','3M'],net_income_yoy:['12M','3M'],member_count:['INSTANT']};
+export const METRIC_DURATIONS:Record<AggMetric,readonly AggDuration[]>={revenue_sum:['12M','3M'],net_income_parent_sum:['12M','3M'],gross_margin:['12M'],net_margin:['12M'],roe:['TTM'],revenue_yoy:['12M','3M'],net_income_yoy:['12M','3M'],member_count:['INSTANT']};
 /** The stored YoY metric shown next to a sum in the table view (no page-side arithmetic). */
 export const YOY_COMPANION:Partial<Record<AggMetric,AggMetric>>={revenue_sum:'revenue_yoy',net_income_parent_sum:'net_income_yoy'};
 /** dq_freshness datasets written by the jobs (Task 12 aggregate, Task 7 SW memberships, Task 9 SIC). */

@@ -31,7 +31,7 @@ export const DEPS_CHUNK=2000;
 export const READ_PAGE=1000;
 /** gc_industry_manifest_candidates / delete_industry_manifests skip index rows younger than this (a building run uploads before it stages). */
 export const MANIFEST_GC_GRACE_SECONDS=86400;
-const MESSAGE_CODES:readonly IndustryDbErrorCode[]=['membership_conflict','membership_overlap','same_day_change','incomplete_run','obsolete_run','dependencies_incomplete','dependency_regression','pairs_mismatch','illegal_transition','run_not_building','fetch_event_payload_changed','manifest_gc_in_progress','lease_lost'];
+const MESSAGE_CODES:readonly IndustryDbErrorCode[]=['invalid_cell_rule','invalid_membership_basis','membership_conflict','membership_overlap','same_day_change','incomplete_run','obsolete_run','dependencies_incomplete','dependency_regression','pairs_mismatch','illegal_transition','run_not_building','fetch_event_payload_changed','manifest_gc_in_progress','lease_lost'];
 
 /** PostgreSQL / PostgREST error → IndustryDbError (shared by the Supabase and pg adapters). */
 export function toIndustryDbError(e:PgErrorLike|IndustryDbError):IndustryDbError{
@@ -101,7 +101,8 @@ export function metricRunFromTable(r:Record<string,unknown>):MetricRunRow{
  return {run_id:str(r.run_id),scheme:r.scheme as MetricRunRow['scheme'],version:r.version as MetricRunRow['version'],level:Number(r.level),generation:Number(r.generation),
   facts_as_of:str(r.facts_as_of),knowledge_date:str(r.knowledge_date),history_class:r.history_class as MetricRunRow['history_class'],method_version:str(r.method_version),
   config_hash:str(r.config_hash),formula_version:str(r.formula_version),code_version:str(r.code_version),
-  expected_grid:{codes:Array.isArray(g.codes)?g.codes.map(String):[],period_ends:Array.isArray(g.period_ends)?g.period_ends.map(String):[],metrics:Array.isArray(g.metrics)?g.metrics.map(x=>String(x) as AggMetric):[]},
+  expected_grid:{codes:Array.isArray(g.codes)?g.codes.map(String):[],period_ends:Array.isArray(g.period_ends)?g.period_ends.map(String):[],metrics:Array.isArray(g.metrics)?g.metrics.map(x=>String(x) as AggMetric):[],
+   ...(g.cell_rule===undefined?{}:{cell_rule:strOrNull(g.cell_rule)}),...(g.membership_on===undefined?{}:{membership_on:strOrNull(g.membership_on)})},
   fingerprint_at:isoTs(r.fingerprint_at),reused_from_run:strOrNull(r.reused_from_run),batch_id:str(r.batch_id),status:r.status as MetricRunRow['status'],
   coverage_summary:obj(r.coverage_summary),created_at:isoTs(r.created_at),activated_at:isoOrNull(r.activated_at)};
 }

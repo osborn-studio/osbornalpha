@@ -66,7 +66,7 @@ const CNY_YI:ValueFormat={shift:-8,digits:2,group:true,signed:false,suffix:{zh:'
 const USD_BN:ValueFormat={shift:-9,digits:2,group:true,signed:false,suffix:{zh:' 十亿美元',en:' bn USD'}};
 const COUNT:ValueFormat={shift:0,digits:0,group:true,signed:false,suffix:{zh:'',en:''}};
 const MULTIPLE:ValueFormat={shift:0,digits:2,group:true,signed:false,suffix:{zh:'',en:''}};
-export const METRIC_FORMAT:Record<AggMetric,ValueFormat>={revenue_sum:CNY_YI,net_income_parent_sum:CNY_YI,gross_margin:PCT,roe:PCT,revenue_yoy:PCT_SIGNED,net_income_yoy:PCT_SIGNED,member_count:COUNT};
+export const METRIC_FORMAT:Record<AggMetric,ValueFormat>={revenue_sum:CNY_YI,net_income_parent_sum:CNY_YI,gross_margin:PCT,net_margin:PCT,roe:PCT,revenue_yoy:PCT_SIGNED,net_income_yoy:PCT_SIGNED,member_count:COUNT};
 export const VALUATION_FORMAT:Record<ValuationCellRow['metric'],ValueFormat>={pe_ttm:MULTIPLE,pe_static:MULTIPLE,pb:MULTIPLE,market_cap:CNY_YI};
 
 export function formatWith(f:ValueFormat,value:string,locale:Locale):string{
