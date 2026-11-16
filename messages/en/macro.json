@@ -17,7 +17,31 @@
   "errors": {"quota_exceeded": "Daily analysis quota reached", "insufficient_sample": "Not enough valid pairs", "zero_variance": "A series has zero variance", "non_positive_price": "A non-positive price prevents a return calculation", "no_events": "No usable policy events in the window", "invalid_inputs": "Frozen inputs are invalid", "input_truncated": "Inputs exceed the read limit; nothing computed", "invalid_parameter": "Invalid parameters: {fields}", "unauthorized": "Please sign in", "unauthenticated": "Please sign in", "request_conflict": "This request id was already used with different parameters; submit again to create a new run", "code_version_unavailable": "The analysis code version is unavailable; try again later", "analysis_input_invalid": "The frozen analysis inputs are invalid", "read_failed": "Inputs could not be read", "write_failed": "The analysis could not be saved", "unknown": "Analysis failed: {code}"},
   "result": {"title": "Result", "r": "r", "r2": "R²", "n": "n", "sample": "Sample", "transform": "Transform", "lag": "Lag", "method": "Method version", "code": "Code version", "exploratory": "Exploratory: level correlation between trending series does not show a relationship.", "pairs": "Aligned pairs", "t": "Indicator month", "s": "Asset month", "x": "Indicator value", "y": "Asset value", "fit": "Fit y = {intercept} + {slope}·x", "rolling": "Rolling r", "windowEnd": "Window end", "validPairs": "Valid pairs", "events": "Per event", "anchor": "Anchor month", "eventDate": "Effective date", "changeBp": "Decision change (bp)", "pre": "{n} months before", "post": "{n} months after", "median": "Median", "q1": "Lower quartile", "q3": "Upper quartile", "independent": "{count} independent complete events ({candidates} candidates)", "dropped": "Dropped {date}: {reason}", "droppedReasons": {"overlap": "overlapping window", "incomplete_window": "incomplete window"}, "fewEvents": "Fewer than 5 independent complete events: per-event table only.", "inputs": "Frozen inputs", "cutoff": "Cutoff", "catalog": "Catalog version", "hash": "Inputs hash", "observations": "{ind} indicator · {asset} asset observations", "status": "Status", "failed": "Not computed: {code}", "openRun": "Open result page →", "loadFailed": "Could not load", "retryLoad": "Retry loading", "savedRun": "The run was saved ({id}) but could not be loaded", "notFound": "No such analysis, or it is not yours", "scatterLabel": "Scatter with fitted line", "rollingLabel": "Rolling r"},
   "presetNames": {"p1": "Fed funds rate × UST 10Y (changes)", "p2": "US CPI YoY × UST 10Y (changes)", "p3": "US CPI YoY × WTI crude (changes, asset leads 1 month)", "p4": "Broad dollar × WTI crude (changes)", "p5": "US unemployment × UST 10Y (rolling 36m)", "p6": "Fed policy events → UST 10Y (±6 months)", "p7": "China manufacturing PMI × CGB 10Y (changes)", "p8": "China CPI YoY × CGB 10Y (levels, exploratory)"}},
- "judgment": {"widget": {
+ "judgment": {"allocation": {
+  "title": "Asset allocation assumption templates",
+  "proportions": "Illustrative proportions",
+  "staticReference": "Static reference",
+  "current": "Current",
+  "labels": {
+    "framework": "Assumed framework",
+    "untested": "untested",
+    "disclaimer": "not investment advice"
+  },
+  "source": "Source: Merrill Lynch “Investment Clock” (Greetham & Hartnett, 2004): the classic strongest-class mapping is equities in recovery, commodities in overheat, cash in stagflation, and bonds in recession. The specific percentages are this product’s own illustrative template values, not from that publication.",
+  "tilt": {
+    "recovery": "Assuming improving growth and easing inflation, the template emphasizes equities.",
+    "overheat": "Assuming stronger demand and rising price pressure, the template emphasizes commodities.",
+    "stagflation": "Assuming weaker growth and persistent price pressure, the template emphasizes cash.",
+    "recession": "Assuming growth and inflation both fall, the template emphasizes bonds."
+  },
+  "assets": {
+    "equity": "Equities",
+    "bond": "Bonds",
+    "commodity": "Commodities",
+    "cash": "Cash"
+  },
+  "scope": "Static reference only; independent of user holdings or trading."
+}, "widget": {
   "eyebrow": "MACRO FRAMEWORK",
   "title": "Investment clock",
   "snapshot": "{region} · Snapshot {date}",

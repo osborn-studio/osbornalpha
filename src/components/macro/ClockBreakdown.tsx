@@ -7,6 +7,7 @@ export function ClockBreakdown({ rows, regime, t, onEvidence }: {
   rows: WeightedRow[]; regime: Regime; t: MacroT; onEvidence?: (row: WeightedRow) => void;
 }) {
   const w = (key: string) => t(`judgment.widget.${key}`);
+  if (rows.length === 0) return <p className="clock-small">{w("empty")}</p>;
   const ordered = quadrantRows(rows.filter(r => r.state === "matched"), regime)
     .concat(rows.filter(r => r.state === "not_matched" || r.state === "no_data").map(r => ({ ...r, amount: 0 })))
     .concat(rows.filter(r => r.state === "missing" || r.state === "restricted").map(r => ({ ...r, amount: 0 })));

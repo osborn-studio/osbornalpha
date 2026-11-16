@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as storage from "@/lib/macro/clock-view";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RULES_VERSION } from "@/lib/macro/regime";
@@ -37,6 +38,33 @@ const dto = {
 };
 
 describe("weighted clock", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it.each([
+    {}, { ...dto.regime, coverage: Infinity }, { ...dto.regime, margin_pp: NaN },
+    { ...dto.regime, scores: {} }, { ...dto.regime, norm: { ...scores, recovery: NaN } },
+    { ...dto.regime, primary_state: "unknown" }, { ...dto.regime, secondary_state: "unknown" },
+    { ...dto.regime, growth_axis: undefined }, { ...dto.regime, inflation_axis: Infinity },
+  ])("rejects a malformed regime before reconciliation: %j", regime => {
+    expect(weightedClockFrom({ ...dto, regime }, "bound", "en")).toMatchObject({ status: "unavailable", rows: [] });
+  });
+  it.each([
+    {}, { ...dto.contributions[0], series_id: 1 }, { ...dto.contributions[0], observation_id: null },
+    { ...dto.contributions[0], rule_id: null }, { ...dto.contributions[0], weight: Infinity },
+    { ...dto.contributions[0], contribution: {} },
+    { ...dto.contributions[0], contribution: { ...scores, recovery: NaN } },
+  ])("rejects any malformed contribution without silently dropping it: %j", malformed => {
+    expect(weightedClockFrom({ ...dto, contributions: [...dto.contributions, malformed] }, "bound", "en"))
+      .toMatchObject({ status: "unavailable", rows: [] });
+  });
+  it("returns unavailable if reconciliation throws", () => {
+    vi.spyOn(storage, "reconcileStorage").mockImplementationOnce(() => { throw new Error("malformed storage"); });
+    expect(weightedClockFrom(dto, "bound", "en")).toMatchObject({ status: "unavailable", rows: [] });
+  });
+  it("renders the empty message instead of an empty table", () => {
+    const html = renderToStaticMarkup(createElement(ClockBreakdown, { rows: [], regime: "recovery", t: key => key }));
+    expect(html).toContain("judgment.widget.empty");
+    expect(html).not.toContain("<table");
+  });
   it("projects every weighted series and comparison roles from the frozen observations", () => {
     const view = weightedClockFrom(dto, "bound", "en");
     expect(view.status).toBe("ok");

@@ -12,6 +12,7 @@ import {
   type JudgmentCard,
 } from "./judgment-view";
 import { MacroRegimeClock } from "./MacroRegimeClock";
+import { AllocationTemplateCard } from "./AllocationTemplateCard";
 import { useMacroT, type MacroT } from "./use-macro-t";
 import { type Locale } from "./view-model";
 
@@ -118,6 +119,7 @@ function BoundClock({
         onRefresh={onRefresh}
         onEvidence={evidence}
       />
+      <AllocationTemplateCard current={clock.selected} />
       <SourceDrawer
         target={drawer}
         onClose={() => setDrawer(null)}

@@ -9,6 +9,13 @@ import { formatValueText } from "./macro-format";
 
 const REGIMES: Regime[] = ["recovery", "overheat", "stagflation", "recession"];
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isRegime = (v: unknown): v is Regime => REGIMES.some(r => r === v);
+const regimeNumbers = (v: unknown): v is Record<Regime, number> => isObject(v) && REGIMES.every(r => finite(v[r]));
+const validRegime = (v: unknown): boolean => v === null || (isObject(v) &&
+  finite(v.coverage) && finite(v.margin_pp) && regimeNumbers(v.scores) && regimeNumbers(v.norm) &&
+  isRegime(v.primary_state) && (v.secondary_state === null || isRegime(v.secondary_state)) &&
+  (v.growth_axis === null || finite(v.growth_axis)) && (v.inflation_axis === null || finite(v.inflation_axis)));
 const zero = (): Record<Regime, number> => ({ recovery: 0, overheat: 0, stagflation: 0, recession: 0 });
 const valueWithUnit = (value: string, unit: string) => formatValueText(value) + (unit === "pct" || unit === "pct_yoy" ? "%" : unit === "index" ? "" : unit);
 
@@ -36,13 +43,19 @@ const unavailable = (insufficientCoverage = false): WeightedClock => ({ status: 
 
 /** Project the exact stored decomposition only after its score and coverage invariants pass. */
 export function weightedClockFrom(json: unknown, snapshotId: string, locale: "zh" | "en"): WeightedClock {
+  if (!isObject(json) || !validRegime(json.regime)) return unavailable();
+  // Validate the raw array before basisFrom can filter malformed entries out.
+  const rawContributions = [json.contributions, isObject(json.regime) ? json.regime.contributions : undefined,
+    isObject(json.snapshot) ? json.snapshot.contributions : undefined].find(Array.isArray);
+  if (!Array.isArray(rawContributions) || !rawContributions.every(c => isObject(c) &&
+    typeof c.series_id === "string" && typeof c.observation_id === "string" && typeof c.rule_id === "string" &&
+    finite(c.weight) && regimeNumbers(c.contribution))) return unavailable();
   const basis = basisFrom(json, snapshotId);
   if (!basis || !isObject(json) || !isObject(json.snapshot) || !Array.isArray(json.observations)) return unavailable();
   const region = json.snapshot.region;
   if (region !== "US" && region !== "CN") return unavailable();
   const insufficientCoverage = json.regime === null || (isObject(json.regime) && typeof json.regime.coverage === "number" && json.regime.coverage < .6);
-  if (typeof json.rulesVersion !== "string" || typeof json.uncoveredWeight !== "number" ||
-      (json.regime !== null && !isObject(json.regime))) return unavailable(insufficientCoverage);
+  if (typeof json.rulesVersion !== "string" || !finite(json.uncoveredWeight)) return unavailable(insufficientCoverage);
   const manifest = new Set(Array.isArray(json.snapshot.observation_ids) ? json.snapshot.observation_ids : []);
   const observations: ObservationRow[] = [];
   for (const raw of json.observations) {
@@ -63,7 +76,12 @@ export function weightedClockFrom(json: unknown, snapshotId: string, locale: "zh
     regime: json.regime as RegimeRecord["regime"], contributions: basis,
     rules_version: json.rulesVersion, uncovered_weight: json.uncoveredWeight,
   };
-  const result = reconcileStorage({ region, observations, rec, snapshotCatalogVersion: typeof json.catalogVersion === "string" ? json.catalogVersion : undefined });
+  let result: ReturnType<typeof reconcileStorage>;
+  try {
+    result = reconcileStorage({ region, observations, rec, snapshotCatalogVersion: typeof json.catalogVersion === "string" ? json.catalogVersion : undefined });
+  } catch {
+    return unavailable(insufficientCoverage);
+  }
   if (!result.ok) return { status: "reconcile_failed", rows: [], insufficientCoverage, diagnostics: result.diagnostics.map(d => d.code) };
   const contributions = new Map(basis.map(c => [c.series_id, c]));
   const bySeries = new Map<string, ObservationRow[]>();

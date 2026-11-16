@@ -17,7 +17,31 @@
   "errors": {"quota_exceeded": "今日分析次数已用完", "insufficient_sample": "有效样本不足", "zero_variance": "序列方差为零，无法计算", "non_positive_price": "价格出现非正值，无法计算收益", "no_events": "窗口内没有可用的政策事件", "invalid_inputs": "冻结输入不合法", "input_truncated": "输入超出读取上限，未计算", "invalid_parameter": "参数不合法：{fields}", "unauthorized": "请先登录", "unauthenticated": "请先登录", "request_conflict": "该请求编号已用于不同参数；请再次提交以创建新的分析", "code_version_unavailable": "分析代码版本不可用，请稍后重试", "analysis_input_invalid": "冻结的分析输入不合法", "read_failed": "读取输入失败", "write_failed": "保存分析失败", "unknown": "分析失败：{code}"},
   "result": {"title": "结果", "r": "r", "r2": "R²", "n": "n", "sample": "样本区间", "transform": "变换", "lag": "滞后", "method": "方法版本", "code": "代码版本", "exploratory": "探索性：趋势序列的水平相关不代表关系。", "pairs": "对齐样本", "t": "指标月", "s": "资产月", "x": "指标值", "y": "资产值", "fit": "拟合 y = {intercept} + {slope}·x", "rolling": "滚动 r", "windowEnd": "窗口末月", "validPairs": "有效对数", "events": "逐事件", "anchor": "锚定月", "eventDate": "生效日", "changeBp": "决策变化（bp）", "pre": "事件前 {n} 月", "post": "事件后 {n} 月", "median": "中位数", "q1": "下四分位", "q3": "上四分位", "independent": "独立完整事件 {count} 个（候选 {candidates} 个）", "dropped": "剔除 {date}：{reason}", "droppedReasons": {"overlap": "窗口重叠", "incomplete_window": "窗口不完整"}, "fewEvents": "独立完整事件少于 5 个，只给逐事件表。", "inputs": "冻结输入", "cutoff": "截止时点", "catalog": "目录版本", "hash": "输入哈希", "observations": "指标 {ind} 条 · 资产 {asset} 条观测", "status": "状态", "failed": "未计算：{code}", "openRun": "打开结果页 →", "loadFailed": "读取失败", "retryLoad": "重试加载", "savedRun": "分析已保存（{id}），但结果未能加载", "notFound": "没有这条分析或不属于你", "scatterLabel": "散点与拟合线", "rollingLabel": "滚动 r 走势"},
   "presetNames": {"p1": "联邦基金利率 × 10Y 美债（变化）", "p2": "美国 CPI 同比 × 10Y 美债（变化）", "p3": "美国 CPI 同比 × WTI 原油（变化，资产领先 1 月）", "p4": "广义美元 × WTI 原油（变化）", "p5": "美国失业率 × 10Y 美债（滚动 36 月）", "p6": "联储政策事件 → 10Y 美债（±6 月）", "p7": "中国制造业 PMI × 10Y 国债（变化）", "p8": "中国 CPI 同比 × 10Y 国债（水平，探索性）"}},
- "judgment": {"widget": {
+ "judgment": {"allocation": {
+  "title": "资产配置假设模板",
+  "proportions": "示意比例",
+  "staticReference": "静态参考",
+  "current": "当前",
+  "labels": {
+    "framework": "假设框架",
+    "untested": "未经检验",
+    "disclaimer": "不构成投资建议"
+  },
+  "source": "来源：Merrill Lynch《Investment Clock》（Greetham & Hartnett，2004）：复苏对应股票、过热对应商品、滞胀对应现金、衰退对应债券表现最强的经典阶段映射。具体百分比为本产品自定的示意模板值，并非取自该文献。",
+  "tilt": {
+    "recovery": "假设增长修复、通胀缓解，模板侧重股票。",
+    "overheat": "假设需求走强、价格压力上升，模板侧重商品。",
+    "stagflation": "假设增长走弱、价格压力持续，模板侧重现金。",
+    "recession": "假设增长与通胀同步回落，模板侧重债券。"
+  },
+  "assets": {
+    "equity": "股票",
+    "bond": "债券",
+    "commodity": "商品",
+    "cash": "现金"
+  },
+  "scope": "仅作静态参考，与用户持仓或交易无关。"
+}, "widget": {
   "eyebrow": "宏观周期框架",
   "title": "投资时钟",
   "snapshot": "{region} · 快照 {date}",
