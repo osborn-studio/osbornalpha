@@ -30,7 +30,7 @@ import {memorySnapshotObjectStore} from './evidence-index';
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261118090000_company_research.sql';
 const FUNCTIONS_MIGRATION='supabase/migrations/20261118091000_company_research_functions.sql';
-const CHUNK_MIGRATION='supabase/migrations/20261125090000_company_evidence_chunked_replace.sql';
+const CHUNK_MIGRATION='supabase/migrations/20261129090000_company_evidence_chunked_replace.sql';
 const RETRY_MIGRATION='supabase/migrations/20261124110000_company_digest_retry_selection.sql';
 const LOOKUP_MIGRATION='supabase/migrations/20261123110000_company_evidence_fact_lookup.sql';
 const FENCE_MIGRATION='supabase/migrations/20261118092000_company_evidence_fence.sql';
