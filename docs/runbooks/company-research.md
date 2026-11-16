@@ -9,7 +9,7 @@
 | `issuer_events` | 仅 service_role（§0 #64） | 只经 `replace_company_digest` | 事实事件；`retired_at` 为墓碑，不删行；`first_seen_at` 跨重建保留 |
 | `issuer_coverage` | anon / authenticated / service_role | 只经 `replace_company_digest` | 每 (发行人, 市场) 一行，计数与日期，无财务数值 |
 | `company_digest_state` | 仅 service_role | 只经三个 digest 函数 | 物化游标、尝试身份、退避 |
-| `company_fact_evidence` | 仅 service_role；公共读经 `company_fact_evidence(uuid[])` | 只经 `replace_company_fact_evidence` | 证据索引（快照 → 事实的全键匹配） |
+| `company_fact_evidence` | 仅 service_role；公共读经 `company_fact_evidence(uuid[])` | 只经分块 `upsert_company_fact_evidence`，最后 `prune_company_fact_evidence`（旧 writer 保留供部署过渡） | 证据索引（快照 → 事实的全键匹配） |
 | `company_watches` | 本人（RLS） | 本人（RLS）；触发器 `company_watches_limit` ≤ 200 | 跟踪；删除级联清回执 |
 | `company_event_reads` | 本人（RLS） | 本人（RLS）；触发器拒绝跨发行人 `event_id` | 已读回执按事件 id |
 
@@ -18,8 +18,8 @@
 合并顺序（owner 2026-11-07）：#112（宏观 WP-S6）→ F4（`20261116*`）→ F3（`20261117*`）→ 本模块 → 外资研报。本模块三份迁移已重编号为 `20261118*`（相对顺序不变），已随 #121 写入 `supabase/migrations.lock.json`；#126 进一步锁定 by-filing RPC 迁移，已锁定文件不可再改字节。下列部署命令为复跑说明。
 
 1. 确认规格二迁移已在目标库：`select to_regclass('public.financial_facts') is not null;` 为 `true`。
-2. 按文件名顺序应用：先 `20261118090000_company_research.sql`，再 `20261118091000_company_research_functions.sql`，再 `20261118092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；合并后锁定在 `supabase/migrations.lock.json`，之后任何修改都要新迁移。
-3. 核对：`select proname from pg_proc where proname like 'company_%' or proname in ('begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','replace_company_fact_evidence');` 列出全部函数；`select has_table_privilege('anon','public.issuer_events','select');` 为 `false`。
+2. 按文件名顺序应用：先 `20261118090000_company_research.sql`，再 `20261118091000_company_research_functions.sql`，再 `20261118092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。随后按顺序应用 `20261123110000_company_evidence_fact_lookup.sql`、`20261124110000_company_digest_retry_selection.sql`、`20261129090000_company_evidence_chunked_replace.sql`。文件均可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；新增函数核对 `select to_regprocedure('public.upsert_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null, to_regprocedure('public.prune_company_fact_evidence(uuid,text,bigint,bigint,uuid[])') is not null, to_regprocedure('public.company_digest_backlog_detail(integer)') is not null;` 三项均为 `true`。历史已锁迁移见 `supabase/migrations.lock.json`，之后任何修改都要新迁移。
+3. 核对：`select proname from pg_proc where proname like 'company_%' or proname in ('begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','replace_company_fact_evidence','upsert_company_fact_evidence','prune_company_fact_evidence');` 列出全部函数；`select has_table_privilege('anon','public.issuer_events','select');` 为 `false`。
 
 ## 3. 首轮物化（owner，合并后）
 
@@ -90,7 +90,7 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 
 | 现象 | 查 | 处理 |
 |---|---|---|
-| `company.events` 新鲜度 `ok=false` | `select issuer_id, market, last_status, consecutive_failures, next_attempt_at from public.company_digest_state where last_status='failed';` | 看批次 `errors` 的码：`read_truncated`（事实超读上限，规格二问题）、`invalid_event`（本模块 bug，修代码后 `--issuer` 重跑）、`digest_issuer_failed`（网络/存储，等退避或手动 `--issuer`） |
+| `company.events` 新鲜度 `ok=false` 或 `detail.degraded=true` | `select issuer_id, market, last_status, consecutive_failures, next_attempt_at from public.company_digest_state where last_status='failed';` | 失败 backlog 不超过 `max(1, floor(active/100))` 且本次无 `markFailedError` 时新鲜度为 `ok`；失败流列在 `dq_freshness.detail.failedStreams`（最多 20 条），完整列表查左侧 SQL。看批次 `errors` 的码：`read_truncated`（事实超读上限，规格二问题）、`invalid_event`（本模块 bug，修代码后 `--issuer` 重跑）、`digest_issuer_failed`（网络/存储，等退避或手动 `--issuer`） |
 | 页面大量"来源记录不完整" | 证据索引行数与快照 | §4 重建；仍缺 → 快照或 sidecar 缺失，回规格二同步 |
 | CN 值全部"引用待挂接" | 预期：PDF 逐值定位（规格三）未落地 | 无需处理；admin 用 `/api/admin/companies/…` 查看 |
 | 收件箱 500 | 服务端日志 `[tracking/inbox]` | 多为 service-role 环境变量缺失 |

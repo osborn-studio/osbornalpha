@@ -102,6 +102,17 @@ describe("clock release limitations", () => {
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain(t("judgment.clock.metadataUnavailable"));
   });
+  it("suppresses decomposition numbers on reconciliation failure while retaining the F4 label", () => {
+    const t = translator(en);
+    const html = renderToStaticMarkup(createElement(MacroRegimeClock, {
+      selected: "overheat", reason: null, metadata, metadataLoading: false,
+      weightedStatus: "reconcile_failed", t,
+    }));
+    expect(html).toContain(t("judgment.clock.current"));
+    expect(html).toContain(t("judgment.widget.reconcileFailed"));
+    expect(html).not.toContain("clock-grid-wrap");
+    expect(html).not.toContain(t("judgment.widget.coverage", { value: 60 }));
+  });
   it.each([true, false])(
     "states uncertainty while metadata loading=%s",
     (metadataLoading) => {

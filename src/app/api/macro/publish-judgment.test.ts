@@ -65,7 +65,7 @@ async function runCN(empty=false){
 async function expectBound(region:'US'|'CN'){
  const snap=await macro.activeSnapshot(region);expect(snap).not.toBeNull();
  const ids=await db.judgmentsBySnapshot(snap!.snapshot_id);expect(ids).toHaveLength(1);
- const row=await db.getJudgment(ids[0]);expect(row).toMatchObject({subject_type:'macro_region',subject_key:region,as_of:snap!.as_of,methodology_id:'macro_regime',methodology_version:'v2',abstained:false});
+ const row=await db.getJudgment(ids[0]);expect(row).toMatchObject({subject_type:'macro_region',subject_key:region,as_of:snap!.as_of,methodology_id:'macro_regime',methodology_version:'v3',abstained:false});
  return snap!;
 }
 it('US production sync immediately registers the exact published snapshot through the real producer',async()=>{
@@ -112,7 +112,7 @@ it('concurrent hook producers for a fresh binding register one judgment and leav
  const hook=productionMacroJudgmentHook({codeVersion:'a'.repeat(40),triggeredBy:'cron'});
  await Promise.all([hook(snapshot),hook(snapshot)]);
  expect(arrivals).toBe(2);expect(await db.judgmentsBySnapshot(snapshot.snapshot_id)).toHaveLength(1);
- expect(await db.jobState('produce:macro_regime@v2')).toBeNull();
+ expect(await db.jobState('produce:macro_regime@v3')).toBeNull();
 });
 it('a newer active snapshot does not retarget an older publication callback',async()=>{
  await runUS();const older=await expectBound('US');

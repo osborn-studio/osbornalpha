@@ -22,7 +22,7 @@ it('keeps display definitions outside the regime catalog and weights',()=>{
  }
  expect(collectableSeriesOf('fred_csv').slice(-3).map(d=>d.source?.seriesKey)).toEqual(['WALCL','RRPONTSYD','WTREGEN']);
  expect(DISPLAY_CATALOG_VERSION).toMatch(/^macro-catalog\/[0-9a-f]{12}$/);expect(DISPLAY_CATALOG_VERSION).not.toBe(CATALOG_VERSION);
- expect(CATALOG_VERSION).toBe('macro-catalog/30bcaa2a33c5');
+ expect(CATALOG_VERSION).toBe('macro-catalog/b91aad6b17f3');
 });
 it('uses a weekly release deadline with the publication lag and grace',()=>{
  const def={nativeFrequency:'weekly' as const,period:'day' as const,releaseLagDays:1};
