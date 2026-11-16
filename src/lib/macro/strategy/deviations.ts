@@ -6,7 +6,7 @@
 // sits behind it), so every full page marks the result incomplete; the walk still continues to collect the rest. Only
 // a stable (as_of, judgment_id) cursor from F4 (plan open item D19) can lift this. A cursor that does not move stops the
 // walk, incomplete.
-// Keep macro_regime@v1 cards with lifecycle 'settled' whose latest settlement outcome is 'miss'. For each, diff the
+// Keep macro_regime@v2 cards with lifecycle 'settled' whose latest settlement outcome is 'miss'. For each, diff the
 // registered inputs (macro_observation frozen projections) against the latest settlement's evidence.observation_refs,
 // matched by (series_id, period_end); classification is exhaustive (revised / unchanged / dropped / newly_available with
 // later_period / backfill / new_series). Evidence without observation_refs → evidence_incomplete; never recomputed here.
@@ -17,7 +17,7 @@ import {asRegime,type F4CardLite,type F4Client,type F4JudgmentDetail} from './f4
 
 export const DEVIATION_CAP=5000;
 export const HISTORY_PAGE=500;
-export const METHOD={id:'macro_regime',version:'v1'} as const;
+export const METHOD={id:'macro_regime',version:'v2'} as const;
 export interface FrozenObs{series_id:string;period_end:string;vintage_id:string;value:number}
 type Diff=DeviationCase['diffs'][number];
 
@@ -47,7 +47,7 @@ export function classifyDiffs(registered:readonly FrozenObs[],settled:readonly F
  }
  return out;
 }
-/** null unless the card is macro_regime@v1, settled, and its latest settlement is a miss. */
+/** null unless the card is macro_regime@v2, settled, and its latest settlement is a miss. */
 export function deviationCase(region:Region,card:F4CardLite,detail:F4JudgmentDetail):DeviationCase|null{
  if(card.methodology.id!==METHOD.id||card.methodology.version!==METHOD.version||card.lifecycle!=='settled')return null;
  const latest=[...detail.settlements].sort((x,y)=>x.settled_at<y.settled_at?1:x.settled_at>y.settled_at?-1:0)[0];

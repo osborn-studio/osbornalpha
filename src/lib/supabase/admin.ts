@@ -22,10 +22,11 @@ function adminCredentials() {
   return { url, serviceRoleKey };
 }
 
-export function getAdminSupabase() {
+export function getAdminSupabase(fetcher?: typeof fetch) {
   const { url, serviceRoleKey } = adminCredentials();
   return createClient<Database>(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
+    ...(fetcher ? { global: { fetch: fetcher } } : {}),
   });
 }
 

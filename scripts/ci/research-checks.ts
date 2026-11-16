@@ -14,27 +14,29 @@ export const criticalSuites = [
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
 ].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts', 'src/lib/entities/identifiers.integration.test.ts', 'src/lib/entities/ah-link.integration.test.ts', 'src/lib/dq/dq-extensions.integration.test.ts', 'src/lib/dq/reconcile/ixbrl-pair.integration.test.ts', 'src/lib/dq/reconcile/lineage.integration.test.ts', 'src/lib/facts/sync-cn.integration.test.ts', 'src/lib/dq/calendar.integration.test.ts')
  // F6 begin
- .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts')
+ .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts', 'src/lib/evals/gold/registration-lifecycle.test.ts')
  // F6 end
 ;
+criticalSuites.push('src/lib/evals/f3-hook.integration.test.ts');
 // INDUSTRY:BEGIN — appended without touching the list above (parallel plans edit that line)
-criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts');
+criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts', 'src/lib/industry/judgments-bridge.integration.test.ts');
 // INDUSTRY:END
 // MACRO
 criticalSuites.push('src/lib/macro/macro.integration.test.ts', 'src/lib/macro/read-api-asof.integration.test.ts');
 // /MACRO
 // MACRO-P3
-criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts');
+criticalSuites.push('src/lib/macro/strategy/strategy.integration.test.ts', 'src/lib/macro/strategy/manifest-lock.integration.test.ts');
 // /MACRO-P3
 // F3 document pipeline (Tasks 1, 13, 18)
 criticalSuites.push('src/lib/documents/documents.integration.test.ts', 'src/lib/documents/fact-citations.integration.test.ts',
    'src/lib/documents/sync-hk.integration.test.ts', 'src/lib/documents/sync-us.integration.test.ts');
 // end F3
 // COMPANY
-criticalSuites.push('src/lib/company/company-research.integration.test.ts', 'src/lib/company/documents-bridge.integration.test.ts');
+criticalSuites.push('src/lib/company/handlers/target-fence.test.ts', 'src/lib/company/company-research.integration.test.ts', 'src/lib/company/documents-bridge.integration.test.ts', 'src/lib/company/judgments-bridge.integration.test.ts');
 // /COMPANY
 // F4
 criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');
+criticalSuites.push('src/lib/judgments/integration/macro-bridge.integration.test.ts');
 // /F4
 
 export function migrationInventory(root = process.cwd()) {

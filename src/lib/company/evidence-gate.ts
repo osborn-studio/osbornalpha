@@ -39,6 +39,7 @@ export function evidenceEligible(dto:EvidenceDto|null,fact:GateFact,filing:Filin
  if(!dto||dto.factId!==fact.fact_id||!filing||filing.filingId!==fact.filing_id||dto.rawHash!==fact.raw_hash)return NO('evidence_incomplete');
  if(!HEX64.test(dto.snapshot.sha256)||!dto.locator.hashLocator||rawHashOf(dto.snapshot.sha256,dto.locator.hashLocator)!==dto.rawHash)return NO('evidence_incomplete');
  if(dto.snapshot.source!==(market==='US'?'edgar':'tushare'))return NO('evidence_incomplete');
+ if(!nonBlank(dto.run.runId)||dto.run.runId!==fact.run_id)return NO('evidence_incomplete');
  if(!dto.run.codeVersion||dto.run.toolVersions===null||!dto.mappingVersion)return NO('evidence_incomplete');
  if(market==='US'){
   if(!dto.locator.jsonPointer||!dto.snapshot.download||dto.sourceDocument?.kind!=='edgar_index'||!dto.sourceDocument.url)return NO('evidence_incomplete');

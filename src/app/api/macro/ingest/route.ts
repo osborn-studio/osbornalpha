@@ -260,7 +260,7 @@ async function finish(deps:MacroDeps,body:Extract<IngestBody,{action:'finish'}>)
  if(!publish){
   if(batchStatus==='failed'||!nativeLanded)publish={status:'skipped',region:'CN',reason:nativeLanded?'batch_failed':'no_native_outcomes'};
   else{
-   const r=await publishRegion({db:deps.db},'CN',today,{publishKey:`ingest:${body.batch_id}`,fence:{batchId:body.batch_id,ownerToken:body.owner_token,finishToken:begun.finishToken}});
+   const r=await publishRegion({db:deps.db,onPublished:deps.onPublished},'CN',today,{publishKey:`ingest:${body.batch_id}`,fence:{batchId:body.batch_id,ownerToken:body.owner_token,finishToken:begun.finishToken}});
    if(r.status!=='published'){
     await step('publish_attempt',{at:deps.now().toISOString(),status:r.status,reason:r.status==='failed'?r.reason:null});
     return err('publish_pending','CN publication did not complete; retry finish with the same owner token',503,{publish:r.status});

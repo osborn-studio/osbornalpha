@@ -11,7 +11,9 @@ export type CoverageScope=Pick<ScopeRow,'last_success_at'|'last_status'>;
 export function summarizeCoverage(input:{rows:FactRow[];filings:FilingSummary[];scope:CoverageScope|null}):CoverageInput{
  const rows=input.rows.filter(r=>r.status==='ok');
  const filings=input.filings.filter(f=>f.mappingGen>0);
- const ends=rows.map(r=>r.period_end).sort();
+ // DEI cover observations (e.g. shares outstanding) have observation dates, not reporting periods.
+ // Keep them in fact/concept counts, but do not let them move the financial period range.
+ const ends=rows.filter(r=>r.statement!=='DEI').map(r=>r.period_end).sort();
  const avail=filings.map(f=>f.availableDate).sort();
  const cite={linked:0,pending:0,edgar:0};
  for(const f of filings)cite[f.citation]++;

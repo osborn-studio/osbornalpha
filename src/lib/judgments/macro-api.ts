@@ -2,7 +2,7 @@
 // The macro workbench read interface F4 programs against (spec §12.1; contract MacroReadApi). The
 // workbench (macro_observations / macro_snapshots / regime.ts) is not in the repository yet, so F4
 // ships two implementations: fixtureMacroReadApi(fixture) for tests, replay fixtures and the
-// macro_regime@v1 producer (Task 19), and unavailableMacroReadApi() for production wiring until the
+// macro_regime@v2 producer (Task 19), and unavailableMacroReadApi() for production wiring until the
 // workbench lands (every call rejects with MacroUnavailable → settle Unavailable(macro_unavailable);
 // the compensation scan skips with info code macro_unavailable — plan conventions).
 // classifyAsOf over a fixture returns the fixture's precomputed classification for (region,

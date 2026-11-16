@@ -1,6 +1,9 @@
 // src/app/api/judgments/[id]/route.test.ts
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {envelope,methodologyRow,settlementRow,uuidOf} from '@/lib/judgments/testing/envelopes';
+import {judgmentDetailOf} from '@/lib/macro/strategy/f4-client';
+import {judgmentDetailPayload} from '@/lib/judgments/detail-payload';
+import {publicReads} from '@/lib/judgments/public-reads';
 
 const mocks=vi.hoisted(()=>({envelopeById:vi.fn(),historyOf:vi.fn(),listMethodologies:vi.fn(),settlements:vi.fn()}));
 vi.mock('@/lib/judgments/public-reads',()=>({publicReads:()=>({db:{envelopeById:mocks.envelopeById,historyOf:mocks.historyOf,listMethodologies:mocks.listMethodologies},settlements:mocks.settlements})}));
@@ -29,6 +32,24 @@ describe('GET /api/judgments/[id]',()=>{
   expect(body.card.display).not.toHaveProperty('percent');
   expect(mocks.envelopeById).toHaveBeenCalledWith(ID,{view:'latest',cutoff:undefined});
   expect(mocks.historyOf).not.toHaveBeenCalled();
+ });
+ it('projects the same frozen detail from the shared library helper',async()=>{
+  const payload=await judgmentDetailPayload(publicReads(),ID,{view:'latest',asOf:null},'2026-07-02T00:00:00.000Z');
+  expect(payload).toMatchObject({view:'latest',asOf:null,judgment:{judgment_id:ID},card:{judgment_id:ID},calibration:null});
+  expect(payload?.settlements).toHaveLength(2);
+ });
+ it('preserves frozen input ref/snapshot and settlement evidence for the macro detail parser',async()=>{
+  mocks.settlements.mockResolvedValue([settlementRow({judgment_id:ID,evidence:{observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]}})]);
+  const body=await (await get(ID)).json();
+  expect(body.judgment.inputs).toHaveLength(1);
+  for(const input of body.judgment.inputs as {kind:string;ref:Record<string,unknown>;snapshot:Record<string,unknown>}[]){
+   expect(input.kind.length).toBeGreaterThan(0);
+   expect(Object.keys(input.ref).length).toBeGreaterThan(0);
+   expect(Object.keys(input.snapshot).length).toBeGreaterThan(0);
+  }
+  const parsed=judgmentDetailOf(body);
+  expect(parsed.inputs[0]).toMatchObject({kind:'financial_fact',ref:{fact_id:uuidOf(500007)},snapshot:{fact_id:uuidOf(500007)}});
+  expect(parsed.settlements[0].evidence).toEqual({observation_refs:[{series_id:'US_CPI_YOY',vintage_id:'1'}]});
  });
  it('as_known cuts settlements at the cutoff and asks envelopeById for the same view',async()=>{
   const body=await (await get(ID,'view=as_known&asOf=2026-06-30')).json();

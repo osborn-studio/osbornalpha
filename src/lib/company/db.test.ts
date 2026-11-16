@@ -8,7 +8,7 @@ import {describe,expect,it} from 'vitest';
 import {factInsert,filingInsert} from '../facts/db-contract';
 import {memoryFactsDb} from '../facts/memory-facts-db';
 import {companyDbContract,coverageInput,filingPublishedOf} from './db-contract';
-import {CompanyDbError,decodeInboxCursor,encodeCursor,inboxPage,supabaseCompanyDb,toCompanyDbError,tsKey} from './db';
+import {CompanyDbError,companyDbFailureCategory,decodeInboxCursor,encodeCursor,inboxPage,supabaseCompanyDb,toCompanyDbError,tsKey} from './db';
 import {memoryCompanyDb} from './memory-company-db';
 import {memorySnapshotReader,readSnapshot} from './snapshot-read';
 
@@ -75,6 +75,20 @@ const rawEvent=(o:Record<string,unknown>)=>({event_id:'e'.repeat(64),issuer_id:r
  rebuild_id:randomUUID(),rebuild_batch_id:randomUUID(),...o});
 
 describe('supabaseCompanyDb wiring',()=>{
+ it('retains only bounded transport categories outside the original serialized error',async()=>{
+  for(const [code,category] of [['57014','query_canceled'],['55P03','lock_unavailable'],['40P01','deadlock'],['40001','serialization_failure'],['23503','constraint_violation'],['PGRST999-private','unknown'],[undefined,'unknown']] as const){
+   const raw={code,message:'private URL https://example.test/private',details:'private SQL and fact ID',where:'private backend CONTEXT'};
+   const s=stub({rpc:()=>({data:null,error:raw})});
+   const e=await supabaseCompanyDb(s.client).replaceEvidence('private-issuer','US',1,1,[]).catch(e=>e);
+   expect(e).toBeInstanceOf(CompanyDbError);
+   expect(companyDbFailureCategory(e)).toBe(category);
+   expect(e.code).toBe('internal');expect(e.message).toBe(raw.message);
+   expect(Object.keys(e).sort()).toEqual(['code','name']);
+   expect(toCompanyDbError(e)).toBe(e);expect(companyDbFailureCategory(toCompanyDbError(e))).toBe(category);
+  }
+  expect(companyDbFailureCategory(new Error('57014 statement timeout'))).toBe('unknown');
+  expect(companyDbFailureCategory(new CompanyDbError('stale_attempt'))).toBe('stale_attempt');
+ });
  it('calls the SQL functions with p_* arguments and normalises numbers',async()=>{
   const s=stub({rpc:fn=>({data:fn==='replace_company_digest'?{upserted:'2',changed:'1',retired:'0',revived:'0'}:fn==='begin_company_digest_attempt'?'7':fn==='company_digest_backlog'?'3':
    fn==='company_digest_due'?[{issuerId:'i',market:'US',stateRev:'5',digestedRev:'2'}]:true,error:null})});

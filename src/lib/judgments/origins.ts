@@ -52,6 +52,7 @@ export function originFor(kind:InputKind,adapter:string,vars:Record<string,strin
  * True iff `origin` could have been produced by originFor for this kind (key, publisher, locator / transform shape, no extra keys). */
 export function originKnown(kind:InputKind,origin:Origin):boolean{
  if(!origin||typeof origin!=='object'||Object.keys(origin).some(k=>!ORIGIN_KEYS.has(k)))return false;
+ if(kind==='table_rows'&&origin.adapter==='industry-agg/1.0')return origin.publisher==='OsbornAlpha'&&/^manifest:[0-9a-f]{64}$/.test(origin.locator)&&typeof origin.transform==='string'&&/^[0-9a-f]{64}(;history_class=reconstruction)?$/.test(origin.transform);
  const t=ORIGINS[originKey(kind,origin.adapter)];
  if(!t||origin.publisher!==t.publisher)return false;
  if(typeof origin.locator!=='string'||!patternOf(t.locator).test(origin.locator))return false;

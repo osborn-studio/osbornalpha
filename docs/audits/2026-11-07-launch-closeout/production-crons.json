@@ -1,0 +1,116 @@
+[
+  {
+    "path": "/api/cron/judgments-settle?preview=1",
+    "status": 200,
+    "ms": 1756,
+    "body": {
+      "ok": true,
+      "preview": true,
+      "started_at": "2026-11-07T14:24:06.567Z",
+      "receipt": {
+        "batchId": null,
+        "status": "preview",
+        "counts": {
+          "fetched": 0,
+          "inserted": 0,
+          "duplicates": 0,
+          "versioned": 0,
+          "quarantined": 0,
+          "failed": 0,
+          "deferred": 0
+        },
+        "idle": true,
+        "preview": true,
+        "errors": [],
+        "detail": {
+          "repaired": 0,
+          "batches": 0,
+          "deadline_hit": false,
+          "compensation": null
+        },
+        "items": []
+      }
+    }
+  },
+  {
+    "path": "/api/cron/judgments-settle",
+    "status": 200,
+    "ms": 1477,
+    "body": {
+      "ok": true,
+      "preview": false,
+      "started_at": "2026-11-07T14:24:07.498Z",
+      "receipt": {
+        "batchId": "09dc3b6e-be3f-4428-ba9d-7d91ee7de190",
+        "status": "success",
+        "counts": {
+          "fetched": 0,
+          "inserted": 0,
+          "duplicates": 0,
+          "versioned": 0,
+          "quarantined": 0,
+          "failed": 0,
+          "deferred": 0
+        },
+        "idle": true,
+        "preview": false,
+        "errors": [],
+        "detail": {
+          "repaired": 0,
+          "batches": 0,
+          "deadline_hit": false,
+          "compensation": {
+            "status": "done",
+            "reason": null,
+            "scanned": 0,
+            "produced": 0,
+            "existing": 0
+          }
+        },
+        "items": []
+      }
+    }
+  },
+  {
+    "path": "/api/cron/judgments-calibrate?preview=1",
+    "status": 200,
+    "ms": 699,
+    "body": {
+      "ok": true,
+      "preview": true,
+      "started_at": "2026-11-07T14:24:08.989Z",
+      "units": [
+        {
+          "job": "calibrate:macro_regime@v2:all:",
+          "methodology_id": "macro_regime",
+          "version": "v2",
+          "scope": {
+            "scope_type": "all",
+            "scope_key": ""
+          },
+          "current_revision": 1,
+          "state": "idle",
+          "generation": null,
+          "pages": 0,
+          "expected_revision": null,
+          "stale": false
+        },
+        {
+          "job": "calibrate:macro_regime@v2:subject_type:macro_region",
+          "methodology_id": "macro_regime",
+          "version": "v2",
+          "scope": {
+            "scope_type": "subject_type",
+            "scope_key": "macro_region"
+          },
+          "current_revision": 1,
+          "state": "idle",
+          "generation": null,
+          "pages": 0,
+          "expected_revision": null,
+          "stale": false
+        }
+      ]
+    }
+  }
+]

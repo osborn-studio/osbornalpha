@@ -5,7 +5,7 @@
 // basedOnRev = envelope state_rev. stale_computation re-reads once with the same attempt id;
 // stale_attempt / unknown_stream are skips (duplicates + skipped_summary); everything else marks the
 // attempt failed (backoff in SQL). Selection: incremental 80 % (digestDue) + sweep 20 % (sweepDue,
-// older than 7 days), deduped, interleaved 4:1 so a deadline still leaves sweeps their share; full =
+// never swept, older than 7 days, or failed after backoff), deduped, interleaved 4:1 so a deadline still leaves sweeps their share; full =
 // every scope row (script). Batch counters are per STREAM and always balance
 // (fetched = inserted + duplicates + versioned + quarantined + failed); freshness ok = no failed stream
 // in this run and no failed stream in backoff (CompanyDb.backlog). code_version missing → refuse apply.
@@ -19,6 +19,8 @@ import {MAPPING_GEN} from '@/lib/facts/concepts';
 import {FORMULA_VERSION} from '@/lib/facts/derive';
 import type {FactsDb,Market,ScopeRow} from '@/lib/facts/types';
 import {summarizeCoverage} from './coverage';
+import {companyDbFailureCategory} from './db';
+import {evidenceRequestId,withEvidenceRequest} from './evidence-request';
 import {EVENTS_VERSION,deriveIssuerEvents} from './events';
 import {buildEvidenceIndex} from './evidence-index';
 import type {ParsedSnapshotCache,SnapshotObjectStore} from './evidence-index';
@@ -78,28 +80,54 @@ export async function selectStreams(deps:Pick<DigestDeps,'db'|'facts'>,opts:Dige
 }
 
 interface Ctx{batchId:string|null;today:string;now:Date;dryRun:boolean}
+type DigestStage='begin_attempt'|'read_snapshot'|'evidence_build'|'evidence_replace'|'derive'|'digest_replace'|'mark_failed';
+function streamObserver(){
+ const operation_id=randomUUID(),started=performance.now();
+ return async<T>(stage:DigestStage,run:()=>T|Promise<T>,storageFailed?:(value:T)=>boolean):Promise<T>=>{
+  const stageStarted=performance.now();
+  const log=(outcome:'ok'|'failed',category?:string)=>{
+   // Only application-visible boundaries. RPC internals / backend CONTEXT are unavailable here.
+   // Only the allowlisted upstream request UUID on evidence failure; no row identifiers,
+   // payloads, raw codes or error text. Logging cannot change the workflow result.
+   try{
+    const now=performance.now();
+    const id=stage==='evidence_replace'&&outcome==='failed'?evidenceRequestId():undefined;
+    const event={operation_id,stage,outcome,stage_ms:now-stageStarted,elapsed_ms:now-started,...(category?{category}:{}),...(id?{upstream_request_id:id}:{})};
+    const logged=outcome==='failed'?console.error('[company-digest]',event):console.info('[company-digest]',event);
+    // Also tolerate a sink replaced by an async logger; never await logging on the write path.
+    void Promise.resolve(logged).catch(()=>{});
+   }catch{}
+  };
+  const execute=async()=>{
+   try{const value=await run();if(storageFailed?.(value))log('failed','storage_error');else log('ok');return value;}
+   catch(e){log('failed',companyDbFailureCategory(e));throw e;}
+  };
+  return stage==='evidence_replace'?withEvidenceRequest(execute):execute();
+ };
+}
 async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<StreamOutcome>{
+ const observe=streamObserver();
  const out:StreamOutcome={issuerId:p.issuerId,market:p.market,sweep:p.sweep,outcome:'failed',attemptId:null,basedOnRev:null,events:0,result:null,evidence:null,retried:false};
  let attemptId=0;
  const cache:ParsedSnapshotCache=deps.newCache?deps.newCache():new Map();   // per stream: kept only across its own stale_computation retry
  if(!ctx.dryRun){
-  try{attemptId=await deps.db.beginAttempt(p.issuerId,p.market,ctx.now);}
+  try{attemptId=await observe('begin_attempt',()=>deps.db.beginAttempt(p.issuerId,p.market,ctx.now));}
   catch(e){if(dbCode(e)==='unknown_stream'){out.outcome='skipped_unknown';out.code='unknown_stream';}else{out.code='digest_issuer_failed';out.message=errMsg(e);}return out;}
   out.attemptId=attemptId;
  }
  const fail=async(code:string,cause?:unknown)=>{
   out.outcome='failed';out.code=code;if(cause!==undefined)out.message=errMsg(cause);
-  if(!ctx.dryRun){try{await deps.db.markDigestFailed(p.issuerId,p.market,attemptId,deps.now());}catch{out.markFailedError=true;}}
+  if(!ctx.dryRun){try{await observe('mark_failed',()=>deps.db.markDigestFailed(p.issuerId,p.market,attemptId,deps.now()));}catch{out.markFailedError=true;}}
   return out;
  };
  for(let attempt=0;attempt<2;attempt++){
   let env:ReadSnapshotResult;
-  try{env=await deps.readSnapshot(p.issuerId,p.market,{concepts:null,asOf:ctx.today,history:true});}catch(e){return fail('digest_issuer_failed',e);}
+  try{env=await observe('read_snapshot',()=>deps.readSnapshot(p.issuerId,p.market,{concepts:null,asOf:ctx.today,history:true}));}catch(e){return fail('digest_issuer_failed',e);}
   if(env.truncated)return fail('read_truncated');
   try{
-   const built=await buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache});
+   const built=await observe('evidence_build',()=>buildEvidenceIndex({reader:deps.reader},{issuerId:p.issuerId,market:p.market,rows:env.rows,filings:env.filings,cache}),b=>b.stats.storageError>0);
    if(built.stats.storageError>0)return fail('evidence_index_failed');   // transient storage failure: never replace (would delete valid evidence) nor mark success
-   if(!ctx.dryRun)await deps.db.replaceEvidence(p.issuerId,p.market,attemptId,env.stateRev,built.rows);   // evidence fence
+   if(!ctx.dryRun)await observe('evidence_replace',()=>deps.db.replaceEvidence(p.issuerId,p.market,attemptId,env.stateRev,built.rows));   // evidence fence
    out.evidence={indexed:built.rows.length,facts:built.stats.facts};
   }catch(e){
    const code=dbCode(e);
@@ -110,14 +138,15 @@ async function digestStream(deps:DigestDeps,ctx:Ctx,p:PlannedStream):Promise<Str
   }
   let events,coverage;
   try{
-   const [scope]=await deps.facts.scopeRows(p.market,[p.issuerId]);
-   events=deriveIssuerEvents({rows:env.rows,filings:env.filings,cutoff:ctx.today});
-   coverage=summarizeCoverage({rows:env.rows,filings:env.filings,scope:scope??null});
+   ({events,coverage}=await observe('derive',async()=>{
+    const [scope]=await deps.facts.scopeRows(p.market,[p.issuerId]);
+    return {events:deriveIssuerEvents({rows:env.rows,filings:env.filings,cutoff:ctx.today}),coverage:summarizeCoverage({rows:env.rows,filings:env.filings,scope:scope??null})};
+   }));
   }catch(e){return fail('digest_issuer_failed',e);}
   out.events=events.length;out.basedOnRev=env.stateRev;
   if(ctx.dryRun){out.outcome='planned';return out;}
   try{
-   const r=await deps.db.replaceDigest(p.issuerId,p.market,ctx.batchId!,attemptId,randomUUID(),env.stateRev,p.sweep,events,coverage);
+   const r=await observe('digest_replace',()=>deps.db.replaceDigest(p.issuerId,p.market,ctx.batchId!,attemptId,randomUUID(),env.stateRev,p.sweep,events,coverage));
    out.result=r;out.outcome=r.changed+r.retired+r.revived>0?'changed':'unchanged';delete out.code;return out;
   }catch(e){
    const code=dbCode(e);

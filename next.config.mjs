@@ -43,7 +43,12 @@ const nextConfig = {
     return config;
   },
   async redirects() {
-    return [{ source: '/dashboard', destination: '/today', permanent: true }];
+    return [
+      { source: '/dashboard', destination: '/macro', permanent: true },
+      { source: '/today', destination: '/macro', permanent: true },
+      { source: '/intel/macro', destination: '/macro', permanent: true },
+      { source: '/intel/macro/:path*', destination: '/macro/:path*', permanent: true },
+    ];
   },
 };
 

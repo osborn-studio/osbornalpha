@@ -13,7 +13,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
-import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {SCHEMA_BOOTSTRAP_SQL} from '../../../scripts/s4/local-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -48,25 +48,48 @@ const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejectio
 // The bootstrap scripts/s4/local-db.ts runs before the migrations (roles are cluster-wide and exist).
 const BOOTSTRAP=SCHEMA_BOOTSTRAP_SQL;
 
-/** A throwaway database in the same cluster, migrated up to (not including) `version`; dropped afterwards. */
-async function withPreMigrationDatabase(adminUrl:string,version:string,body:(db:Pool)=>Promise<void>):Promise<void>{
+/** A throwaway database in the same cluster, migrated up to (not including) `version`, or fully when null; dropped afterwards. */
+async function withPreMigrationDatabase(adminUrl:string,version:string|null,body:(db:Pool)=>Promise<void>):Promise<void>{
  const name='df3_upgrade_'+randomBytes(4).toString('hex');
  const root=new Pool({connectionString:adminUrl,max:1});
- await root.query(`create database ${name}`);
- const url=new URL(adminUrl);url.pathname=`/${name}`;
- const db=new Pool({connectionString:url.toString(),max:2});
  try{
-  await db.query(BOOTSTRAP);
-  for(const f of readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')&&f<version).sort()){
-   try{await db.query(readFileSync(join('supabase/migrations',f),'utf8'));}
-   catch(e){throw new Error(`pre-migration ${f}: ${(e as Error).message}`);}
-  }
-  await body(db);
+  await root.query(`create database ${name}`);
+  const url=new URL(adminUrl);url.pathname=`/${name}`;
+  const db=new Pool({connectionString:url.toString(),max:2});
+  // Pool.end() may resolve before its clients' sockets close. Await every actual
+  // client end before DROP; FORCE would race those sockets and deliver 57P01.
+  const disconnected:Promise<void>[]=[];
+  const failures=new Set<unknown>();
+  db.on('error',error=>{failures.add(error);});
+  db.on('connect',client=>{
+   disconnected.push(new Promise(resolve=>client.once('end',resolve)));
+   client.on('error',error=>{failures.add(error);});
+  });
+  try{
+   await db.query(BOOTSTRAP);
+   for(const f of readdirSync('supabase/migrations').filter(f=>f.endsWith('.sql')&&(version===null||f<version)).sort()){
+    try{await db.query(readFileSync(join('supabase/migrations',f),'utf8'));}
+    catch(e){throw new Error(`pre-migration ${f}: ${(e as Error).message}`);}
+   }
+   await body(db);
+  }catch(error){failures.add(error);}
+  try{await db.end();}catch(error){failures.add(error);}
+  await Promise.all(disconnected);
+  try{await root.query(`drop database if exists ${name}`);}catch(error){failures.add(error);}
+  if(failures.size===1)throw [...failures][0];
+  if(failures.size>1)throw new AggregateError(failures,'Temporary database body or cleanup failed');
  }finally{
-  await db.end();
-  await root.query(`drop database if exists ${name} with (force)`);
   await root.end();
  }
+}
+
+/** DDL replay locks are database-wide even when fixture rows have unique keys.
+ * In particular CREATE INDEX takes ShareLock before RLS needs AccessExclusiveLock;
+ * an open_reconcile_cycle reader upgrading to an INSERT can deadlock with that replay.
+ * Keep replays on a fully migrated disposable database, away from parallel suites.
+ */
+async function withReplayDatabase(body:(db:Pool)=>Promise<void>):Promise<void>{
+ await withPreMigrationDatabase(adminUrl,null,body);
 }
 
 /**
@@ -92,21 +115,21 @@ async function withCalendarLock(pool:Pool,body:()=>Promise<void>):Promise<void>{
 
 let admin:Pool;
 let adminUrl:string;
-const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
-const insertRow=(table:string,row:Record<string,unknown>)=>{
+const q=async(text:string,values:unknown[]=[],pool:Pool=admin)=>(await pool.query(text,values)).rows as Record<string,any>[];
+const insertRow=(table:string,row:Record<string,unknown>,pool:Pool=admin)=>{
  const cols=Object.keys(row);
- return admin.query(`insert into public.${table}(${cols.join(',')}) values(${cols.map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
+ return pool.query(`insert into public.${table}(${cols.join(',')}) values(${cols.map((_,i)=>`$${i+1}`).join(',')})`,Object.values(row));
 };
-const issuer=async(name='ZZ Ident Test')=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,$2)`,[id,name]);return id;};
-const ticker=async(market='US')=>{
+const issuer=async(name='ZZ Ident Test',pool:Pool=admin)=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,$2)`,[id,name],pool);return id;};
+const ticker=async(market='US',pool:Pool=admin)=>{
  const t='ZZ'+hex(4);
- const r=await q(`insert into public.stocks_universe(ticker,name,market) values($1,'Ident Test',$2) on conflict (ticker) do nothing returning ticker`,[t,market]);
+ const r=await q(`insert into public.stocks_universe(ticker,name,market) values($1,'Ident Test',$2) on conflict (ticker) do nothing returning ticker`,[t,market],pool);
  if(r.length!==1)throw new Error('ZZ test ticker collided');
  return t;
 };
 const batch=async(dataset='dq.calendar.cn',producer='filing-calendar')=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,$2,$3)`,[id,producer,dataset]);return id;};
 /** issuer_securities row with source 'test' (so the default method is first_observed) plus `extra` columns. */
-const sec=(iss:string,t:string,from:string,to:string|null,extra:Record<string,unknown>={})=>insertRow('issuer_securities',{issuer_id:iss,ticker:t,valid_from:from,valid_to:to,source:'test',...extra});
+const sec=(iss:string,t:string,from:string,to:string|null,extra:Record<string,unknown>={},pool:Pool=admin)=>insertRow('issuer_securities',{issuer_id:iss,ticker:t,valid_from:from,valid_to:to,source:'test',...extra},pool);
 
 beforeAll(async()=>{
  if(!enabled)return;
@@ -116,58 +139,112 @@ beforeAll(async()=>{
 afterAll(async()=>{await admin?.end();});
 
 describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
- it('adds the columns, creates seven service-role-only tables and the reconcile-raw bucket, and replays twice',async()=>{
-  const cols=await q(`select table_name,column_name from information_schema.columns where table_schema='public' and (table_name,column_name) in (
-   ('issuer_securities','valid_from_method'),('issuer_securities','valid_to_method'),
-   ('issuer_identifier_claims','op'),('issuer_identifier_claims','target_key'),('issuer_identifier_claims','detail'),('issuer_identifier_claims','resolved_by'),('issuer_identifier_claims','resolved_at'),
-   ('dq_reconciliations','pair'),('dq_reconciliations','kind'),('dq_reconciliations','outcome'),('dq_reconciliations','detail'),
-   ('dq_reconciliations','cycle_id'),('dq_reconciliations','issuer_id'),('dq_reconciliations','market'),('dq_reconciliations','attempt'))`);
-  expect(cols).toHaveLength(15);
-  expect(await q(`select is_nullable from information_schema.columns where table_schema='public' and table_name='issuer_identifier_claims' and column_name='confidence'`)).toEqual([{is_nullable:'YES'}]);
-  const rls=await q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1) order by c.relname`,[NEW_TABLES]);
-  expect(rls).toEqual([...NEW_TABLES].sort().map(relname=>({relname,relrowsecurity:true})));
-  expect(await q(`select tablename from pg_policies where schemaname='public' and tablename=any($1)`,[NEW_TABLES])).toEqual([]);
-  for(const role of ['anon','authenticated'])for(const t of [...NEW_TABLES,'issuer_identifier_claims'])for(const priv of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']){
-   const ok=(await q(`select has_table_privilege($1,'public.'||$2,$3) ok`,[role,t,priv]))[0].ok;
-   expect({role,t,priv,ok}).toEqual({role,t,priv,ok:false});
-  }
-  const SERVICE:Record<string,string[]>={
-   dq_reconcile_cycles:['SELECT','INSERT','UPDATE'],dq_reconcile_cursor:['SELECT','INSERT'],
-   dq_calendar_passes:['SELECT'],dq_calendar_pass_members:['SELECT'],dq_filing_expectations:['SELECT'],
-   issuer_filer_categories:['SELECT','INSERT','UPDATE','DELETE'],issuer_filing_profiles:['SELECT','INSERT','UPDATE','DELETE'],
-  };
-  for(const [t,granted] of Object.entries(SERVICE))for(const priv of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']){
-   const ok=(await q(`select has_table_privilege('service_role','public.'||$1,$2) ok`,[t,priv]))[0].ok;
-   expect({t,priv,ok}).toEqual({t,priv,ok:granted.includes(priv)});
-  }
-  const c=await admin.connect();
+ it.each(['normal','idle-error','pool-end-error'])('waits for every temporary database client before DROP DATABASE (%s)',async scenario=>{
+  const failure=new Error(`controlled ${scenario}`);
+  let poolEnded!:()=>void;
+  const atPoolEnd=new Promise<void>(resolve=>{poolEnded=resolve;});
+  const release:(()=>void)[]=[];
+  let dropStarted=false;
+  const query=Pool.prototype.query;
+  const spy=vi.spyOn(Pool.prototype,'query').mockImplementation(function(this:Pool,...args:unknown[]){
+   if(typeof args[0]==='string'&&args[0].startsWith('drop database'))dropStarted=true;
+   return Reflect.apply(query,this,args);
+  } as Pool['query']);
+  const run=withPreMigrationDatabase(adminUrl,VERSION,async db=>{
+   const clients=await Promise.all([db.connect(),db.connect()]);
+   for(const client of clients){
+    const end=client.end.bind(client);
+    const gate=new Promise<void>(resolve=>{release.push(resolve);});
+    // Hold real sockets open after pool shutdown starts, reproducing the CI race.
+    client.end=((callback?:(err:Error)=>void)=>{void gate.then(()=>callback?end(callback):end());}) as typeof client.end;
+    client.release();
+   }
+   const end=db.end.bind(db);
+   db.end=async()=>{await end();poolEnded();if(scenario==='pool-end-error')throw failure;};
+   if(scenario==='idle-error')clients[0].emit('error',failure);
+  });
+  // Propagate helper failures immediately rather than hanging on the test barrier.
+  const failed=run.then(()=>{throw new Error('database dropped before client disconnects');});
   try{
-   await c.query('set role anon');
-   await expect(c.query('select * from public.dq_filing_expectations')).rejects.toThrow(/permission denied/);
-  }finally{await c.query('reset role').catch(()=>{});c.release();}
-  expect(await q(`select id,public,file_size_limit::text limit_bytes,allowed_mime_types from storage.buckets where id='reconcile-raw'`)).toEqual([{
-   id:'reconcile-raw',public:false,limit_bytes:'52428800',
-   allowed_mime_types:['application/json','text/html','application/pdf','text/csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/zip'],
-  }]);
-  // A private bucket with no storage.objects policy is unreadable and unwritable for anon/authenticated
-  // on hosted Supabase; the migration must not add one (the local harness has no storage.objects).
-  const sql=readFileSync(MIGRATION,'utf8');
-  expect(sql).not.toMatch(/storage\.objects/);
-  await replayMigration(admin,sql);
-  await replayMigration(admin,sql);
+   await Promise.race([atPoolEnd,failed]);
+   await new Promise<void>(resolve=>setImmediate(resolve));
+   expect(dropStarted).toBe(false);
+   release[0]();
+   await new Promise<void>(resolve=>setImmediate(resolve));
+   expect(dropStarted).toBe(false);
+  }finally{
+   for(const open of release)open();
+   try{if(scenario==='normal')await run;else await expect(run).rejects.toBe(failure);}finally{spy.mockRestore();}
+  }
+  expect(dropStarted).toBe(true);
  },120000);
 
- it('leaves evidence written after the first run untouched on replay',async()=>{
-  const a=await issuer();const t=await ticker();const t2=await ticker();
+ it('adds the columns, creates seven service-role-only tables and the reconcile-raw bucket, and replays twice',async()=>{
+  // A parallel suite may retain a cycle read while replay reaches CREATE INDEX / RLS.
+  // Keep that reader open to prove the replay cannot request DDL locks in its database.
+  const reader=await admin.connect();
+  try{
+   await reader.query('begin; select * from public.dq_reconcile_cycles limit 0');
+   const shared=(await reader.query('select current_database() db')).rows[0].db;
+   await withReplayDatabase(async db=>{
+    const q=async(text:string,values:unknown[]=[]) => (await db.query(text,values)).rows;
+    expect((await db.query('select current_database() db')).rows[0].db).not.toBe(shared);
+    const cols=await q(`select table_name,column_name from information_schema.columns where table_schema='public' and (table_name,column_name) in (
+     ('issuer_securities','valid_from_method'),('issuer_securities','valid_to_method'),
+     ('issuer_identifier_claims','op'),('issuer_identifier_claims','target_key'),('issuer_identifier_claims','detail'),('issuer_identifier_claims','resolved_by'),('issuer_identifier_claims','resolved_at'),
+     ('dq_reconciliations','pair'),('dq_reconciliations','kind'),('dq_reconciliations','outcome'),('dq_reconciliations','detail'),
+     ('dq_reconciliations','cycle_id'),('dq_reconciliations','issuer_id'),('dq_reconciliations','market'),('dq_reconciliations','attempt'))`);
+    expect(cols).toHaveLength(15);
+    expect(await q(`select is_nullable from information_schema.columns where table_schema='public' and table_name='issuer_identifier_claims' and column_name='confidence'`)).toEqual([{is_nullable:'YES'}]);
+    const rls=await q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1) order by c.relname`,[NEW_TABLES]);
+    expect(rls).toEqual([...NEW_TABLES].sort().map(relname=>({relname,relrowsecurity:true})));
+    expect(await q(`select tablename from pg_policies where schemaname='public' and tablename=any($1)`,[NEW_TABLES])).toEqual([]);
+    for(const role of ['anon','authenticated'])for(const t of [...NEW_TABLES,'issuer_identifier_claims'])for(const priv of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']){
+     const ok=(await q(`select has_table_privilege($1,'public.'||$2,$3) ok`,[role,t,priv]))[0].ok;
+     expect({role,t,priv,ok}).toEqual({role,t,priv,ok:false});
+    }
+    const SERVICE:Record<string,string[]>={
+     dq_reconcile_cycles:['SELECT','INSERT','UPDATE'],dq_reconcile_cursor:['SELECT','INSERT'],
+     dq_calendar_passes:['SELECT'],dq_calendar_pass_members:['SELECT'],dq_filing_expectations:['SELECT'],
+     issuer_filer_categories:['SELECT','INSERT','UPDATE','DELETE'],issuer_filing_profiles:['SELECT','INSERT','UPDATE','DELETE'],
+    };
+    for(const [t,granted] of Object.entries(SERVICE))for(const priv of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']){
+     const ok=(await q(`select has_table_privilege('service_role','public.'||$1,$2) ok`,[t,priv]))[0].ok;
+     expect({t,priv,ok}).toEqual({t,priv,ok:granted.includes(priv)});
+    }
+    const c=await db.connect();
+    try{
+     await c.query('set role anon');
+     await expect(c.query('select * from public.dq_filing_expectations')).rejects.toThrow(/permission denied/);
+    }finally{await c.query('reset role').catch(()=>{});c.release();}
+    expect(await q(`select id,public,file_size_limit::text limit_bytes,allowed_mime_types from storage.buckets where id='reconcile-raw'`)).toEqual([{
+     id:'reconcile-raw',public:false,limit_bytes:'52428800',
+     allowed_mime_types:['application/json','text/html','application/pdf','text/csv','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','application/zip'],
+    }]);
+    // A private bucket with no storage.objects policy is unreadable and unwritable for anon/authenticated
+    // on hosted Supabase; the migration must not add one (the local harness has no storage.objects).
+    const sql=readFileSync(MIGRATION,'utf8');
+    expect(sql).not.toMatch(/storage\.objects/);
+    await replayMigration(db,sql);
+    await replayMigration(db,sql);
+   });
+   expect((await reader.query('select 1 ok')).rows).toEqual([{ok:1}]);
+  }finally{
+   try{await reader.query('rollback');}finally{reader.release();}
+  }
+ },120000);
+
+ it('leaves evidence written after the first run untouched on replay',async()=>withReplayDatabase(async db=>{
+  const a=await issuer(undefined,db);const t=await ticker(undefined,db);const t2=await ticker(undefined,db);
   const prov={valid_from:{source:'stocks_universe.list_date',as_of:'2026-11-05'}};
-  await sec(a,t,'2020-01-01',null,{valid_from_method:'listing_date',provenance:JSON.stringify(prov)});
-  await sec(a,t2,'2010-01-01','2015-01-01',{valid_to_method:'delisting'});
-  await replayMigration(admin,readFileSync(MIGRATION,'utf8'));
-  expect(await q(`select ticker,valid_from_method,valid_to_method,provenance from public.issuer_securities where issuer_id=$1 order by valid_from`,[a])).toEqual([
+  await sec(a,t,'2020-01-01',null,{valid_from_method:'listing_date',provenance:JSON.stringify(prov)},db);
+  await sec(a,t2,'2010-01-01','2015-01-01',{valid_to_method:'delisting'},db);
+  await replayMigration(db,readFileSync(MIGRATION,'utf8'));
+  expect(await q(`select ticker,valid_from_method,valid_to_method,provenance from public.issuer_securities where issuer_id=$1 order by valid_from`,[a],db)).toEqual([
    {ticker:t2,valid_from_method:'first_observed',valid_to_method:'delisting',provenance:{}},
    {ticker:t,valid_from_method:'listing_date',valid_to_method:null,provenance:prov},
   ]);
- },60000);
+ }),60000);
 
  it('upgrades a seeded pre-migration database once; a second run after new evidence rewrites nothing',async()=>{
   await withPreMigrationDatabase(adminUrl,VERSION,async db=>{
@@ -221,12 +298,13 @@ describe.skipIf(!enabled)('plan 3 migration one: schema',()=>{
   });
  },240000);
 
- it('keeps valid_from_method=curated for a curated row written after the migration, across a replay',async()=>{
-  const a=await issuer();const t=await ticker();
-  await sec(a,t,'2020-01-01',null,{source:'curated',valid_from_method:'curated'});
-  await replayMigration(admin,readFileSync(MIGRATION,'utf8'));
-  expect(await q(`select valid_from_method from public.issuer_securities where issuer_id=$1`,[a])).toEqual([{valid_from_method:'curated'}]);
- });
+ // Use the replay-test setup budget for bootstrapping the disposable database.
+ it('keeps valid_from_method=curated for a curated row written after the migration, across a replay',async()=>withReplayDatabase(async db=>{
+  const a=await issuer(undefined,db);const t=await ticker(undefined,db);
+  await sec(a,t,'2020-01-01',null,{source:'curated',valid_from_method:'curated'},db);
+  await replayMigration(db,readFileSync(MIGRATION,'utf8'));
+  expect(await q(`select valid_from_method from public.issuer_securities where issuer_id=$1`,[a],db)).toEqual([{valid_from_method:'curated'}]);
+ }),60000);
 
  it('enforces the window-method checks and to_method_iff_to on issuer_securities',async()=>{
   const a=await issuer();const t=await ticker();

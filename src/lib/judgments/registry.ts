@@ -1,14 +1,14 @@
 // src/lib/judgments/registry.ts
 // The methodology registry (spec §4). REGISTRY lists every method module the system may register
-// judgments with; Task 19 appends macroRegimeV1. Test-only methods (testing/*, e.g.
+// judgments with; Task 19 appends macroRegimeV2. Test-only methods (testing/*, e.g.
 // synthetic_fact_metric@v1) are never listed. judgment_methodologies mirrors REGISTRY through
 // scripts/judgments/sync-methodologies.ts; methodologyRowOf maps a module + its hashes (formula-hash.ts)
 // to the row sync_methodology writes. No fs / typescript imports here: app code may import this file.
 import type {Methodology,MethodologyRow} from './types';
 
-import {macroRegimeV1} from './methodologies/macro-regime.v1';
+import {macroRegimeV2} from './methodologies/macro-regime.v2';
 
-export const REGISTRY:readonly Methodology[]=[macroRegimeV1];
+export const REGISTRY:readonly Methodology[]=[macroRegimeV2];
 export interface MethodologyHashes{doc_sha256:string;implementation_sha256:string;deps_sha256:string;formula_hash:string}
 export type MethodologySyncRow=Omit<MethodologyRow,'created_at'|'synced_at'>;
 export function upstreamOf(m:Pick<Methodology,'upstream'>):Record<string,string>{

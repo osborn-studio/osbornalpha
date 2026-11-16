@@ -9,6 +9,18 @@ import {HANDLERS,findingsCheck,runValidate} from './cli';
 import type {ValidateHandler} from './cli';
 
 describe('runValidate on the repository',()=>{
+ it('--availability diagnoses disabled hooks without claiming an evaluation passed',async()=>{
+  const r=await runValidate(['--availability','--gold','--lock']);
+  expect(r.exitCode).toBe(0);
+  expect(r.output.checks.availability).toMatchObject({ok:true,scope:'diagnostic_only',
+   calibration:{status:'unavailable',reason:'no_probability_methodology'},
+   methodologies:expect.arrayContaining([{id:'macro_regime',version:'v2',kind:'categorical'}])});
+  const kinds=r.output.checks.availability.kinds as {kind:string;enabled:boolean;reason?:string}[];
+  expect(kinds.find(k=>k.kind==='extraction_gold')).toMatchObject({enabled:false,reason:'D8: license decision pending'});
+  expect(kinds.find(k=>k.kind==='judgment_calibration')).toMatchObject({enabled:false});
+  expect(r.output.checks.gold).toMatchObject({ok:true});
+  expect(r.output.checks.lock).toMatchObject({ok:true});
+ });
  it('--gold --lock --redact pass on the repo\'s own fixtures (exit 0)',async()=>{
   const {exitCode,output}=await runValidate(['--redact','--lock','--gold']);
   expect(output.checks.gold).toMatchObject({ok:true,errors:[]});
@@ -86,5 +98,19 @@ describe('the legacy plan2 set is discovered independently of lock.json',()=>{
   const unlocked=await runValidate(['--gold','--lock'],{root});
   expect(unlocked.output.checks.gold).toMatchObject({ok:true});
   expect(unlocked.output.checks.lock).toMatchObject({ok:false,errors:[{path:LEGACY_PLAN2_PATH,code:'gold_lock_mismatch'}]});
+ });
+});
+
+describe('gold admission CLI',()=>{
+ it('keeps schema diagnostics successful while rejecting legacy and synthetic evidence admission',async()=>{
+  for(const path of [LEGACY_PLAN2_PATH,`${GOLD_DIR}/facts/synthetic-us.json`]){
+   const r=await runValidate(['--gold','--lock','--gold-admission',path]);
+   expect(r.exitCode).toBe(1);
+   expect(r.output.checks).toMatchObject({gold:{ok:true},lock:{ok:true},gold_admission:{ok:false,scope:'dataset_contract_only'}});
+  }
+ });
+ it('requires a path and fails closed on unreadable candidate data',async()=>{
+  expect((await runValidate(['--gold-admission'])).exitCode).toBe(2);
+  expect(await runValidate(['--gold-admission','missing.json'])).toMatchObject({exitCode:1,output:{checks:{gold_admission:{ok:false,error:{code:'gold_invalid'}}}}});
  });
 });

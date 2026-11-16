@@ -12,7 +12,7 @@
 // scan goes on, reporting a NON-info compensation_skipped (plan decision T-07). An abort is never a produce failure. Reads are
 // raced against a signal that combines the run's with the scan's OWN budget (T2-03); produce is NOT raced (T2-01): a mutating item is
 // awaited and cancels cooperatively through deps.signal (checked right before its register RPC), a deferred result being a stop, not a failure. The macro module not landed (MacroUnavailable) → skipped with info
-// macro_unavailable; macro_regime@v1 not in REGISTRY yet → skipped silently. produce counts go to the produce batch
+// macro_unavailable; macro_regime@v2 not in REGISTRY yet → skipped silently. produce counts go to the produce batch
 // (dataset judgments.produce.macro_regime); the settle receipt gets the scan's errors. Budget: deadlineAt (default start + 60 s).
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,TriggeredBy} from '../dq/batches';
@@ -27,7 +27,7 @@ import {REGISTRY} from './registry';
 import {resolverFor} from './resolvers';
 import type {JudgmentInputsDb,JudgmentsDb,MacroSnapshotRow,Methodology} from './types';
 
-export const MACRO_METHOD={id:'macro_regime',version:'v1'} as const;
+export const MACRO_METHOD={id:'macro_regime',version:'v2'} as const;
 export const SNAPSHOT_PAGE=200;
 export const COMPENSATION_BUDGET_MS=60_000;
 /** Consecutive failing runs after which a snapshot is skipped with a visible error (plan decision T-07). */

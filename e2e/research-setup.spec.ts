@@ -9,7 +9,7 @@ test('setup wizard shows stage-0 progress and the first guided question of each 
   await page.locator('input[type="email"]').fill(process.env.E2E_EMAIL!);
   await page.locator('input[type="password"]').fill(process.env.E2E_PASSWORD!);
   await page.getByRole('button', { name: /登录/ }).click();
-  await page.waitForURL('**/today');
+  await page.waitForURL('**/macro');
 
   await page.goto('/research');
   await page.getByRole('link', { name: /研究设置向导/ }).click();

@@ -4,13 +4,13 @@ import {COHORT_BUCKET,isCohortPath,memoryCohortStore,supabaseCohortStore} from '
 import type {SupabaseClient} from '@supabase/supabase-js';
 
 const G='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',A='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',J='00000000-0000-4000-8000-000000000003';
-const PARTIAL=`partial/macro_regime@v1.all/${G}/start.${A}.json`;
+const PARTIAL=`partial/macro_regime@v2.all/${G}/start.${A}.json`;
 const bytes=(s:string)=>new TextEncoder().encode(s);
 
 describe('cohort paths',()=>{
  it('accepts per-attempt partial pages and content-addressed cohorts only',()=>{
-  for(const p of [PARTIAL,`partial/macro_regime@v1.market.HK/${G}/${J}.${A}.json`,`partial/m_x@v12.subject_type.macro_region/${G}/start.${A}.json`,`cohorts/${'a'.repeat(64)}.json`])expect(isCohortPath(p),p).toBe(true);
-  for(const p of ['../x.json',`partial/macro_regime@v1.all/${G}/start.json`,`cohorts/${'a'.repeat(63)}.json`,`partial/Macro@v1.all/${G}/start.${A}.json`,`cohorts/${'A'.repeat(64)}.json`])expect(isCohortPath(p),p).toBe(false);
+  for(const p of [PARTIAL,`partial/macro_regime@v2.market.HK/${G}/${J}.${A}.json`,`partial/m_x@v12.subject_type.macro_region/${G}/start.${A}.json`,`cohorts/${'a'.repeat(64)}.json`])expect(isCohortPath(p),p).toBe(true);
+  for(const p of ['../x.json',`partial/macro_regime@v2.all/${G}/start.json`,`cohorts/${'a'.repeat(63)}.json`,`partial/Macro@v1.all/${G}/start.${A}.json`,`cohorts/${'A'.repeat(64)}.json`])expect(isCohortPath(p),p).toBe(false);
  });
 });
 describe('memoryCohortStore',()=>{

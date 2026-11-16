@@ -61,10 +61,10 @@ async function inTx(pool:Pool,body:(tx:Tx)=>Promise<void>):Promise<void>{
   c.release(broken);
  }
 }
-async function stillBlockedBehind(pool:Pool,pid:number,p:Promise<unknown>):Promise<void>{
+async function stillBlockedBehind(pool:Pool,pid:number,p:Promise<unknown>,waiterPid?:()=>number|undefined):Promise<void>{
  let settled=false;p.then(()=>{settled=true;},()=>{settled=true;});
  for(const deadline=Date.now()+3000;;){
-  const n=Number((await pool.query(`select count(*)::int n from pg_stat_activity where $1 = any(pg_blocking_pids(pid))`,[pid])).rows[0].n);
+  const n=Number((await pool.query(`select count(*)::int n from pg_stat_activity where $1 = any(pg_blocking_pids(pid)) and ($2::int is null or pid=$2)`,[pid,waiterPid?waiterPid()??-1:null])).rows[0].n);
   if(n>=1)break;
   if(settled||Date.now()>deadline)throw new Error(`no backend blocked behind pid ${pid} (settled=${settled})`);
   await new Promise(r=>setTimeout(r,20));
@@ -982,15 +982,17 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
    //     Fixed order: the merge waits on the advisory lock holding NO scope/issuer row; the creator's cursor
    //     insert for t1 (KEY SHARE on issuers via the FK) does not wait; both finish. Old order: the merge held
    //     t1 FOR UPDATE while waiting → 40P01 on one side.
-   let merger:Promise<unknown>|undefined;let opened:Opened|undefined;
+   let merger:Promise<unknown>|undefined;let opened:Opened|undefined;let mergerPid:number|undefined;
    await inTx(admin,async({c,pid})=>{
     await lineageStage(c,[]);
     await c.query(lockSql,[LINEAGE]);                                              // what open_reconcile_cycle takes first
     merger=inRolledBackTx(admin,async c2=>{
+     mergerPid=Number((await c2.query(`select pg_backend_pid() p`)).rows[0].p);
      expect((await c2.query(`select public.set_merge($1,$2,$3) v`,[s1,t1,by])).rows[0].v).toEqual({repointed:0});
     },1);merger.catch(()=>{});
-    await stillBlockedBehind(admin,pid,merger);
-    expect(await q(`select distinct l.locktype from pg_locks l join pg_stat_activity a on a.pid=l.pid where not l.granted and $1 = any(pg_blocking_pids(a.pid))`,[pid])).toEqual([{locktype:'advisory'}]);   // the merge waits on the advisory lock, not on a row
+    // Parallel migration replays may also wait behind this transaction. Observe only our merger.
+    await stillBlockedBehind(admin,pid,merger,()=>mergerPid);
+    expect(await q(`select distinct l.locktype from pg_locks l where not l.granted and l.pid=$2 and $1 = any(pg_blocking_pids(l.pid))`,[pid,mergerPid])).toEqual([{locktype:'advisory'}]);   // the merge waits on the advisory lock, not on a row
     opened=await openC(c,LINEAGE,lid(),[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[]);   // re-entrant advisory lock; cursor insert on t1
    });                                                                              // rolled back
    expect(opened).toMatchObject({created:true});

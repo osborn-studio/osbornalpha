@@ -7,11 +7,13 @@
 // {publisher, via, fetchHost, rights} (P1's adapter / seriesKey / attribution are not part of the P3 contract). It adds
 // the P3 row US_FED_TARGET_D (spec §4.2, FRED DFEDTAR). FIXTURE_RULES copies P1 regime.ts RULES (P1 spec §5.2 table,
 // P1 plan Task 10): the P1 rule ids, bilingual labels and support values in table order.
+// Fixtures can carry publish state.
 import type {Bilingual,MacroSeriesDef,ObservationRow,Region,RulesView,SnapshotRecord} from '../contract';
 
 export interface StrategyFixture{
  catalog:MacroSeriesDef[];catalogVersion:string;rules:RulesView;
  snapshots:SnapshotRecord[];observations:ObservationRow[];   // all versions; memory port applies asOf / ok rules
+ publishState?:Partial<Record<Region,{revision:number;input_revision:number}>>;
  today?:string;
 }
 

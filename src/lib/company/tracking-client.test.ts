@@ -28,6 +28,12 @@ describe('tracking client',()=>{
 });
 
 describe('isWatching',()=>{
+ it('does not read watches, materialized events or receipts in replay',async()=>{
+  const {isWatching}=await import('./tracking-client');
+  const f=vi.fn(async()=>ok({error:{code:'not_authenticated'}},401));vi.stubGlobal('fetch',f);
+  expect(await isWatching(A,'2024-06-30')).toBe(false);
+  expect(f).not.toHaveBeenCalled();
+ });
  it('200 → true; 404 watch_not_found → false; any other failure throws (fail closed)',async()=>{
   const {isWatching}=await import('./tracking-client');
   vi.stubGlobal('fetch',vi.fn(async()=>ok({rows:[],nextCursor:null,evidence:{}})));

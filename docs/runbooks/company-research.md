@@ -15,7 +15,7 @@
 
 ## 2. 迁移应用顺序
 
-合并顺序（owner 2026-11-07）：#112（宏观 WP-S6）→ F4（`20261116*`）→ F3（`20261117*`）→ 本模块 → 外资研报。本模块三份迁移已重编号为 `20261118*`（相对顺序不变），在本分支**未锁定**；合并到 main 时由合并者追加到 `supabase/migrations.lock.json`，之后不可再改字节。
+合并顺序（owner 2026-11-07）：#112（宏观 WP-S6）→ F4（`20261116*`）→ F3（`20261117*`）→ 本模块 → 外资研报。本模块三份迁移已重编号为 `20261118*`（相对顺序不变），已随 #121 写入 `supabase/migrations.lock.json`；#126 进一步锁定 by-filing RPC 迁移，已锁定文件不可再改字节。下列部署命令为复跑说明。
 
 1. 确认规格二迁移已在目标库：`select to_regclass('public.financial_facts') is not null;` 为 `true`。
 2. 按文件名顺序应用：先 `20261118090000_company_research.sql`，再 `20261118091000_company_research_functions.sql`，再 `20261118092000_company_evidence_fence.sql`（与此前迁移相同的应用方式；生产走 Supabase Management API，令牌在钥匙串，不打印）。三份文件可重放；核对 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)') is not null;` 为 `true`；旧三参函数 `select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null;` 也必须为 `true`（计划第 4 轮审计 S1）；合并后锁定在 `supabase/migrations.lock.json`，之后任何修改都要新迁移。
@@ -135,3 +135,62 @@ npx playwright test e2e/company.spec.ts --reporter=list,html
 ## 12. 本次验证范围（2026-11-06）
 
 Task 19 按 owner 指令只跑定向单测、typecheck、lint；本机 Supabase、种子实跑、Playwright、全量 npm test、test:db、test:migrations 由指挥执行。本手册的命令是复跑说明，不代表已执行。四个夹具哈希已核对，三条期望保持 pending；不得宣称黄金矩阵通过。
+
+## Company filings lineage reads
+
+`GET /api/companies/[ticker]/filings` and its admin twin include published filings from every predecessor in the resolved issuer's lineage, restricted to the ticker's market and `asOf`. Each member uses `company_read_snapshot`; the facts limit does not limit its filings or their fact counts. The global order remains `availableDate` descending, then `filingId` descending.
+
+Existing response fields retain their meanings: `issuerId` and `stateRev` describe the resolved target. Additive `lineage` and `stateRevs` fields list all members and their snapshot revisions, sorted by issuer id. The browser contract makes these metadata fields optional for older responses. A single-member read still uses one snapshot. Multi-member reads require unchanged membership and a complete revision vector matching every snapshot; after three unstable attempts the route returns `503 lineage_unstable` with no partial filings and `no-store` (admin: `private, no-store`). This closes the filings read gap only; statements, history, overview and events retain their existing lineage behavior.
+
+## Desktop core launch checks (2026-11-08)
+
+The coverage directory is `/intel/companies`, reached from the company card on `/intel`.
+Its company links open `/stock/[ticker]`, whose overview, statements, metrics and filings
+form the existing core facts workflow. `/research/companies` is the separate Research OS
+company/theme archive; an empty archive does not mean the coverage directory is unavailable.
+
+Minimum read-only probes, using the deployed app and an authenticated desktop browser for pages:
+
+- `GET /api/companies?market=US&q=AAPL` and `GET /api/companies/freshness`.
+- `GET /api/companies/AAPL/overview`.
+- `GET /api/companies/AAPL/statements?statement=IS&basis=disclosed&periods=8`.
+- `GET /api/companies/AAPL/metrics` and `GET /api/companies/AAPL/filings`.
+- Open `/stock/AAPL`, then a displayed value's history and original source. Check the
+  displayed period, currency/scale and evidence together. A 200 response alone is insufficient.
+
+Prerequisites are the existing facts/company migrations and public read grants, published
+fact scopes, issuer/security identity, materialized issuer coverage, US fact evidence and
+snapshot storage, and server service credentials for event/evidence reads. Check `facts.us`
+and `company.events` freshness separately; a failed digest is an event freshness issue to
+investigate, not proof that all stored US financial facts are unavailable.
+
+CN identity, directory and filing metadata can be usable while public financial values
+remain `citation_pending`: production still uses `emptyPdfLocatorSource`, so do not bypass
+the per-fact PDF gate. The default-off issuer judgments and missing production issuer method
+are separate release scopes; neither is a prerequisite for the US facts workflow above.
+
+Coverage period bounds exclude `statement='DEI'` cover observations; fact/concept counts
+still include them. Cover dates are not financial reporting periods. For example, SEC AAL
+accession `0000006201-26-000052`, filed 2026-07-23, contains a DEI shares-outstanding observation
+ending 2027-07-17. Taking its maximum as “Latest period” mislabels the reporting period.
+Raw observations are preserved. Existing `issuer_coverage` rows retain their old bounds
+until their stream is successfully digested again; deployment alone does not rewrite them.
+The owner can use the existing scoped/full digest procedure above after its normal dry-run
+and single-producer checks. This change performs no refresh or production write and does
+not repair upstream date errors in financial observations.
+
+## Current company cache freshness
+
+Nonempty successful public `GET /api/companies/[ticker]/overview` responses for UTC
+today (default or explicit `asOf`) and populated `GET /api/companies` coverage directory
+responses use `Cache-Control: public, max-age=0, s-maxage=60`, without stale-while-revalidate.
+This follows the short shared-cache policy used for fresh materialized metrics. Empty
+responses and errors remain `no-store`; admin overview responses remain `private, no-store`.
+Historical overview `asOf` responses retain `public, max-age=600, s-maxage=3600`, even
+though their coverage decoration is current. The facts cutoff and request keys are unchanged.
+
+The recorded AAPL propagation check observed a default overview cache HIT at age 474
+with pre-rebuild coverage, while an explicit UTC-today MISS returned rebuilt coverage.
+The 60-second policy governs newly served responses; it does not purge existing cache
+entries or prove deployed CDN propagation. Release behavior requires separate authorized
+verification after deployment.

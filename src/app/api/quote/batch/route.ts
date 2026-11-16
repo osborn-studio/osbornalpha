@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { KlineProviderError } from '@/lib/data/kline/types';
 import { quoteSourcesFor } from '@/lib/data/sources/registry';
 import { fetchTwseQuotesBatch, twseQuoteRetentionStart } from '@/lib/data/sources/twse';
 import { classifyMarket } from '@/lib/utils';
@@ -274,7 +275,9 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
   let windMap = new Map<string, QuoteShape | null | undefined>();
   let windFailure: Exclude<SourceOutcome, 'success' | 'empty'> | null = null;
   let windAttempts = 0;
-  const windStartedAt = Date.now();
+  let windFailureKind = 'unknown';
+  let windHttpStatus: number | null = null;
+  const windStartedAt = performance.now();
   if (isDatagatewayConfigured() && toFetch.length > 0) {
     windAttempts = 1;
     try {
@@ -283,10 +286,38 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
     } catch (error) {
       signal.throwIfAborted();
       windFailure = classifySourceFailure(error);
+      // Only typed, allowlisted metadata crosses the diagnostic boundary.
+      // Never derive a reason/status from messages or serialize the error.
+      if (error instanceof KlineProviderError) {
+        const kinds = ['unsupported', 'empty', 'not_found', 'rate_limited', 'transient', 'protocol', 'invalid_data'];
+        if (kinds.includes(error.kind)) windFailureKind = error.kind;
+        const status = error.status;
+        if (typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599) windHttpStatus = status;
+      } else if (error instanceof Error && error.name === 'TimeoutError') {
+        windFailureKind = 'timeout';
+      }
     }
   }
+  // One stage duration, captured before fallback work. Public summaries still
+  // sum this duration once per requested symbol, as they do for attempt counts.
+  const windDurationMs = Math.max(0, Math.round(performance.now() - windStartedAt));
   const gatewayHit = (ticker: string): QuoteShape | null => windMap.get(ticker.toUpperCase()) ?? null;
   const fallbackTickers = toFetch.filter((ticker) => !gatewayHit(ticker));
+  if (windAttempts > 0 && fallbackTickers.length > 0) {
+    try {
+      // One aggregate per configured miss, even when all fallbacks succeed.
+      // Logger failures must not affect quote selection, caches or cancellation.
+      void Promise.resolve(console.warn('quote datagateway miss', {
+        requested_count: toFetch.length,
+        usable_count: toFetch.length - fallbackTickers.length,
+        missing_count: fallbackTickers.length,
+        attempts: windAttempts,
+        failure_kind: windFailure ? windFailureKind : fallbackTickers.length < toFetch.length ? 'partial' : 'empty',
+        http_status: windHttpStatus,
+        duration_ms: windDurationMs,
+      })).catch(() => {});
+    } catch { /* Diagnostics are best effort. */ }
+  }
   // TW group: one native multi-symbol mis request (rate limit ~3 req / 5 s);
   // remaining markets go through the per-ticker registry cascade.
   const twTickers = fallbackTickers.filter((t) => classifyMarket(t) === 'TW');
@@ -316,7 +347,7 @@ async function quoteBatch(req: Request, signal: AbortSignal) {
         source: 'datagateway-wind',
         outcome: value ? 'success' : windFailure ?? 'empty',
         attempts: windAttempts,
-        duration_ms: Date.now() - windStartedAt,
+        duration_ms: windDurationMs,
       });
       if (value) {
         retain(ticker, value);

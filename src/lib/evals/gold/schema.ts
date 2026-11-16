@@ -26,7 +26,13 @@ const DATE={test:(s:string)=>DATE_SHAPE.test(s)&&new Date(`${s}T00:00:00Z`).toIS
 const METRIC_DURATIONS:readonly string[]=['3M','6M','9M','12M','INSTANT','TTM'];
 /** Bases derive.ts emits (derive.ts:110-111): std = us_standard|cn_standard, plus CN capex_incl_intangibles → cn_incl_intangibles; CN fcf cn_incl_intangibles (line 136); CN borrowings_total cn_incl_bonds (line 145). */
 const METRIC_BASES:Record<'US'|'CN',readonly string[]>={US:['us_standard'],CN:['cn_standard','cn_incl_intangibles','cn_incl_bonds']};
-const TIMESTAMP=/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2}))?$/;
+/** Provenance accepts a calendar date or an ISO timestamp with an explicit zone. */
+export function isProvenanceDate(v:unknown):v is string{
+ if(typeof v!=='string'||!DATE.test(v.slice(0,10)))return false;
+ if(v.length===10)return true;
+ return /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(v)&&Number.isFinite(Date.parse(v));
+}
+const TIMESTAMP={test:isProvenanceDate};
 const HEX64=/^[0-9a-f]{64}$/;
 const SET_ID=/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9][a-z0-9_.-]*)+$/;
 const ACCESSION=/^\d{10}-\d{2}-\d{6}$/;
@@ -110,6 +116,7 @@ export function parseGoldSetF6(raw:unknown,meta:{path:string;sha256:string},reco
  if(raw.artifact_class!=='public'&&raw.artifact_class!=='restricted')err('artifact_class','invalid');
  const implementers=Array.isArray(raw.module_implementers)&&raw.module_implementers.length>0&&raw.module_implementers.every(isStr)?raw.module_implementers as string[]:null;
  if(!implementers)err('module_implementers','non_empty_string_array');
+ else if(implementers.some(id=>!/^[a-z0-9][a-z0-9_.-]{0,63}$/.test(id))||new Set(implementers).size!==implementers.length)err('module_implementers','unique_canonical_identities_required');
  if(typeof raw.review_required!=='boolean')err('review_required','boolean_required');
  else if(!raw.review_required&&typeof raw.set_id==='string'&&REVIEW_REQUIRED_PREFIXES.some(p=>(raw.set_id as string).startsWith(p)))err('review_required','must_be_true_for_this_set');
  const tolerance=isObj(raw.tolerance)?raw.tolerance:null;
@@ -352,7 +359,12 @@ function parseSource(v:unknown,at:string,c:J,x:CaseCtx):CaseSource|null{
  let locator:Record<string,string|number>|undefined;
  if(v.locator!==undefined){
   const l=isObj(v.locator)?v.locator:null;
-  if(!l||Object.keys(l).length===0||!Object.values(l).every(z=>typeof z==='string'||(typeof z==='number'&&Number.isFinite(z)))){err(`${at}.locator`,'non_empty_object_of_string_or_number');ok=false;}
+  // HTML row/table labels and printed page names (e.g. F-28) remain supported.
+  const meaningful=l&&Object.entries(l).length>0&&Object.entries(l).every(([key,value])=>
+   key.trim().length>0&&((typeof value==='string'&&value.trim().length>0)||(typeof value==='number'&&Number.isFinite(value))));
+  const page=l?.page;
+  const numericPage=typeof page==='number'?page:typeof page==='string'&&/^[+-]?\d+(\.\d+)?$/.test(page)?Number(page):null;
+  if(!meaningful||(numericPage!==null&&(!Number.isSafeInteger(numericPage)||numericPage<=0))){err(`${at}.locator`,'non_empty_object_of_string_or_number');ok=false;}
   else locator=l as Record<string,string|number>;
  }
  if(c.expect==='present'&&v.locator===undefined){err(`${at}.locator`,'required_for_present');ok=false;}

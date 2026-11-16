@@ -232,3 +232,25 @@ describe('review round 2: INSTANT metrics and CN bases',()=>{
   expect(errs(s)).toContain('cases[0].target: period_start_must_precede_period_end');
  });
 });
+
+// These builders are synthetic contract examples, never admitted human labels.
+describe('provenance admission boundaries',()=>{
+ it.each(['2024-13-01','2024-01-00','2026-02-30','2025-02-29','2026-11-07T25:00:00Z','2026-11-07T00:00:00+25:00'])('rejects impossible recording/review dates: %s',date=>{
+  expect(errorsOf(s=>{s.cases[0].recorded_at=date;})).toContain('cases[0].recorded_at: date_or_timestamp_required');
+  expect(errorsOf(s=>{s.cases[0].reviewed_at=date;})).toContain('cases[0].reviewed_at: required_with_reviewed_by');
+ });
+ it('rejects impossible history and retraction dates',()=>{
+  expect(errorsOf(s=>{s.version=2;s.history=[{version:2,changed_at:'2026-02-30',changed_by:'owner',reason:'test',fields:['notes']}];})).not.toEqual([]);
+  expect(errorsOf(s=>{s.cases[0].retracted={at:'2026-02-30',by:'owner',reason:'test'};})).not.toEqual([]);
+ });
+ it.each([{row:' '},{'':'Revenue'},{page:0},{page:-1},{page:1.5},{page:'0'},{row:'Revenue',column:''}])('rejects unusable locators: %j',locator=>{
+  expect(errorsOf(s=>{s.cases[0].source.locator=locator;})).not.toEqual([]);
+ });
+ it('accepts HTML row locators, positive printed page strings and leap-day provenance',()=>{
+  expect(errorsOf(s=>{s.cases[0].source.locator={row:'Revenue'};s.cases[0].recorded_at='2024-02-29';})).toEqual([]);
+  expect(errorsOf(s=>{s.cases[0].source.locator={page:'F-28'};})).toEqual([]);
+ });
+ it.each(['OWNER',' owner '])('rejects noncanonical implementer identities: %s',id=>{
+  expect(errorsOf(s=>{s.module_implementers=[id];})).not.toEqual([]);
+ });
+});

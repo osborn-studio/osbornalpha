@@ -1,5 +1,5 @@
 // src/lib/judgments/testing/macro-fixture.ts
-// Test / script helpers for macro_regime@v1 (Task 19). Loads fixtures/judgments/macro/*.json, serves them through
+// Test / script helpers for macro_regime@v2 (Task 19). Loads fixtures/judgments/macro/*.json, serves them through
 // fixtureMacroReadApi (synthetic macro results), syncs the methodology row into a
 // memory JudgmentsDb with a deterministic clock and an optional draft override for gate tests —
 // and builds the golden replay fixture (spec §14.4). Production code never imports this file.
@@ -13,7 +13,7 @@ import {methodologyRowOf} from '@/lib/judgments/registry';
 import {produce,type ProduceDeps} from '@/lib/judgments/produce';
 import {defaultResolverOf,type CompensateDeps} from '@/lib/judgments/compensate';
 import {REPLAY_FIXTURE_VERSION,type ReplayFixture} from '@/lib/judgments/replay';
-import {macroRegimeV1} from '@/lib/judgments/methodologies/macro-regime.v1';
+import {macroRegimeV2} from '@/lib/judgments/methodologies/macro-regime.v2';
 
 export const MACRO_S1='6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a01';
 export const MACRO_S2='6f1d2c3a-0b5e-4c47-9a51-2f0d7e9c1a02';
@@ -49,7 +49,7 @@ export function macroInputsDb(fx:MacroFixture):JudgmentInputsDb{
 export async function macroDb(status:'active'|'draft'):Promise<MemoryJudgmentsDb>{
  const db=memoryJudgmentsDb();db.setNow(REPLAY_REGISTERED_AT);
  await db.tables.insert('ingest_batches',{batch_id:MACRO_BATCH_ID,status:'running',dataset:'judgments.produce.macro_regime'});
- const row=methodologyRowOf(macroRegimeV1,formulaHashOf(macroRegimeV1),{publishable:false,code_version:MACRO_CODE_VERSION});
+ const row=methodologyRowOf(macroRegimeV2,formulaHashOf(macroRegimeV2),{publishable:false,code_version:MACRO_CODE_VERSION});
  await db.syncMethodology({...row,status},'script','Task 19 fixture status');
  return db;
 }
@@ -63,23 +63,23 @@ export const produceCtx=(db:MemoryJudgmentsDb,inputsDb:JudgmentInputsDb,opts:{dr
  ({db,inputsDb,tables:db.tables,resolverOf:defaultResolverOf,batchId:MACRO_BATCH_ID,codeVersion:MACRO_CODE_VERSION,signal:new AbortController().signal,dryRun:opts.dryRun??false,actor:'test'});
 /** Task 12 CompensateDeps: the scan opens its own produce batch in `tables`. */
 export const compensateCtx=(db:MemoryJudgmentsDb,inputsDb:JudgmentInputsDb):CompensateDeps=>
- ({db,inputsDb,tables:db.tables,codeVersion:MACRO_CODE_VERSION,triggeredBy:'cron',signal:new AbortController().signal,methodology:macroRegimeV1});
+ ({db,inputsDb,tables:db.tables,codeVersion:MACRO_CODE_VERSION,triggeredBy:'cron',signal:new AbortController().signal,methodology:macroRegimeV2});
 
 /** Frozen inputs of snapshot s1, for REGISTRY-wide property tests (spec §14.1). */
 export async function macroSampleInputs():Promise<Input[]>{
  const fx=loadMacroFixture('us-2026-09-11');
- const g=await macroRegimeV1.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+ const g=await macroRegimeV2.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
  if(!Array.isArray(g))throw new Error(`macro sample gather abstained: ${g.reason}`);
  return g;
 }
 
 export async function buildMacroReplayFixture():Promise<ReplayFixture>{
  const fx=loadMacroFixture('us-2026-09-11');const db=await macroDb('active');
- const res=await produce(macroRegimeV1,[macroWork(fx,MACRO_S1)],produceCtx(db,macroInputsDb(fx)));
+ const res=await produce(macroRegimeV2,[macroWork(fx,MACRO_S1)],produceCtx(db,macroInputsDb(fx)));
  const item=res.items[0];
  if(!item?.judgment_id||item.status!=='inserted')throw new Error(`macro replay fixture: produce failed ${JSON.stringify(item)}`);
  const row=await db.getJudgment(item.judgment_id);
  if(!row)throw new Error('macro replay fixture: registered row not found');
  const judgment=row;
- return {fixture_version:REPLAY_FIXTURE_VERSION,description:'macro_regime@v1 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)',expect:'exact',judgment};
+ return {fixture_version:REPLAY_FIXTURE_VERSION,description:'macro_regime@v2 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)',expect:'exact',judgment};
 }

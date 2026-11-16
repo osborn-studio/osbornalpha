@@ -10,9 +10,9 @@ const code=(f:()=>unknown)=>{try{f();return 'ok';}catch(e){return e instanceof J
 
 describe('jobKey',()=>{
  it('builds the produce and calibrate keys of spec §5.5b',()=>{
-  expect(jobKey('produce','macro_regime','v1')).toBe('produce:macro_regime@v1');
-  expect(jobKey('calibrate','macro_regime','v1',{scope_type:'all',scope_key:''})).toBe('calibrate:macro_regime@v1:all:');
-  expect(jobKey('calibrate','macro_regime','v1',{scope_type:'market',scope_key:'US'})).toBe('calibrate:macro_regime@v1:market:US');
+  expect(jobKey('produce','macro_regime','v2')).toBe('produce:macro_regime@v2');
+  expect(jobKey('calibrate','macro_regime','v2',{scope_type:'all',scope_key:''})).toBe('calibrate:macro_regime@v2:all:');
+  expect(jobKey('calibrate','macro_regime','v2',{scope_type:'market',scope_key:'US'})).toBe('calibrate:macro_regime@v2:market:US');
   expect(jobKey('calibrate','x','v2',{scope_type:'subject_type',scope_key:'issuer'})).toBe('calibrate:x@v2:subject_type:issuer');
  });
  it('percent-encodes separators, % and non-ASCII in every component',()=>{
@@ -24,7 +24,7 @@ describe('jobKey',()=>{
  });
  it('round-trips through parseJobKey and keeps distinct inputs distinct',()=>{
   const cases:{id:string;version:string;scope?:CalibrationScope}[]=[
-   {id:'macro_regime',version:'v1'},{id:'macro_regime',version:'v1',scope:{scope_type:'all',scope_key:''}},{id:'m',version:'v1',scope:{scope_type:'market',scope_key:'US'}},
+   {id:'macro_regime',version:'v2'},{id:'macro_regime',version:'v2',scope:{scope_type:'all',scope_key:''}},{id:'m',version:'v1',scope:{scope_type:'market',scope_key:'US'}},
    {id:'m',version:'v1',scope:{scope_type:'market',scope_key:'a:b'}},{id:'m:1',version:'v1',scope:{scope_type:'market',scope_key:'b'}},{id:'m',version:'v1',scope:{scope_type:'market',scope_key:'港股'}},{id:'a@b%c',version:'v9'}];
   const keys=new Set<string>();
   for(const c of cases){

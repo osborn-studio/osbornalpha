@@ -95,3 +95,8 @@ describe('format detection and file errors',()=>{
   expect(codeOf(()=>parseLock({files:[f,f]}))).toBe('gold_invalid');
  });
 });
+
+it('rejects impossible recorder admission dates',()=>{
+ const raw=structuredClone(loadRecorders());raw.recorders[0].added_at='2026-02-30';
+ expect(codeOf(()=>parseRecorders(raw))).toBe('gold_invalid');
+});

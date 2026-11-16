@@ -1,14 +1,14 @@
 {
  "fixture_version": "judgment-replay/1",
- "description": "macro_regime@v1 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
+ "description": "macro_regime@v2 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
  "expect": "exact",
  "judgment": {
-  "judgment_id": "1c97e59e-5b02-8c65-b36a-4308477d00e9",
+  "judgment_id": "24edb657-7d36-89e6-b334-82c5989e6813",
   "subject_type": "macro_region",
   "subject_key": "US",
   "judgment_type": "macro_regime",
   "methodology_id": "macro_regime",
-  "methodology_version": "v1",
+  "methodology_version": "v2",
   "kind": "categorical",
   "producer_kind": "rule",
   "producer_ref": {},

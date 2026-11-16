@@ -20,6 +20,10 @@ describe('strategyPort (WP-S6: wired to P1 MacroDb)',()=>{
 });
 
 describe('memoryStrategyPort snapshots',()=>{
+ it('publishState returns fixture revisions or null',async()=>{
+  const port=memoryStrategyPort(fixture({publishState:{US:{revision:4,input_revision:9}}}));
+  expect(await port.publishState('US')).toEqual({revision:4,input_revision:9});expect(await port.publishState('CN')).toBeNull();
+ });
  const s1=snap('US','2026-10-01T08:00:00.000Z',[]),s2=snap('US','2026-11-01T08:00:00.000Z',[],{status:'superseded'}),s3=snap('US','2026-11-01T08:00:00.000Z',[]);
  const tieA={...snap('CN','2026-11-02T08:00:00.000Z',[]),snapshot_id:'snap:CN:a'},tieB={...snap('CN','2026-11-02T08:00:00.000Z',[]),snapshot_id:'snap:CN:b'};
  const failed=snap('CN','2026-11-03T08:00:00.000Z',[],{status:'failed'});

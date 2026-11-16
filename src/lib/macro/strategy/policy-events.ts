@@ -14,6 +14,7 @@
 // the first upper and lower rows), so each event re-derives from the manifest alone; the whole daily target history is
 // too large to copy into every manifest. A truncated source read → no events and one gap {kind:'history_truncated',
 // near: cutoff date} that every view shows (never an ordinary empty history).
+// Three source histories load concurrently.
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {VERSIONS} from './contract';
 import type {EventGap,EventInput,PolicyEvent,StrategyPolicyEvent} from './contract';
@@ -66,9 +67,7 @@ export function mergePolicyEvents(derive:Derive,single:readonly EventInput[],upp
  *  tuple. Any truncated read → no events and a history_truncated gap (the read state says which source). */
 export async function readPolicyEvents(b:ManifestBuilder):Promise<{events:StrategyPolicyEvent[];gaps:EventGap[]}>{
  const opts={keepInputs:false};
- const single=await b.history(US_TARGET_SINGLE_ID,EVENTS_PURPOSE,'history',opts);
- const upper=await b.history(US_TARGET_UPPER_ID,EVENTS_PURPOSE,'history',opts);
- const lower=await b.history(US_TARGET_LOWER_ID,EVENTS_PURPOSE,'history',opts);
+ const [single,upper,lower]=await Promise.all([b.history(US_TARGET_SINGLE_ID,EVENTS_PURPOSE,'history',opts),b.history(US_TARGET_UPPER_ID,EVENTS_PURPOSE,'history',opts),b.history(US_TARGET_LOWER_ID,EVENTS_PURPOSE,'history',opts)]);
  if(!single||!upper||!lower){
   const truncated=[[US_TARGET_SINGLE_ID,single],[US_TARGET_UPPER_ID,upper],[US_TARGET_LOWER_ID,lower]].filter(([,r])=>r===null).map(([id])=>id);
   return {events:[],gaps:[{kind:'history_truncated',reason:truncated.join(';'),near:utcDate(b.cutoff)}]};

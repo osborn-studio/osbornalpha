@@ -1,5 +1,7 @@
 # 数据底座运行手册（DQ 基础 + 发行人主数据 + 披露事实库 + 标识符与对账）
 
+路径 2026-11-07 起为 `/macro`（旧路径 `/intel/macro/*` 308 永久重定向）
+
 适用迁移：`supabase/migrations/20261105090000_dq_foundation.sql`、`supabase/migrations/20261105091000_issuers.sql`、`supabase/migrations/20261106090000_financial_facts.sql`、`supabase/migrations/20261107090000_identifiers_and_dq.sql`、`supabase/migrations/20261107091000_facts_extensions.sql`。
 类型定义：`src/lib/supabase/database.types.ts`（手工维护，与上述迁移逐列对应）。`npm run supabase:types` 只是占位：它打印提示并以退出码 1 结束，**不会**生成类型；改迁移时请同步手改该文件。
 
@@ -539,13 +541,13 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
 - 部署 1（迁移核对之后）：`vercel deploy --prod --yes`，从 `~/Developer/CodeX/.worktrees/OsbornAlpha/deploy` 的 `origin/main` detached 检出 → `stock-monitor-43m78oi4m-gilosbornhellos-projects.vercel.app`，别名 osbornalpha.com，14 个 cron。
 - **发现：CLI 部署时 `VERCEL_GIT_COMMIT_SHA` 为空**。项目没有 Git 连接，`autoExposeSystemEnvs=true` 但 Git 系统变量不填；部署元数据里有 `gitCommitSha`，运行时没有。结果：`macro-sync` 真实运行 503 `code_version_unavailable`。代码里要求它的是五个 cron 路由的真实运行（`facts-sync`、`filing-calendar`、`reconcile`、`macro-sync`、`industry-sync`；`macro-sync?preview=1` 除外）与 `POST /api/macro/ingest`（非 cron）；这些路径在不带该变量的 CLI 部署上返回 503。其他 cron 路由不读它。
 - 修正（不改代码、不改项目环境）：同一提交重新部署，带**部署级**运行时变量：`vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)` → **`stock-monitor-dxnq1om1q-gilosbornhellos-projects.vercel.app`**（当前生产，sha `86a77ec10611d52c81929386584c7ccd639a9a96`）。`docs/VERCEL_DATAGATEWAY_DEPLOYMENT.md` §5 的部署命令已同步改为带 `--env`；**以后每次部署都必须带它**，否则上述路径 503。
-- 部署后无令牌访问：`/api/cron/{macro-sync,facts-sync,filing-calendar,reconcile,industry-sync}` → 401，`/api/macro/overview` → 401，`/intel/macro` → 307（登录）。
+- 部署后无令牌访问：`/api/cron/{macro-sync,facts-sync,filing-calendar,reconcile,industry-sync}` → 401，`/api/macro/overview` → 401，`/macro` → 307（登录）。
 
 ### 10.7a 宏观 P3+P4（#111 中继 + #112 WP-S6 进入 main 之后，08:1x UTC）
 
 按 `docs/runbooks/macro-strategy.md` §8 执行到"开关之前"为止。
 - **迁移** `20261115090000_macro_strategy.sql`：sha256 与锁文件相符；生产 `begin…rollback` 演练 `rehearsal_ok`；然后一个事务执行文件 + 历史行（`statements` 存原文，同 10.2 偏差 2）→ applied。§8.1 第 2 条核对：6 张表、全部 RLS、无写授权；SELECT：`macro_strategy_manifests`/`macro_review_results`/`macro_review_current` 三角色，`macro_explanations` authenticated+service_role，`macro_review_attempts`/`macro_explanation_runs` 仅 service_role（与迁移一致）；8 个 RPC 均 svc=true、anon/auth=false；anon 可执行的 `macro_*` 函数仍只有 P1 的 3 个。
-- **部署**：`origin/main` `029909d8c9660b5ec4c3ba861ae58c7a2b4463d9`，`vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=<sha>` → **`stock-monitor-rag88xybd-gilosbornhellos-projects.vercel.app`**（当前生产，osbornalpha.com，15 个 cron，新增 `/api/cron/macro-review` `0 6 3 * *`）。无令牌：`/api/cron/macro-review` 401、`/api/macro/strategy/transmission` 401、`/intel/macro/transmission` 307。带令牌 `macro-review?preview=1` → 404 `strategy_disabled`（开关未开，符合预期）。
+- **部署**：`origin/main` `029909d8c9660b5ec4c3ba861ae58c7a2b4463d9`，`vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=<sha>` → **`stock-monitor-rag88xybd-gilosbornhellos-projects.vercel.app`**（当前生产，osbornalpha.com，15 个 cron，新增 `/api/cron/macro-review` `0 6 3 * *`）。无令牌：`/api/cron/macro-review` 401、`/api/macro/strategy/transmission` 401、`/macro/transmission` 307。带令牌 `macro-review?preview=1` → 404 `strategy_disabled`（开关未开，符合预期）。
 - **§8.1 第 7 条**：带令牌真实运行 `macro-sync` → 批次 `e4178cd6-470e-4ef4-ada5-036e0a7a21af` success，fetched 24565、inserted 3272、duplicates 21293、quarantined/failed 0；US 快照 revision 2（`693b2539-783c-4844-bf65-e2598f23e9a5`），目录版本 `macro-catalog/30bcaa2a33c5`，`macro_series` 41。
 - **§8.2 数据核对**（全部符合）：US 一个 active；`US_FED_TARGET_D` n=3272、2000-01-01..2008-12-15，`UPPER`/`LOWER` 各 6535、2008-12-16..2026-11-06；切换证据 D 2008-12-15 = `1`、UPPER 2008-12-16 = `0.25`、LOWER = `0`；宏观未结隔离 0；`macro.fred` fresh；P3 表 0/0。差异：手册 §2 第 3 条说首轮会存 1982–1999 的 DFEDTAR，实际只存了 2000-01-01 起（采集窗口从 2000 年开始），条数仍满足 > 2000。
 - **未做（阻塞于 owner）**：§8.1 第 3 条 `MACRO_INGEST_SECRET` 未设、第 6 条 CN 快照未发布 → 按手册"遇到第一个不满足即停"，**`MACRO_STRATEGY_ENABLED` 未开**，§8.3–§8.5 未执行；`MACRO_JUDGMENTS_ENABLED` 未设。

@@ -52,9 +52,9 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    return {iss,fb};
   };
   /** One published run (state_rev + 1): the filings and their facts, in spec order. */
-  const publish=async(iss:string,fb:string,specs:Spec[])=>{
-   expect(await h.facts.claimLease(iss,'US',fb,600)).toBe(true);
-   const run=await h.facts.beginRun(iss,'US',fb,1);
+  const publish=async(iss:string,fb:string,specs:Spec[],market:Market='US')=>{
+   expect(await h.facts.claimLease(iss,market,fb,600)).toBe(true);
+   const run=await h.facts.beginRun(iss,market,fb,1);
    const filings=specs.map(s=>filingInsert(iss,s.filing??{}));
    await h.facts.stageFilings(run,filings);
    const facts=specs.map((s,i)=>(s.facts??[]).map(o=>factInsert(iss,filings[i],o)));
@@ -184,6 +184,47 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    await db.replaceDigest(s3.iss,'US',b,await attempt(s3.iss),randomUUID(),1,true,[],coverageInput());
    expect(await sweep(new Date(Date.now()-3600_000))).toEqual([s1.iss,s2.iss].sort());
    expect(await sweep(new Date(Date.now()+3600_000))).toEqual([...[s1.iss,s2.iss].sort(),s3.iss]);
+  });
+
+  it('failed recent sweeps retry exactly at backoff, retain ordering and bounds, and clear on newer success',async()=>{
+   const b=await h.batch();const T=new Date(Date.now()+60_000);
+   const older=new Date(T.getTime()-7*86400_000); // successful sweeps below are recent
+   const recent=await ready();await publish(recent.iss,recent.fb,[{facts:[{}]}]);
+   const healthy=await ready();await publish(healthy.iss,healthy.fb,[{facts:[{}]}]);
+   const normal=await ready();await publish(normal.iss,normal.fb,[{facts:[{}]}]); // never swept
+   const empty=await ready();const cn=await ready('CN');await publish(cn.iss,cn.fb,[{facts:[{}]}],'CN');
+   const success=async(iss:string)=>db.replaceDigest(iss,'US',b,await attempt(iss),randomUUID(),1,true,[],coverageInput());
+   await success(recent.iss);await success(healthy.iss);
+   const failed=await db.beginAttempt(recent.iss,'US',T);
+   expect(await db.markDigestFailed(recent.iss,'US',failed,T)).toBe(true);
+   expect(await db.markDigestFailed(empty.iss,'US',await db.beginAttempt(empty.iss,'US',T),T)).toBe(true);
+   expect(await db.markDigestFailed(cn.iss,'CN',await db.beginAttempt(cn.iss,'CN',T),T)).toBe(true);
+   const mine=new Set([recent.iss,healthy.iss,normal.iss,empty.iss,cn.iss]);
+   const all=(at:Date,limit=100000,market:Market='US')=>db.sweepDue(older,at,limit,market);
+   const selected=async(at:Date)=>(await all(at)).filter(x=>mine.has(x.issuerId));
+   const boundary=new Date(T.getTime()+3600_000);
+   expect((await selected(new Date(boundary.getTime()-1))).map(x=>x.issuerId)).toEqual([normal.iss]);
+   expect(await selected(boundary)).toEqual([
+    {issuerId:normal.iss,market:'US',stateRev:1,digestedRev:0},
+    {issuerId:recent.iss,market:'US',stateRev:1,digestedRev:1},
+   ]);
+   expect((await all(boundary,100000,'CN')).filter(x=>mine.has(x.issuerId))).toEqual([{issuerId:cn.iss,market:'CN',stateRev:1,digestedRev:0}]);
+   const cnOrdered=await all(boundary,100000,'CN');
+   expect(await all(boundary,1,'CN')).toEqual(cnOrdered.slice(0,1)); // market before limit despite US null sweeps
+   const ordered=await all(boundary);
+   expect(await all(boundary,1)).toEqual(ordered.slice(0,1));
+   expect(await all(boundary,0)).toEqual([]);expect(await all(boundary,-1)).toEqual([]);
+   // A second failure restarts backoff at two hours; older reports cannot shorten it.
+   const second=await db.beginAttempt(recent.iss,'US',boundary);
+   expect(await db.markDigestFailed(recent.iss,'US',second,boundary)).toBe(true);
+   expect(await db.markDigestFailed(recent.iss,'US',failed,boundary)).toBe(false);
+   const retry=new Date(boundary.getTime()+2*3600_000);
+   expect((await selected(new Date(retry.getTime()-1))).map(x=>x.issuerId)).toEqual([normal.iss]);
+   expect((await selected(retry)).map(x=>x.issuerId)).toEqual([normal.iss,recent.iss]);
+   // A newer same-revision success clears retry eligibility even without advancing swept_at.
+   await db.replaceDigest(recent.iss,'US',b,await attempt(recent.iss),randomUUID(),1,false,[],coverageInput());
+   expect(await db.markDigestFailed(recent.iss,'US',second,retry)).toBe(false);
+   expect((await selected(retry)).map(x=>x.issuerId)).toEqual([normal.iss]);
   });
 
   it('replaceEvidence verifies rows and replaces the stream; evidenceOf batches by 100 and returns visible facts only',async()=>{

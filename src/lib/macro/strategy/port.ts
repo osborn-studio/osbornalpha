@@ -4,6 +4,7 @@
 // not configured (capability matrix §9.1: enabled + null port → 503). memoryStrategyPort serves the unit tests from a
 // StrategyFixture; its derivePolicyEvents / timeliness reproduce P2 events.ts derivePolicyEvents and P1 freshness.ts
 // releaseTimeliness for tests only — production calls the P1/P2 functions directly.
+// The port exposes service publish revisions for memo identity.
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import type {EventInput,MacroSeriesDef,ObservationRow,PolicyEvent,Region,RulesView,SnapshotRecord,Timeliness} from './contract';
 import {macroRouteDeps} from '../route-helpers';
@@ -12,6 +13,8 @@ import {macroDbStrategyPort} from './wiring';
 
 export interface StrategyReadPort{
  activeSnapshot(region:Region):Promise<SnapshotRecord|null>;
+ /** P1 macro_publish_state of the region (service read): revision bumps on every publish/republish, input_revision on every observation write; the memo key reads both. null when the row is missing. */
+ publishState(region:Region):Promise<{revision:number;input_revision:number}|null>;
  snapshot(snapshotId:string):Promise<SnapshotRecord|null>;
  /** Newest non-failed snapshot with created_at ≤ cutoff; ties on created_at → greatest snapshot_id. Throws Error('truncated') if paging cannot finish. */
  snapshotUpTo(region:Region,cutoff:string):Promise<SnapshotRecord|null>;
@@ -105,6 +108,7 @@ export function memoryStrategyPort(f:StrategyFixture):StrategyReadPort{
  const byId=new Map(f.observations.map(o=>[o.observation_id,o]));
  return {
   async activeSnapshot(region){return f.snapshots.filter(s=>s.region===region&&s.status==='active').sort(newest)[0]??null;},
+  async publishState(region){return f.publishState?.[region]??null;},
   async snapshot(id){return f.snapshots.find(s=>s.snapshot_id===id)??null;},
   async snapshotUpTo(region,cutoff){const c=ms(cutoff);return f.snapshots.filter(s=>s.region===region&&s.status!=='failed'&&ms(s.created_at)<=c).sort(newest)[0]??null;},
   async observationsByIds(ids){return ids.map(id=>byId.get(id)).filter((o):o is ObservationRow=>!!o&&o.status==='ok');},

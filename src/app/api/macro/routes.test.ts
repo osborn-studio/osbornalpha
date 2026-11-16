@@ -56,16 +56,29 @@ describe('auth (spec §2: every route checks the session itself)',()=>{
 });
 
 describe('GET /api/macro/overview',()=>{
- it('returns per-region envelopes with the private cache header and no judgment fields',async()=>{
+ it('returns per-region envelopes with private no-store and no judgment fields',async()=>{
   const res=await overview(req('/overview?region=all'));
   expect(res.status).toBe(200);
-  expect(res.headers.get('cache-control')).toBe('private, max-age=60');
+  expect(res.headers.get('cache-control')).toBe('private, no-store');
   const body=await res.json();
   expect(Object.keys(body.regions).sort()).toEqual(['CN','US']);
   expect(body.regions.US.snapshotId).toBe(snapshotId);
   expect(body.regions.CN.snapshotId).toBeNull();
   expect(typeof body.catalogVersion).toBe('string');
   expect(JSON.stringify(body)).not.toMatch(/"regime"|margin_pp|primary_state/);
+ });
+ it('checks auth again after warming facts, including across accounts',async()=>{
+  expect((await overview(req('/overview?region=US'))).status).toBe(200);
+  const active=vi.spyOn(db,'activeSnapshot');const observations=vi.spyOn(db,'observationsByIds');
+  authGetUser.mockResolvedValue({data:{user:null},error:null});
+  const denied=await overview(req('/overview?region=US'));
+  expect(denied.status).toBe(401);expect(denied.headers.get('cache-control')).toBe('no-store');
+  expect(active).not.toHaveBeenCalled();expect(observations).not.toHaveBeenCalled();
+  authGetUser.mockResolvedValue({data:{user:{id:'u-2'}},error:null});
+  const allowed=await overview(req('/overview?region=US'));
+  expect(allowed.status).toBe(200);expect(active).toHaveBeenCalledTimes(1);
+  expect(observations).not.toHaveBeenCalled();
+  expect(JSON.stringify(await allowed.json())).not.toContain('u-1');
  });
  it('compact=1 and region=US; invalid region / unknown params are 400',async()=>{
   const body=await (await overview(req('/overview?region=US&compact=1'))).json();

@@ -4,8 +4,10 @@
     "description": "AI 投资监控工作台 · 个人股票池每日 AI 监控 · A 股 / 港股 / 美股"
   },
   "nav": {
-    "today": "今日",
+    "macro": "宏观",
     "watchlist": "股票池",
+    "industries": "行业研究（美国 SIC）",
+    "companies": "公司研究",
     "intel": "情报",
     "portfolio": "我的投资",
     "analyst": "分析",

@@ -89,3 +89,22 @@ describe('evaluateCalibration',()=>{
   expect(summarizeCalibration(none,TH)).toMatchObject({population:0,coverage:{evaluated:0,skipped:9},gate:'incomplete'});
  });
 });
+
+describe('calibration evidence contract (synthetic examples)',()=>{
+ it.each(['forecast_id','methodology_version','claim','forecast_sha256','input_snapshot_sha256'] as const)('excludes blank %s from scoring',field=>{
+  const bad=f('bad','1',0,{[field]:' '});
+  const r=evaluateCalibration([f('ok','0.5',1),bad],TH);
+  expect(r.eligible).toBe(1);expect(r.brier).toBe('0.25');
+  expect(r.ineligible[0].reason).toBe('evidence_contract_invalid');
+ });
+ it.each(['forecast_sha256','input_snapshot_sha256'] as const)('excludes malformed %s',field=>{
+  expect(evaluateCalibration([f('bad','1',0,{[field]:'not-a-hash'})],TH).eligible).toBe(0);
+ });
+ it('rejects missing settlement evidence and malformed revision references without throwing',()=>{
+  const missing=f('missing','1',0);delete (missing as Partial<SettledForecast>).settlement;
+  const r=evaluateCalibration([missing,f('blank','1',0,{},{evidence_ref:' '}),f('revision','1',0,{revision_of:''})],TH);
+  expect(r.eligible).toBe(0);expect(r.brier).toBeNull();
+  expect(r.ineligible.map(i=>i.reason)).toEqual(Array(3).fill('evidence_contract_invalid'));
+  expect(summarizeCalibration(r).gate).toBe('incomplete');
+ });
+});

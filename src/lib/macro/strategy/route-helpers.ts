@@ -6,6 +6,7 @@
 // foundation check (spec §6.3 step 2). Combined routes (transmission, review detail) always answer 200 with
 // judgment_status; only /deviations answers 404 judgments_disabled / 503 judgments_unavailable. With the judgment layer
 // off no F4 client is built. Error bodies are {error:{code,message}} and never carry server messages.
+// Successful fact responses carry the memo outcome header.
 import {NextResponse} from 'next/server';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {getAdminSupabase} from '@/lib/supabase/admin';
@@ -14,11 +15,15 @@ import {getServerSupabase} from '@/lib/supabase/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import type {Bilingual,Boundary,DeviationCase,F4Summary,JudgmentStatus,Region,ReviewResult,ReviewStatus} from './contract';
 import {supabaseStrategyDb,type StrategyDb} from './db';
+import {manifestFetch} from './manifest-request';
 import {createF4Client,type F4Client} from './f4-client';
 import {judgmentsEnabled,strategyEnabled} from './flags';
 import {monthCutoff,prevMonth} from './manifest';
 import {strategyPort,type StrategyReadPort} from './port';
-export const READ_HEADERS={'Cache-Control':'private, max-age=300'};
+// Auth and judgments are request-scoped even when the underlying facts are shared.
+export const READ_HEADERS={'Cache-Control':'private, no-store'};
+/** Fact-route response header; only successful responses expose a memo result. */
+export const memoHeaders=(outcome:import('./memo').MemoOutcome)=>({...READ_HEADERS,'X-Macro-Strategy-Memo':outcome});
 export const NO_STORE={'Cache-Control':'private, no-store'};
 // ---- response shapes shared with the UI (spec §8)
 export interface ReviewIndexItem{region:Region;month:string;status:ReviewStatus;generation:number;result_id:string;updated_at:string}
@@ -102,7 +107,7 @@ export async function readGate():Promise<ReadGate>{
 }
 // ---- dependencies
 export function strategyDb(session?:SupabaseClient):StrategyDb{
- return supabaseStrategyDb({admin:getAdminSupabase() as unknown as SupabaseClient,anon:getAnonSupabase() as unknown as SupabaseClient,session});
+ return supabaseStrategyDb({admin:getAdminSupabase(manifestFetch()) as unknown as SupabaseClient,anon:getAnonSupabase() as unknown as SupabaseClient,session});
 }
 export const codeVersionOrNull=():string|null=>resolveCodeVersion({allowGit:false});
 export type JudgmentSection<T>={judgment_status:'disabled'}|{judgment_status:'unavailable'}|{judgment_status:'ok';value:T};

@@ -36,9 +36,9 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
   useEffect(() => subscribeWatchChanged(issuerId, () => setRecheck((n) => n + 1)), [issuerId]);
   useEffect(() => {
     let live = true;
-    isWatching(issuerId).then((w) => { if (live) setWatching(w); }).catch(() => { if (live) setWatching(false); });
+    isWatching(issuerId, asOf).then((w) => { if (live) setWatching(w); }).catch(() => { if (live) setWatching(false); });
     return () => { live = false; };
-  }, [issuerId, recheck]);
+  }, [issuerId, recheck, asOf]);
   useEffect(() => { setWatching(null); }, [issuerId]);   // a new issuer must not reuse the previous issuer's watch state
 
   // 计划第 3 轮审计 R7: a scope change invalidates every in-flight load and clears the previous scope's rows;
@@ -50,7 +50,7 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
   }, [gens, issuerId, ticker, market, asOf, watching]);
 
   const load = useCallback((from: string | null): Promise<void> => {
-    if (watching === null) return Promise.resolve();
+    if (!replay && watching === null) return Promise.resolve();
     return guardedLoad<DisplayEvent>(gens, from, async (c) => {
       if (!replay && watching) {
         const r = await fetchInbox({ issuerId, cursor: c, limit: 50 });

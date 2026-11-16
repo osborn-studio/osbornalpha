@@ -4,7 +4,7 @@ import {classifyDiffs,DEVIATION_CAP,deviationCase,HISTORY_PAGE,listDeviationCase
 import {F4Unavailable,type F4CardLite,type F4Client,type F4JudgmentDetail} from './f4-client';
 
 const o=(series_id:string,period_end:string,vintage_id:string,value=1):FrozenObs=>({series_id,period_end,vintage_id,value});
-const card=(id:string,as_of:string,over:Partial<F4CardLite>={}):F4CardLite=>({judgment_id:id,lifecycle:'settled',calibration:'insufficient',as_of,methodology:{id:'macro_regime',version:'v1'},selected:'overheat',...over});
+const card=(id:string,as_of:string,over:Partial<F4CardLite>={}):F4CardLite=>({judgment_id:id,lifecycle:'settled',calibration:'insufficient',as_of,methodology:{id:'macro_regime',version:'v2'},selected:'overheat',...over});
 const obsInput=(x:FrozenObs)=>({kind:'macro_observation',ref:{series_id:x.series_id,period_end:x.period_end,vintage_id:x.vintage_id},snapshot:{...x,unit:'pct',available_at:'2026-10-01T00:00:00Z'}});
 function detail(id:string,reg:FrozenObs[],settled:FrozenObs[]|null,over:Partial<F4JudgmentDetail['settlements'][number]>={}):F4JudgmentDetail{
  return {judgment_id:id,as_of:'2026-10-15',selected:'overheat',inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'s'},snapshot:{snapshot_id:'s'}},...reg.map(obsInput)],
@@ -45,8 +45,8 @@ describe('deviationCase',()=>{
  it('skips hits, other methods / versions, unsettled cards',()=>{
   const d=detail('j1',[],[]);
   expect(deviationCase('US',card('j1','x'),{...d,settlements:[{...d.settlements[1],outcome:'hit'}]})).toBeNull();
-  expect(deviationCase('US',card('j1','x',{methodology:{id:'macro_regime',version:'v2'}}),d)).toBeNull();
-  expect(deviationCase('US',card('j1','x',{methodology:{id:'other',version:'v1'}}),d)).toBeNull();
+  expect(deviationCase('US',card('j1','x',{methodology:{id:'macro_regime',version:'v1'}}),d)).toBeNull();
+  expect(deviationCase('US',card('j1','x',{methodology:{id:'other',version:'v2'}}),d)).toBeNull();
   expect(deviationCase('US',card('j1','x',{lifecycle:'open'}),d)).toBeNull();
  });
  it('realized may be an object with selected / primary_state; numeric strings in values are accepted',()=>{

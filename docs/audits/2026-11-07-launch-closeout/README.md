@@ -1,0 +1,159 @@
+# 美林时钟与宏观缓存发布记录（2026-11-07）
+
+## 当前发布范围（wave174 / a43f2499）
+
+截至 2026-11-08 14:10:49（Asia/Shanghai），精确 `a43f2499a85df0b652d996579ac225a8710a2a84` 已部署到 READY `dpl_4NcR75SHZizFxKBjRQ8iHDtgptJ7`，两个生产域名均核对到同一部署；精确 SHA 的 Application／fixture CI 成功，两域各 9 项匿名检查共 18 项通过。#162–#174 均已合并且为该 SHA 的祖先，包括 #169 清单／锁测试、#170 transport、#172 读取完整性／限流／drain、#173 文档和 #174 发布判断 hook。当前回滚保留 `2d3c5ad5` 的 READY 部署。#154 与 #170 迁移均已应用并验证，不是待执行任务。
+
+详见 [当前 closeout](../2026-11-08-wave169-closeout.md) 与 [脱敏 wave174 ledger](wave174-release-evidence.json)。一次 6.3MB 存量 manifest POST 在 13.086 秒返回 200，request ID 与 gateway 日志匹配；`origin_time=8006` 不是 SQL duration。历史独立 `57014` 仍未闭环。父会话已完成存量 US/CN 恢复：inserted2／failed0，两条存储判断均 nonabstained、retrospective=false 且精确绑定 active snapshot；14:17（Asia/Shanghai）已回读。公开缓存初次仍选旧判断（browser max-age=300／shared s-maxage=600）；正常过期／重验证后，父会话已见当前 CN Stagflation／US Overheat、CN desktop 六行与 US 375×601 mobile 四行依据，以及真实 NBS PPI 来源抽屉，Escape 关闭／焦点返回通过。仅覆盖这些交互路径，非完整 UI／登录矩阵；合并 hook 本身不自动回填。**整体生产验收仍 DEGRADED / NOT GRANTED**，不声称全局通过、p95、跨实例／TTL 或完整登录矩阵完成。
+
+一个原始文件已于 2026-11-08 12:26:03（Asia/Shanghai；原回执 04:26:03 UTC）下载验证：HTTP 200，6,118 bytes，SHA-256 `24c03d8062d14e2574c81cfd054b3e3f1d661e05714a564907685dfcd1d0f8e8`，与展示值相符；只覆盖该文件。下方“原始下载未验证”、PR 未合并／迁移待检查等措辞均为保留的历史快照；旧浏览器证据不验收当前部署。严格 Wind 历史 0/2 成功仍未解决；industry/company/F6/foreign 原有前置门槛不变。
+
+## 历史生产部署与部分验收（a4fafbab）
+
+2026-11-08 00:44:03 UTC 发布回执确认 `a4fafbab0190604f282f3c101a7312fe4b1db415` 已部署到生产。Vercel [`dpl_FNzodKrBGDGKatGHpe1hjuPufDdJ`](https://vercel.com/gilosbornhellos-projects/stock-monitor/FNzodKrBGDGKatGHpe1hjuPufDdJ) 为 READY，别名含 `osbornalpha.com`／`www.osbornalpha.com`；HTTP 核验使用后者。**部署成立；公开宏观检查通过；登录态验收仅部分通过；整体生产验收 DEGRADED / NOT GRANTED。** 脱敏生产、父会话真实 CUA 和 GitHub 状态快照见 [wave162-release-evidence.json](wave162-release-evidence.json)。以下旧候选／旧部署记录保留其历史时间边界。
+
+精确 SHA 的 [Application checks 42429507803](https://github.com/osborn-studio/osbornalpha/actions/runs/42429507803) 与 [Macro source fixture checks 42429507792](https://github.com/osborn-studio/osbornalpha/actions/runs/42429507792) 均成功，文档编辑者已实时核对 SHA／结论。release 报告记载 772 test files、8,747 tests passed、7 skipped，含 lint、typecheck、真实 DB、迁移演练、runtime-role/TLS、build/audit；这不是生产迁移已应用或文档编辑者重跑测试的证据。00:41:40 UTC 的 9 项公开／匿名 HTTP 检查通过：方法与 US/CN 判断响应精确匹配 SHA，v2 active/publishable、公式 hash `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba` 不变；US overheat、CN stagflation，均 calibration=insufficient。三类策略端点各两次匿名请求均 401/unauthorized、no-store、无 Set-Cookie、仅 error body。注册行 code_version 仍是注册来源，不能改写成部署 SHA。
+
+父会话于 00:44:59 UTC 留存 native Chrome 已登录真实 UI／same-origin GET 证据：US overheat 19、60% coverage、缺 growth 轴，CPI 3.72／weight 15／contribution 9；CN stagflation/recession 21 并列、60% coverage，PPI 5／15／9、PMI 49.3／15／6；CN PPI 抽屉可见 `index_minus_100@1` 与 NBS parent locator `/data/1/values/0/value`。Transmission 从 `/intel/macro/transmission` 跳转 `/macro/transmission`，观测值与政策事件表已渲染；US/CN transmission 和 policy-response 三个成功 GET 样本分别 1,466／935／1,118 ms。后续 history 跳转 `/macro/history` 后成功渲染 event_day 全 9 episode 表，manifest `1aec335b-5920-4659-8715-a3be51e08fcc`。
+
+**此前至少 3 次 `cycle-table?boundary=event_day` 返回 500／`strategy_failed`，首次观测 16,017 ms，仍未闭环。** 后续成功说明并非持续全量不可用，不证明根因或修复；独立 cycle500 CLI 已有调查 REPORT，原始 500 根因仍 UNKNOWN；draft [PR #166](https://github.com/osborn-studio/osbornalpha/pull/166) 仅补充固定阶段标签诊断，不是该生产故障修复；仍未合并／部署，未取得关闭证据或声称远端 CI 完成。浏览器失败原始快照来自 `/tmp/osstack/osbornalpha-wave162/cycle500/browser-evidence.json`，已收入上述机器记录。登录／退出／账号切换、完整生产 mobile matrix、跨实例／TTL／受控冷启动及 p95 均未验收；少量成功请求与匿名 401 耗时不是生产 SLO。原始下载 hash **未验证**：先前读取的是 1,476-byte JSON metadata，未下载 signed original，metadata hash 比较无效，既不能证明原始字节一致，也不能据此宣称证据损坏。
+
+单次生产 quote probe 虽 HTTP 200 且返回成功行情，`datagateway-wind` 2 次尝试均失败，2 个 symbol 最终均选 Eastmoney。严格 Wind source 要求 **FAILED**，fallback 成功不能称为 Wind 健康。无部署前 gateway 基线，不能归因本次部署；未重复 probe。前一 READY 部署 `dpl_66sLJmdeMoowiUjBVy1Pag49uXgK` 保留为 rollback target，本轮未回滚。
+
+**#154 生产迁移阻塞已解除。** 父会话于 2026-11-08 00:50:37 UTC 使用既有 GitHub OAuth 恢复 Supabase Dashboard，经 native Chrome SQL Editor 检查 main PRODUCTION：全部 65 个预期迁移版本已核对，执行前仅缺 `20261120093000`。将合并的原样 `20261120093000_industry_exact_pair_tolerance.sql` 与 migration history 登记在同一 BEGIN/COMMIT 中原子应用（lock_timeout 5s、statement_timeout 30s）。权威回读 version/name 正确，source SHA-256 `c29ecd95f18990120738909cfcab16534e9bfcdccce64a8d3d25e20225919bfc` 与 git 文件一致；exactTolerance=true、SECURITY DEFINER=true、search_path=`pg_catalog, public`，anon/authenticated 无 EXECUTE、service_role 有 EXECUTE。父会话提供生产操作／回读证据，文档编辑者另验本地 SQL hash；见机器记录 migrationProductionCua／migrationAssessment。原 00:44:03 回执及历史迁移 assessment 保留为解决前快照，不代表当前状态。未重写存量 pairs、未启用 industry；official/valuation 仍 `deferred_i3`，权利、公式及行业验收门槛未解除。#157 无迁移；本轮未改 flags／licences、启用 I-3／calibration 或接受人工 gold。
+
+实时 PR 核对时间与逐项 CI 见机器记录：#159、#160、#161 已合并且为部署 SHA 的祖先；#162 anchor race、#163 mobile clipping、#164 predecessor filings、#165 HK worker lease test isolation 均 OPEN、未合并、未部署。刷新快照中 #162/#164 的 Application checks 已成功，#163/#165 仍运行，四者 provider-date-ingress／source-fixtures 均已成功；逐项时间见 followupPrCheckedAt，运行中的检查不算完成。具体边界、剩余 owner 与验收动作见 [剩余清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。release MiniMax-M2.5 最终审计为实际 `end_turn`，支持有界宏观检查与整体降级结论；本次文档事实审计另见 [mmx-wave162-docs-audit.md](mmx-wave162-docs-audit.md)，均不替代生产验收。
+
+## 历史候选与当时发布阻塞（3f14ec4a）
+
+#154–#158 均已合并，代码基线为 `3f14ec4a075f8bc200681929e887ceff92892d5e`。release158 的 2026-11-07 16:41:22 UTC 回执为 `deployed=false`、`pass=false`、`waiting_ci_and_migration_access`，不是新部署成功。精确 Application CI [42392239511](https://github.com/osborn-studio/osbornalpha/actions/runs/42392239511) 当时仍在运行；fixture CI [42392239520](https://github.com/osborn-studio/osbornalpha/actions/runs/42392239520) 成功。
+
+生产发布前还需权威检查 #154 所含的 `20261120093000_industry_exact_pair_tolerance.sql`。release 会话缺 Supabase management access token 和生产数据库连接凭据，不能检查迁移状态，故是否仍需应用替换函数未知；已有服务角色 HTTP 访问不等于具备迁移能力。#157 无迁移。本轮未因此改变 flags、licences 或启用 I-3。
+
+16:42:04 UTC 的 9 项只读公开／匿名 HTTP 复查通过，但三份公开响应的 `codeVersion` 仍为旧生产 `ab11d6e3`；这是旧部署仍可用的证据，不能验收 `3f14ec4a`。v2 active/publishable、公式 hash 不变；US overheat、CN stagflation，均 `calibration=insufficient`。三类策略端点各两次匿名请求均 401/no-store。原始脱敏回执、旧生产复查和 #154–158 合并祖先核对见 [wave158-release-evidence.json](wave158-release-evidence.json)。
+
+本轮没有新增当前 SHA 登录态或生产性能证据。`98e9a819` 的中美时钟与来源抽屉、`dc47ba2e` 的策略耗时仍是下方各自历史结果。#155 的 4.98–11.05× 是本地合成 CPU benchmark，不是完整请求或生产 p95。逐 PR 边界与未闭环的 owner／实现／验收任务见 [剩余清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
+
+### 本轮独立操作检查（不等于候选部署验收）
+
+公司 operations 会话以 `3f14ec4a` 的 CLI 对旧生产返回的三个真实 AAPL fact 执行 replay，均 exit 0；稳定下载与 SEC 直接下载的 3,859,564 字节一致，SHA-256 为 `f085735b4d08fb116ade18d24247ffabe11df8eb52eae6556b165831f15ef1ad`。17 个修改输入拒绝、3 个用法／读取错误及 65 个已有测试通过。修改输入是对抗测试，不是真实财务 gold。该检查只证明所给字节、DTO 与当前解析／映射一致，不认证保存的元数据、历史 asOf 或人工真值，也不是新部署 HTTP 验收。
+
+同会话对 CNInfo 600570 2024 年报原始 PDF 完成 222 页文本／表格提取：物理第 72 页合并利润表存在值相同但概念不同的收入行，第 74 页为母公司表。未取得已存 Tushare fact 与具体 PDF 单元格的审核绑定，`emptyPdfLocatorSource` 仍有效。后续需独立 R1/R2 gold，以及事实、发行人、filing／source、PDF hash、提取版本、当前 raw/value 的持久化、失效和冲突弃权契约；提取坐标不等于真实 locator 已闭环。
+
+行业 readiness 会话在当前基线复查后未找到可绕过 H／PB 决策的已批准实现切片，未重复 #147/#154；456 个选定非 DB 测试通过，未跑 PostgreSQL 集成、生产数据或许可验收。研究所得公开 provider 文档不构成实际账号 entitlement 或合同授权；owner 需选择现有供应链书面权限、另行设计的授权替代产品，或继续禁用。逐项方法、证据及发布条件仍按 [剩余清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks) 执行。公司和行业最终 MiniMax-M2.5 审计均已返回实际 `end_turn`，分别支持该操作结论／report-only 范围无阻塞发现；不代表模块或发布批准。本节来自独立任务报告，文档编辑者未重跑其命令。
+
+以下为 wave158 当时的交付快照；#159/#160 后续已合并并包含在当前 `a4fafbab` 部署中。
+
+F6 operations 发现 runner 的默认 CLI 路径以类型 cast 接受 JSON，绕过验证后的 `loadLock`，会对部分重复路径／未知字段／其他损坏项产出通过报告。修复及真实 CLI 回归已提交 [PR #159](https://github.com/osborn-studio/osbornalpha/pull/159)，仍未合并，不在本轮候选中。该会话报告 799 个非 DB F6 测试通过，实际进程并发及版本／拒绝生命周期通过，MiniMax-M2.5 最终 `end_turn` 为 PASS。全部新增生命周期数据是合成测试，未接受真实人工 gold，也未启用 calibration。
+
+宏观会话补充了 fixture-backed GET 路径测量，经过真实适配器／builder／hash／持久化确认／Next cache 接线与完整响应体读取；缓存清空 39 次 HTTP、暖路径 4 次，三个 boundary 的完整 manifest／响应身份保持一致。它使用模拟 HTTP／DB／Next 后端及显式 fixture session，缓存清空是同进程 reset，不是受控生产冷启动；不测真实 PostgreSQL／RLS／登录、TLS、跨实例缓存或生产 p95。MiniMax-M2.5 复审返回实际 `end_turn`、无阻塞发现；benchmark 已提交 [PR #160](https://github.com/osborn-studio/osbornalpha/pull/160)，仍未合并，最终 focused tests 为 111 通过。该候选中无此新增 benchmark 交付。
+
+## 上一生产部署与 HTTP 核验（ab11d6e3）
+
+release-main 独立会话于 2026-11-07 16:24:28 UTC 留存生产核验回执。代码提交为 `ab11d6e3b41a603169fda19df2db2d69fdad70c9`；精确 [Application checks 42390150149](https://github.com/osborn-studio/osbornalpha/actions/runs/42390150149) 与 [Macro source fixture checks 42390150168](https://github.com/osborn-studio/osbornalpha/actions/runs/42390150168) 均成功。生产部署 `dpl_66sLJmdeMoowiUjBVy1Pag49uXgK` 为 READY，部署地址 `https://stock-monitor-elfq9cex3-gilosbornhellos-projects.vercel.app`，生产别名检查指向同一部署；部署命令退出 0。该提交包含已合并的 #142–#153，包括 #146 鉴权切换隔离、#147 禁用态 I-3 准备、#148 F6 证据门、#150 manifest 回读优化及相应回归／CI。逐 PR 交付与剩余任务见 [任务清单](../../superpowers/plans/2026-11-07-cross-module-integration.md#remaining-release-tasks)。
+
+脱敏机器回执与 PR 合并祖先核对见 [main-release-evidence.json](main-release-evidence.json)。release-main 对 `https://www.osbornalpha.com` 发起无 Cookie／Bearer 的只读请求：
+
+- `/api/methodologies` 与 US/CN 公开判断均 200，三者响应 `codeVersion` 精确等于上述 SHA。
+- `macro_regime@v2` 为 active/publishable，公式 hash 仍为 `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`。方法注册行的旧 `registrationCodeVersion` 是注册来源，不是本次运行代码版本。
+- US 为 overheat、CN 为 stagflation；两者仍 `calibration=insufficient`，不是已校准概率。
+- transmission、cycle-table、policy-response 各重复两次，共 6 个匿名请求均为 401／unauthorized、`Cache-Control: no-store`。HTTP 核验退出 0，9 项检查全部通过。
+
+**本次尚无新增父会话登录态浏览器证据。** 下方 `98e9a819` 的中美时钟／量化依据／真实来源抽屉记录仅属于该旧部署，不能作为 `ab11d6e3` 的浏览器验收。#146/#150 已部署，但未取得新版本登录态策略业务成功响应、登录／退出／账号切换、完整页面、原始下载或性能样本；匿名 401 耗时不能说明业务延迟。`dc47ba2e` 的 cycle 首次 16.114 秒仍是旧版本观察，不是新版本基准或回归结论；跨实例命中、受控冷启动与 p95/SLA 均未验证。
+
+本次 release-main 没有更改 flags／licences，也未运行 cron；没有新的 settle apply 或校准作业验证。部署不会解除 I-3 的 `deferred_i3`、公司 CN PDF／issuer 方法门槛或 F6 禁用评测及人工 gold／许可／概率方法前置条件。后续浏览器和性能验收由父会话负责，owner 决策与剩余实现按任务清单逐项闭环。
+
+## 上一阶段生产发布与中美核心流程（98e9a819）
+
+2026-11-07 23:38:41（北京时间）生产检查：提交 `98e9a819d8f8ccc73de8f69df9feac09690014f3`，精确 [CI 42386242631](https://github.com/osborn-studio/osbornalpha/actions/runs/42386242631) 成功；部署 `dpl_BddX8KCD6DnK3a6KrVjtsaVEbikV` READY，绑定 `osbornalpha.com`。不可变部署地址为 `https://stock-monitor-5ebaim1ps-gilosbornhellos-projects.vercel.app`。策略与判断开关保持启用。该提交包含 #142 新 widget、#144 集成回归、#145 公司证据门以及 #148 评测准入修复；#148 的 merge commit `7adb5429` 已经祖先关系检查确认包含。不要把后来 main 合并的 #146/#151 或未发布的 #150 算作本次生产内容。#148 不解除禁用评测的许可证、人工 gold 或概率方法前置条件。
+
+公开方法与中美判断卡均为 200，响应 codeVersion 精确匹配上述 SHA；`macro_regime@v2` 为 active/publishable，公式 hash 无漂移。US 为 overheat、CN 为 stagflation，仍为未校准判断。匿名 transmission 返回 401/no-store，settle preview 为 200/ok、errors=[]；本次是 idle preview，不是新的真实 apply。原始脱敏回执见 [widget-release-evidence.json](widget-release-evidence.json)。
+
+原生 Chrome 既有登录会话已刷新真实 `/macro` 并完成中美核心流程，记录见 [widget-production-cua.json](widget-production-cua.json)：
+
+- 新版全宽四阶段时钟及本地导航实际可见。US 当前过热、覆盖率 60% 及缺增长轴限制可见；展开过热量化依据，CPI 3.72%、2026-09-30、规则 `3% < inflation <= 4%`、权重 15、贡献 9 一致。
+- US 点击来源进入真实抽屉，显示 BLS 经 FRED、`yoy_from_index@1` 及两个可读 `US_CPI_INDEX` 上游输入，CSV 行 322/310、列 2 与同一来源 SHA 可见。
+- 切换 CN 时先清除 US 数据再绑定 CN。当前滞胀与衰退 21/21 并列、覆盖率 60% 明示；PPI 5%、权重 15、贡献 9，PMI 49.3、权重 15、贡献 6，总分 21。
+- CN PPI 来源抽屉显示 NBS `data.stats.gov.cn`、`index_minus_100@1`、可读 `CN_PPI_INDEX` 输入与 JSON pointer `/data/1/values/0/value`。
+
+这是 agent 的生产功能与界面核验，不是用户审美认可。未下载或重新计算原始证据字节；未完整重跑生产移动端、控制台、退出登录、账号切换、中文及浅色主题。下面 `dc47ba2e` 的 18 个缓存样本仍是旧版本历史样本，不是新部署性能基准；cycle 首次观察 16.114 秒的风险尚未用本次生产重测解除，#150 延迟优化没有随本次部署发布。
+
+## 后续发布跟踪（#137–#142）
+
+#137–#141 已合并并部署，精确提交为 `dc47ba2eb0768971f7362750bf504a90ceb68026`；[该提交 CI 42383255509](https://github.com/osborn-studio/osbornalpha/actions/runs/42383255509) 已通过。其中 #138 修复过期共享缓存的重复构建，并让认证策略请求绕过浏览器 HTTP 缓存；#137 是 F6 数据有效性与诊断修复，#140 是公司回放不再读实时收件箱，#141 是行业离线对账诊断与 I-3 决策计划。后三者不是对应整个模块完成，也没有启用 F6 禁用评测、实施 I-3 估值流水线或新增许可证／判断方法。
+
+2026-11-07 22:59:58（北京时间）发布检查：Vercel `dpl_8D8nv5DAfZ6KEFz4yy1sBWnbsnq2`，`https://stock-monitor-osicj0o5j-gilosbornhellos-projects.vercel.app`，READY 并绑定 `osbornalpha.com`。宏观策略与判断 flags 保持开启。公开方法／中美判断卡返回 200，响应 codeVersion 为 `dc47ba2e`，v2 公式 hash 未变；匿名 transmission、cycle、policy 及重复 transmission 均为 401、`Cache-Control: no-store`；settle preview 为 200、`errors=[]`。脱敏证据见 [cache-release-evidence.json](cache-release-evidence.json)。
+
+随后在原生 Chrome 已登录会话中，使用同源顺序 GET、`cache: 'no-store'` 并读取完整响应体，完成 6 个端点各 3 轮、共 18 个真实生产样本：**全部 200，全部 `Cache-Control: private, no-store`**。策略首轮为 process memo `miss`，后两轮为 `hit`；overview 不返回该 header。脱敏原始记录见 [cache-authenticated-cua.json](cache-authenticated-cua.json)。
+
+| 端点 | 首次观察（ms） | 第 2 轮（ms） | 第 3 轮（ms） |
+|---|---:|---:|---:|
+| overview US | 861 | 1,691 | 1,000 |
+| overview CN | 1,033 | 1,265 | 857 |
+| transmission US | 2,618 | 1,573 | 849 |
+| transmission CN | 1,822 | 979 | 1,140 |
+| policy-response window=3 | 2,691 | 1,304 | 1,209 |
+| cycle-table event_day | **16,114** | 1,167 | 663 |
+
+这证明该已登录会话的成功响应 no-store 和进程缓存复用路径，不证明跨实例持久缓存命中、p95/SLA、退出登录／账号切换或完整页面首屏性能。首轮是“首次观察”，不是受控冷启动；cycle 的首次 miss 16.114 秒仍是明确的冷路径延迟问题，不能因重复请求变快而宣称已解决。不得用之前匿名 401 的耗时或本地构建耗时替代这组业务接口样本。
+
+历史检查时，紧凑 widget 视觉重做另在 [当时的 draft PR #142](https://github.com/osborn-studio/osbornalpha/pull/142)，当前提交 `fb692b4c` 后还有未提交修正。忠实样式的本地真实 `MacroWorkbench`（端口 3121）已复核桌面表格不再裁切、来源抽屉回调绑定正确；这是本地组件接线证据，不是生产来源验证。独立键盘复核仍发现窄屏 Tab 到“方法与来源”时焦点按钮越出 viewport，修复与最终检查未完成，PR 保持 draft。该 widget 不在 `dc47ba2e` 中，不能随缓存发布一起宣布上线。下面 `e0b82b25` 的记录保留为上一阶段的实际生产证据。
+
+当前更新：#142 已于 2026-11-07 15:24:03 UTC 合并为 `279b0e32ec9b5882e494285bdccf80f53fe589ec`，包含窄屏键盘焦点修正；上述 draft／未修复描述是历史状态。该合并不等于部署或中美登录态生产验收完成。
+
+### 并行后续工作
+
+以下为此前独立 CLI 会话的工作分工快照，均明确使用 `gpt-6.1-sol`；mmx 用于独立审计／验证建议。表内保留当时的进行中工作分工，不是当前完成或发布声明。各会话的新发现须经复现、修复测试、PR 和部署验证才能更新状态。
+
+| 会话 | 当时范围 | 不能由此推定 |
+|---|---|---|
+| cache-regression | 过期、并发与缓存失效回归审查 | 生产 p95 或跨实例命中已达标 |
+| macro-integration-audit | 宏观判断／快照／视图集成审查 | 未复验页面已通过 |
+| industry-valuation-next | I-3 下一步与数值／口径缺口 | 已实现估值流水线或取得授权 |
+| f6-evaluation-next | gold 准入与校准证据门审查 | 禁用评测可开启、已有概率方法 |
+| company-readiness-next | 公司证据门、回放及剩余接线 | CN 定位、issuer 方法或人工黄金集已完成 |
+| widget-correction | 裁切／来源回调本地复核通过，继续修窄屏键盘焦点可见性 | draft PR 已获视觉接受或已部署 |
+
+## 上一阶段发布范围（e0b82b25）
+
+本次目标为 `/macro` 登录态可见的四象限投资时钟，以及重复打开、刷新和策略读取的缓存优化。仅事实指标页面可用不代表美林时钟验收完成。
+
+- #133 修复 JSONB containment 查询编码，避免真实判断补登记返回 500。
+- #134 修复 `/manifest.json` 被认证中间件重定向的问题。
+- #135 增加真正四象限展示、当前快照匹配、输入覆盖率／缺轴／并列说明，以及同页 canonical 导航。
+- #136 加入跨实例纯事实缓存、同查询刷新保留内容，并减少重复读取。
+- 合并后待验收提交：`e0b82b25d3f63cc45ac808aadc0de63541504e32`；该精确提交的 [完整 CI 42380190615](https://github.com/osborn-studio/osbornalpha/actions/runs/42380190615) 已通过。
+
+## 生产部署与真实作业
+
+2026-11-07 22:24（北京时间）已部署上述精确提交。Vercel `dpl_EUnPvGFah2xHt3zJE58KhcQtPRGb`，部署地址 `https://stock-monitor-mpjyhdjo1-gilosbornhellos-projects.vercel.app`，READY 并绑定 `osbornalpha.com`。`MACRO_STRATEGY_ENABLED` 保持启用，`MACRO_JUDGMENTS_ENABLED=1` 已随部署生效。
+
+线上 judgments settle preview、真实 apply 与 calibrate preview 均 HTTP 200、`ok`；真实 apply 为 `success`、`errors=[]`、`compensation=done`。这是线上真实作业验证，不是只跑 preview。脱敏回执见 [production-crons.json](production-crons.json)。登录态界面与缓存测量另行记录，不以部署成功替代浏览器验收。
+
+## 上一阶段登录态验收（e0b82b25）
+
+功能部署成功，**整体视觉与性能验收尚未完成**。用户明确不接受当前视觉设计，后续将按 ChaosAI 参考重新设计；不能把本轮 US 功能检查称为用户视觉目标完成。
+
+已验证：正式部署 US 登录态显示展开的四象限、过热分类、60% 输入覆盖率（明确非概率）、增长轴缺失、对应快照及未校准说明；展开依据可见真实 DFF／DGS10／CPI／PPI 观测、规则与权重。公开中美卡片与方法哈希、部署版本一致。`manifest.json` 为有效 JSON/200，匿名 overview 返回 401。
+
+该阶段未完成：正式部署 CN 视觉／并列展示、最终截图、控制台无错误、首次进入／刷新／离开返回计时和 API 测量。后续 `dc47ba2e` 的 18 个 API 样本已在本记录上方单独列出，不能倒填为此旧版本的结果。跨账号、生产 TTL 边界／版本变更实验仍未执行；对应的确定性测试和设计审查不等于生产实测。该阶段完整分项见 [production-acceptance.md](production-acceptance.md)。
+
+## 已确认的注册与数据依据
+
+`macro_regime@v2` 已注册且 `publishable=true`；生产与合并代码公式哈希一致：`dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`。本次 I/O／缓存／UI 改动不改方法版本或历史判断。
+
+此前 `upstream_version_mismatch` 来自旧 superseded 快照，属于正确弃权，不是当前快照缺陷。续跑补登记后，4 个快照扫描完成，最后回执 `compensation=done`、`errors=[]`。当前中美快照有真实 v2 判断：US `overheat`，CN `stagflation`；均为 `open`、`retrospective=false`、`as_of=2026-11-07`，未校准。
+
+两地输入覆盖率均为 60%，不是分类概率。US 缺增长轴，CN 滞胀与衰退并列、margin=0。界面必须呈现这些限制；不绘制伪精确 XY 点，不把未校准分类称为概率。
+
+## 缓存边界与测量口径
+
+纯事实使用版本化 Next Data Cache，300 秒硬过期；key 包含快照、目录、部署 SHA 和输入／发布修订。每次请求在缓存外检查登录、功能开关、当前版本。判断结果和 collection 新鲜度不共享缓存，未知版本不复用。浏览器 `no-store` 只绕过 HTTP 缓存，不会绕过服务端事实缓存。
+
+合并前只读测量记录在 [性能报告](../2026-11-07-macro-performance/README.md)。US/CN overview 暖路径约 543/552ms，是数据库读取样本，不是完整浏览器首屏或 p95。周期表冷扫描仍存在成本；必须记录上线后的首轮观察值和重复样本，不能将一次首轮样本称为受控冷启动，也不能把进程 memo header 当作跨实例命中证明。
+
+## 历史与后续
+
+[首次事实层发布与回滚](initial-facts-only-release.md) 保留先前故障、临时关闭判断开关及当时写权限阻塞的历史；这些不是本次最终状态。首次登录记录见 [acceptance.md](acceptance.md)。
+
+上一阶段后续清单（当前部署状态以上方 `ab11d6e3` 章节为准）：补齐生产移动端、中文／浅色主题、控制台、退出登录／账号切换与原始文件下载验证，并由用户评价视觉目标；继续完成 cycle 首次 miss 优化的审批、部署及新浏览器样本。未达性能预算或未验证的跨实例条件单独列为剩余事项，不抹去本次中美核心流程成功的发布证据。

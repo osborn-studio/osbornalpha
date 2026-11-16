@@ -3,7 +3,7 @@
 // Triggers = rows of the frozen P1 rules projection with support[regime] > 0, ordered by support desc then rule_id asc;
 // support is a rule parameter, rendered as "规则支持度 0.x", never as a percentage. Cards render only static text and rule
 // parameters — no F4 field, distribution, margin or hit rate. selectF4Mark marks a playbook only when the F4 card is
-// macro_regime@v1, open or settled, and its macro_snapshot input is the snapshot the transmission manifest shows; a card on
+// macro_regime@v2, open or settled, and its macro_snapshot input is the snapshot the transmission manifest shows; a card on
 // another snapshot yields snapshot_match:false (no highlight, "F4 判定对应较早快照 <as_of>"). Nothing here classifies or
 // scores: the regime on a mark is F4's own selected class.
 import type {Bilingual,F4Mark,F4Summary,PlaybookView,Region,Regime,RulesView,StrategyManifest} from './contract';
@@ -29,7 +29,7 @@ const methodHref=(id:string,version:string)=>`/intel/methods/${encodeURIComponen
 export function selectF4Mark(a:{card:F4CardLite|null;detail:F4JudgmentDetail|null;snapshotId:string|null}):{mark:F4Mark;summary:F4Summary}|null{
  const c=a.card;
  if(!c)return null;
- if(c.methodology.id!=='macro_regime'||c.methodology.version!=='v1')return null;
+ if(c.methodology.id!=='macro_regime'||c.methodology.version!=='v2')return null;
  if(!MARKABLE_LIFECYCLES.has(c.lifecycle))return null;
  const match=a.snapshotId!==null&&a.detail!==null&&a.detail.judgment_id===c.judgment_id
   &&a.detail.inputs.some(i=>i.kind==='macro_snapshot'&&i.ref.snapshot_id===a.snapshotId);

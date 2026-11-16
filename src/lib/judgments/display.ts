@@ -75,7 +75,7 @@ function summaryOf(c:CalibrationRow,kind:Kind):Summary{
  const t=(m.temporal_split??{}) as Record<string,unknown>;
  const h=m.hit_rate as {rate?:unknown;low?:unknown;high?:unknown}|null|undefined;
  const s:Summary={n_independent:c.n_independent,n_total:numOr(m.n_total)??c.n_settled,threshold_n:c.threshold_n,brier:numOr(m.brier),brier_skill:numOr(m.brier_skill),
-  ece_raw_holdout:numOr(t.ece_raw_holdout),valid_until:c.valid_until,
+  ece_raw_holdout:numOr(t.ece_raw_holdout),valid_until:c.valid_until,computed_at:c.computed_at,
   hit_rate:h&&numOr(h.rate)!==null?{rate:numOr(h.rate)!,low:numOr(h.low),high:numOr(h.high)}:null,
   href:`/intel/methods/${c.methodology_id}/${c.methodology_version}#calibration`};
  if(kind==='categorical')s.accuracy=numOr(m.accuracy);

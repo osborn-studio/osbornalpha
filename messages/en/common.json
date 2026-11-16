@@ -4,8 +4,10 @@
     "description": "AI investment monitoring workbench · Daily AI monitoring for your personal watchlist · A-shares / HK / US"
   },
   "nav": {
-    "today": "Today",
+    "macro": "Macro",
     "watchlist": "Watchlist",
+    "industries": "Industry research (US SIC)",
+    "companies": "Company research",
     "intel": "Intel",
     "portfolio": "Portfolio",
     "analyst": "Analyst",

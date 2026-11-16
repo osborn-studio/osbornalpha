@@ -44,6 +44,10 @@ export function deriveIssuerEvents(input:DeriveEventsInput):EventInput[]{
   for(const r of g){if(days.length>0&&days[days.length-1].available_date===r.available_date)days[days.length-1]=r;else days.push(r);}
   for(let i=1;i<days.length;i++){
    const from=days[i-1],to=days[i];
+   // The fact sequence key omits statement/duration. A change to either is not a
+   // comparable revision (SQL enforces both); withhold this edge without bridging
+   // across the incompatible disclosure or changing stable event identities.
+   if(from.statement!==to.statement||from.duration!==to.duration)continue;
    if(decimalEquals(from.value_text,to.value_text))continue;
    const rel=decimalRelChange(from.value_text,to.value_text);
    out.push({kind:'fact_revised',natural_key:`${k}:${to.available_date}`,occurred_on:to.available_date,period_end:to.period_end,concept:to.concept,filing_id:to.filing_id,

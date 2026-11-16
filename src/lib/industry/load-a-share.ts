@@ -39,12 +39,14 @@ import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../e
 import {resolveOrgId} from '../research/ingest/collectors/cninfo';
 import type {OrgLookup} from '../research/ingest/collectors/cninfo';
 import type {IndustryDeps} from './types';
+import {validateAShareTickers} from './a-share-selection';
 import {persistDelistings,scanDelistings} from './delistings';
 import type {DelistingScan} from './delistings';
 import type {SnapshotCapture,StockBasicRow,TusharePage} from './providers/tushare-industry';
-import {IndustryProviderError,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
+import {IndustryProviderError,TUSHARE_MIN_INTERVAL_MS,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 
 export const A_SHARE_DATASET='issuers.a_stock';
+const TARGETED_A_SHARE_DATASET='issuers.a_stock.targeted';
 export const A_SHARE_PRODUCER='load-a-share';
 export const STOCK_BASIC_SOURCE='tushare:stock_basic';
 export const CNINFO_SOURCE='cninfo:topSearch';
@@ -90,7 +92,8 @@ export interface AShareApplyOptions{batchId:string;observedAt:string;lookupOrgId
 export function stockBasicPageRefs(pages:readonly TusharePage<StockBasicRow>[]):Map<string,StockBasicPageRef>{
  const out=new Map<string,StockBasicPageRef>();
  for(const p of pages){
-  const locator=p.snapshot?`${p.snapshot.bucket}/${p.snapshot.path}`:`tushare:${p.api}:list_status=${String(p.params.list_status??'')}:offset=${p.offset}`;
+  const tickerParam=p.params.ts_code===undefined?'':`:ts_code=${String(p.params.ts_code)}`;
+  const locator=p.snapshot?`${p.snapshot.bucket}/${p.snapshot.path}`:`tushare:${p.api}:list_status=${String(p.params.list_status??'')}${tickerParam}:offset=${p.offset}`;
   for(const r of p.rows){const ts=(r.ts_code??'').trim().toUpperCase();if(ts&&!out.has(ts))out.set(ts,{sha256:p.raw_hash,locator});}
  }
  return out;
@@ -221,7 +224,7 @@ export async function applyAShareLoad(tables:TableClient,plan:AShareLoadPlan,opt
  return {counts,errors:withSkippedSummary(errors,skippedSummary,rejectedSummary),skippedSummary,rejectedSummary,issuers,lookups};
 }
 
-export interface RunLoadAShareOptions{apply:boolean;triggeredBy?:TriggeredBy;today?:string;maxLookups?:number;recheckOrgIds?:boolean;lookupOrgId?:(symbol:string)=>Promise<OrgLookup|null>;sleep?:(ms:number)=>Promise<void>;snapshots?:SnapshotCapture}
+export interface RunLoadAShareOptions{apply:boolean;tickers?:readonly string[];triggeredBy?:TriggeredBy;today?:string;maxLookups?:number;recheckOrgIds?:boolean;lookupOrgId?:(symbol:string)=>Promise<OrgLookup|null>;sleep?:(ms:number)=>Promise<void>;snapshots?:SnapshotCapture}
 export interface RunLoadAShareResult{status:BatchStatus|'dry_run';batchId:string|null;plan:{candidates:number;skipped:Record<string,number>;rejected:Record<string,number>};apply:AShareApplyResult|null;exitCode:0|1}
 
 /** Reads the active a_stock universe (security_universe_memberships; PK (ticker, universe) → ticker unique within it). */
@@ -229,23 +232,37 @@ export async function aStockUniverse(tables:TableClient):Promise<Set<string>>{
  return new Set((await selectAll(tables,'security_universe_memberships',{universe:'a_stock',is_active:true},'ticker')).map(r=>String(r.ticker).trim().toUpperCase()));
 }
 
-/** Job entry (cron / script): stock_basic L, P and D passes → plan → (apply) → receipt + freshness. Apply mode opens the batch BEFORE fetching, so a failed fetch or plan is receipted (failed + ok:false attempt); a dry run writes nothing. */
+/** Apply opens a batch before fetching so failed preflights are receipted. Only full runs record dataset freshness. */
 export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions):Promise<RunLoadAShareResult>{
+ validateAShareTickers(opts.tickers);
+ const selected=opts.tickers===undefined?undefined:[...opts.tickers];
  if(opts.apply&&!deps.codeVersion)throw new Error('code_version_missing');
  const call=deps.tushare??defaultTushareCall({fetch:deps.fetch});
  const now=deps.now();const today=opts.today??now.toISOString().slice(0,10);
- const batchId=opts.apply?(await startBatch(deps.tables,{producer:A_SHARE_PRODUCER,dataset:A_SHARE_DATASET,codeVersion:deps.codeVersion!,triggeredBy:opts.triggeredBy??'script'})).batchId:null;
+ const batchId=opts.apply?(await startBatch(deps.tables,{producer:A_SHARE_PRODUCER,dataset:selected?TARGETED_A_SHARE_DATASET:A_SHARE_DATASET,
+  codeVersion:deps.codeVersion!,triggeredBy:opts.triggeredBy??'script',...(selected?{toolVersions:{tickers:selected.join(',')}}:{})})).batchId:null;
  const fail=async(e:unknown,fetched:number,candidates:number)=>{
   await finishBatch(deps.tables,batchId!,{counts:{...emptyCounts(),fetched,failed:Math.max(1,candidates)},errors:[{code:e instanceof IndustryProviderError?e.code:'a_share_error',message:errorMessage(e)}]},deps.now());
-  await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:false,cadence:'daily',now:deps.now()});
+  if(!selected)await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:false,cadence:'daily',now:deps.now()});
  };
  let plan:AShareLoadPlan;let pageRefs=new Map<string,StockBasicPageRef>();let scan:DelistingScan={inputs:[],missing:[]};
  try{
   const pages:TusharePage<StockBasicRow>[]=[];
-  for(const s of ['L','P','D'] as const)pages.push(...await fetchStockBasic(call,{listStatus:s},{sleep:opts.sleep,now:deps.now,snapshots:batchId?opts.snapshots:undefined}));
+  const fetchOptions={sleep:opts.sleep,now:deps.now,snapshots:batchId?opts.snapshots:undefined};
+  const wait=opts.sleep??((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));
+  for(const listStatus of ['L','P','D'] as const)for(const tsCode of selected??[undefined]){
+   if(selected&&pages.length>0)await wait(TUSHARE_MIN_INTERVAL_MS);
+   pages.push(...await fetchStockBasic(call,{listStatus,tsCode},fetchOptions));
+  }
   scan=scanDelistings(pages);
   pageRefs=stockBasicPageRefs(pages);
   plan=planAShareLoad(pages.flatMap(p=>p.rows),await aStockUniverse(deps.tables),today);
+  if(selected){
+   const eligible=new Set(plan.candidates.map(c=>c.ts_code));
+   const delisted=new Set([...scan.inputs.map(r=>r.ts_code),...scan.missing]);
+   const invalid=selected.filter(t=>!eligible.has(t)||delisted.has(t));
+   if(invalid.length)throw new Error(`explicit_ticker_not_eligible: ${invalid.join(',')} (absent, rejected, delisted or outside active a_stock universe)`);
+  }
  }catch(e){
   if(batchId)await fail(e,0,0);
   throw e;
@@ -254,7 +271,7 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
  if(!batchId)return {status:'dry_run',batchId:null,plan:planSummary,apply:null,exitCode:0};
  // K4: the delisting dates (stock_basic 'D' pass) are persisted with their page evidence; failures and changed dates become batch errors
  const delistErrors:BatchError[]=[];
- await persistDelistings(deps,batchId,A_SHARE_DATASET,scan,delistErrors);
+ if(!selected)await persistDelistings(deps,batchId,A_SHARE_DATASET,scan,delistErrors);
  let result:AShareApplyResult;
  try{
   result=await applyAShareLoad(deps.tables,plan,{batchId,observedAt:now.toISOString(),lookupOrgId:opts.lookupOrgId??(symbol=>resolveOrgId(symbol,{fetch:deps.fetch})),sleep:opts.sleep,maxLookups:opts.maxLookups,recheckOrgIds:opts.recheckOrgIds,pageRefs});
@@ -263,8 +280,10 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
   throw e;
  }
  result.errors.push(...delistErrors);
+ if(selected&&result.counts.inserted+result.counts.duplicates<selected.length)
+  result.errors.push({code:'explicit_ticker_unresolved',message:'At least one selected ticker did not land or match an existing security; see skipped summary and row errors.'});
  const status=await finishBatch(deps.tables,batchId,{counts:result.counts,errors:result.errors},deps.now());
  const outcome=loaderOutcome(status,result.counts,result.rejectedSummary);
- await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:outcome.ok,cadence:'daily',now:deps.now(),detail:{issuers:result.issuers,lookups:result.lookups}});
- return {status,batchId,plan:planSummary,apply:result,exitCode:outcome.exitCode};
+ if(!selected)await recordAttempt(deps.tables,A_SHARE_DATASET,{ok:outcome.ok,cadence:'daily',now:deps.now(),detail:{issuers:result.issuers,lookups:result.lookups}});
+ return {status,batchId,plan:planSummary,apply:result,exitCode:selected&&status!=='success'?1:outcome.exitCode};
 }

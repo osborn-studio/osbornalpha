@@ -3,7 +3,7 @@
 // view/asOf parsing, hrefs, api urls, one fetch wrapper, and the client view of every route DTO
 // the page consumes. Only `import type` from ./types and ./event-dto (erased at build), so client
 // components may import this file.
-import type {Market,Cell,DerivedCell,WithheldCell,WithheldReason,WithheldCounts,PeriodCol,GridRow,FilingSummary,EvidenceDto,CoverageRow,StatementKind,Basis} from './types';
+import type {Market,Cell,OverviewUnavailableReasons,DerivedCell,WithheldCell,WithheldReason,WithheldCounts,PeriodCol,GridRow,FilingSummary,EvidenceDto,CoverageRow,StatementKind,Basis} from './types';
 import type {LineageRev,LineageConflict} from '@/lib/facts/types';
 import type {PublicEvent} from './event-dto';
 
@@ -61,19 +61,19 @@ export interface StatementsResponse{issuerId:string;ticker:string;market:Market;
  otherUnitOnly:Record<string,string[]>;
  /** concept → period keys with a primary-unit value AND other-unit facts (U badge on the value cell; committed DTO field, Task 7/9). */
  otherUnitsAlso:Record<string,string[]>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
-interface SeriesBase{factId:string;availableDate:string;filingId:string;disclosureSeq:number|null;isCurrent:boolean|null;isRevision:boolean|null;sourceConcept:string;mappingVersion:string;mappingGen:number;unit:string}
+interface SeriesBase{factId:string;issuerId?:string;availableDate:string;filingId:string;disclosureSeq:number|null;isCurrent:boolean|null;isRevision:boolean|null;sourceConcept:string;mappingVersion:string;mappingGen:number;unit:string}
 export type SeriesEntry=(SeriesBase&{kind:'fact';value:string;rawHash:string;runId:string;unitRule:string|null;delta:string|null;relChange:string|null})|(SeriesBase&{kind:'withheld';reason:WithheldReason});
-export interface FactSeriesResponse{issuerId:string;ticker:string;market:Market;asOf:string;mappingGen:number;stateRev:number;truncated:boolean;history:true;concept:string;periodStart:string;periodEnd:string;unit:string;
+export interface FactSeriesResponse{lineage?:string[];stateRevs?:LineageRev[];conflicts?:{key:LineageConflict['key'];availableDate:string;factIds:string[]}[];issuerId:string;ticker:string;market:Market;asOf:string;mappingGen:number;stateRev:number;truncated:boolean;history:true;concept:string;periodStart:string;periodEnd:string;unit:string;
  otherUnits:string[];series:SeriesEntry[];otherUnitSeries:SeriesEntry[];filings:Record<string,FilingSummary>;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type {PublicEvent} from './event-dto';
 export interface OverviewResponse{ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;
- latest:{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean}|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+ latest:{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean;unavailableReasons?:OverviewUnavailableReasons}|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 // inputUnit / basis mirror MetricDto (计划第 3 轮审计 R6): grid rows key on (metric, inputUnit, basis).
 export interface MetricEntry{metric:string;periodStart:string;periodEnd:string;duration:string;inputUnit:string;basis:string;basedOnRev:number;basedOnLineage?:LineageRev[];computedAt:string|null;computedAtKind:'materialized'|'live';cell:DerivedCell|WithheldCell}
 export interface MetricsResponse{lineage?:string[];resolution?:{tickerAsOf:string;issuerId:string;validFromMethod:string|null};conflicts?:{key:LineageConflict['key'];availableDate:string;factIds:string[]}[];issuerId:string;ticker:string;market:Market;asOf:string|null;mappingGen:number;formulaVersion:string;stale:boolean;truncated:boolean;metrics:MetricEntry[];evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
 export type FreshnessStatus='fresh'|'stale'|'error'|'missing';
 export interface FreshnessResponse{datasets:{dataset:string;status:FreshnessStatus|null;lastOkAt:string|null;lastAttemptAt:string|null}[]}
-export interface CompanyFilingsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;filings:FilingSummary[]}
+export interface CompanyFilingsResponse{issuerId:string;ticker:string;market:Market;asOf:string|null;stateRev:number;lineage?:string[];stateRevs?:LineageRev[];filings:FilingSummary[]}
 /** Spec-2 /api/facts?factIds= row, used only to locate a fact's natural key (its value is never displayed, §0 #68). */
 export interface FactKeyRow{factId:string;concept:string;periodStart:string|null;periodEnd:string;duration:string;unit:string}
 export interface FactIdsResponse{facts:FactKeyRow[]}

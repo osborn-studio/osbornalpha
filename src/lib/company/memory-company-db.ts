@@ -238,7 +238,7 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
   async sweepDue(olderThan,at,limit,market){
    const older=olderThan.toISOString();const t=at.toISOString();
    const rows=facts.scope().filter(s=>!market||s.market===market).map(s=>({s,st:states.get(sk(s.issuer_id,s.market))}))
-    .filter(({s,st})=>s.state_rev>0&&(!st?.swept_at||st.swept_at<older)&&(st?.next_attempt_at??EPOCH)<=t);
+    .filter(({s,st})=>s.state_rev>0&&(!st?.swept_at||st.swept_at<older||st.last_status==='failed')&&(st?.next_attempt_at??EPOCH)<=t);
    rows.sort((a,b)=>{const x=a.st?.swept_at??null,y=b.st?.swept_at??null;return (x===y?0:x===null?-1:y===null?1:cmp(x,y))||cmp(a.s.issuer_id,b.s.issuer_id)||cmp(a.s.market,b.s.market);});
    return rows.slice(0,Math.max(0,limit)).map(({s,st})=>({issuerId:s.issuer_id,market:s.market,stateRev:s.state_rev,digestedRev:st?.digested_rev??0}));
   },

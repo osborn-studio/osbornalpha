@@ -1,6 +1,10 @@
 # 行业研究模块运行手册
 
+`INDUSTRY_JUDGMENTS_ENABLED` 默认关闭。F4 已可冻结公开的 `industry_metrics` 输入，但尚无行业方法学、resolver 与结算策略（owner Q2）；判断区不应制造卡片。`industry_valuations` 输入在 I-3 完成前拒绝。
+
 规格：`docs/superpowers/specs/2026-11-04-industry-research-design.md`（第 6 稿）；计划：`docs/superpowers/plans/2026-11-06-industry-research.md`。本手册覆盖本计划实际交付的部分：迁移 `20261111090000_industry_research.sql` / `20261111091000_industry_research_functions.sql` 的全部对象、A 股发行人装载、事实范围、申万来源记录/解析、SIC、时点聚合 + 内容寻址清单 + 离线回放、证券级标记采集、读接口、页面。**估值计算/对账/发布（I-3）未实施**：表、函数、权限、触发器已落地并有数据库测试，页面估值区恒显示"估值未启用"。
+
+I-3 独立前置验证：[`2026-11-07-industry-closeout.md`](../audits/2026-11-07-industry-closeout.md) 记录 H 的可评审选项与授权/数据验证缺口；`scripts/industry/reconciliation-check.ts <input.json>` 仅离线检查已提供数值的 1%/90%/95%/24 门槛，不计算估值、不写库、不授予发布资格。
 
 ## 1. 作业与调度
 
@@ -18,6 +22,20 @@
 - cron 路由同一套门：Tushare 作业无 token → 503 `tushare_unavailable`；`facts-scope`/`aggregate` 未开关 → 403 `job_disabled`；`official`/`valuation` → 200 `skipped`。HTTP 回执只含码与计数，不含错误消息。
 - cron 与脚本不要同时跑同一 job（规格 §10）；延迟工作者由 `activate_industry_metric_run` 的 `obsolete_run` 兜底。
 - 每周回放抽样：`node --env-file=<file> --import tsx scripts/industry/replay-check.ts [--run <id>] --sample 50`（默认 seed = ISO 周；只读；任一格 `value_differs`/`manifest_unreadable` → 退出 1，按 §8 处理）。
+
+### 显式限定 A 股装载
+
+`load-a-share` 可重复传 `--ticker`，只接受 1–10 个不同的规范代码（六位数字 + `.SH` / `.SZ` / `.BJ`，如 `600519.SH`）。不接受别名、小写、空白、逗号列表或重复值；其他 job 不支持该选项。省略时保留原有全宇宙行为。
+
+```sh
+# 默认 dry-run；沿用已有授权环境配置。此示例本身不加载凭据。
+node --import tsx scripts/industry/sync.ts --job load-a-share \
+  --ticker 600519.SH --ticker 000333.SZ --ticker 300750.SZ
+```
+
+经审核后，原命令加 `--apply` 才写入。每个目标仅请求自己的 `stock_basic` L/P/D 行，再执行原有资格、身份与冲突检查；重复证券的证据 claim（包括免 lookup 的快速路径）也只处理选中代码。任一目标缺失、不在 active `a_stock`、被行校验拒绝或已退市，整个选择报 `explicit_ticker_not_eligible`，在 org lookup 和发行人、证券、claim 写入之前失败。此模式不写退市记录；全量装载继续处理退市数据。
+
+资格检查仍读取 active 宇宙。apply 保存 `issuers.a_stock.targeted` 批次回执和配置的目标页面原始快照，可能发生在资格预检失败之前。显式选择不更新全量 `issuers.a_stock` 的新鲜度。dry-run 只验证装载资格，不写入或执行 cninfo lookup。`--limit` 可限制 cninfo lookup；若因 lookup 限额或身份检查导致任何选中的证券未写入或匹配已有证券，apply 返回失败或部分完成。装载后仍需单独处理 facts 调度和公开覆盖。
 
 ## 2. owner 决策（规格 §16）与当前默认
 

@@ -3,6 +3,7 @@
 // ok rows only, highest version <= asOf, ascending history, newest non-failed snapshot with ties -> greatest id, 'truncated'.
 import {describe,expect,it} from 'vitest';
 import {CATALOG_VERSION,MACRO_CATALOG} from '../catalog';
+import {MacroDbError} from '../db';
 import {derivePolicyEvents} from '../events';
 import {releaseTimeliness} from '../freshness';
 import {memoryMacroDb} from '../memory-db';
@@ -25,6 +26,13 @@ async function world(){
 }
 
 describe('macroDbStrategyPort snapshots',()=>{
+ it('publishState projects P1 revisions and maps missing rows to null',async()=>{
+  const db=await world(),port=macroDbStrategyPort(db);
+  expect(await macroDbStrategyPort({...db,publishState:async()=>{throw new MacroDbError('not_found');}}).publishState('US')).toBeNull();
+  const state=await db.publishState('US');expect(await port.publishState('US')).toEqual({revision:state.revision,input_revision:state.inputRevision});
+  await publish(db,'US','2026-10-01T08:00:00.000Z');
+  const published=await db.publishState('US');expect(await port.publishState('US')).toEqual({revision:published.revision,input_revision:published.inputRevision});
+ });
  it('activeSnapshot / snapshot pass through (null when none)',async()=>{
   const db=await world();const port=macroDbStrategyPort(db);
   expect(await port.activeSnapshot('US')).toBeNull();expect(await port.snapshot('nope')).toBeNull();
