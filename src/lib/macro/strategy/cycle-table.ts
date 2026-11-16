@@ -117,21 +117,29 @@ function change(from:ManifestInput,to:ManifestInput,kind:'pct'|'bp'):CycleCell{
  const text=toBp(subtract(to.value_text,from.value_text));
  return {status:'ok',from:toObsRef(from),to:toObsRef(to),change_raw:Number(text),change_text:text,change_kind:'bp'};
 }
-function cellOf(m:StrategyManifest,ep:Episode,c:CycleColumn,boundary:Boundary,cutoffDate:string):CycleCell{
+interface ColumnHistory{daily:ManifestInput[];monthly:Map<string,ManifestInput>}
+/** Invocation-local projections only: retain stable daily ties and monthly Map last-wins semantics. */
+function columnHistory(m:StrategyManifest,c:CycleColumn,boundary:Boundary):ColumnHistory{
+ return {
+  daily:boundary!=='month_end'&&c.daily_series&&!c.restricted?inputsWithRole(m,inputRole(COL_PURPOSE,c.daily_series,'history')):[],
+  monthly:new Map(boundary==='month_end'&&c.monthly_series&&!c.restricted?inputsWithRole(m,inputRole(COL_PURPOSE,c.monthly_series,'month_end')).map(i=>[monthOf(i.period_end),i]):[]),
+ };
+}
+function cellOf(m:StrategyManifest,ep:Episode,c:CycleColumn,boundary:Boundary,cutoffDate:string,history:ColumnHistory):CycleCell{
  if(c.restricted)return {status:'restricted'};
  if(boundary==='month_end'){
   if(!c.monthly_series)return miss('out_of_coverage');
   if(readState(m,c.monthly_series,COL_PURPOSE)==='truncated')return miss('history_truncated');
   const toM=monthOf(ep.end);
   if(monthEnd(toM)>cutoffDate)return miss('month_not_closed');
-  const byMonth=new Map(inputsWithRole(m,inputRole(COL_PURPOSE,c.monthly_series,'month_end')).map(i=>[monthOf(i.period_end),i]));
+  const byMonth=history.monthly;
   const from=byMonth.get(addMonthsYm(monthOf(ep.start),-1)),to=byMonth.get(toM);
   if(!from||!to)return miss('out_of_coverage');
   return change(from,to,c.change_kind);
  }
  if(!c.daily_series)return miss('out_of_coverage');
  if(readState(m,c.daily_series,COL_PURPOSE)==='truncated')return miss('history_truncated');
- const rows=inputsWithRole(m,inputRole(COL_PURPOSE,c.daily_series,'history'));
+ const rows=history.daily;
  const from=boundary==='event_day'?dayPick(rows,ep.start,'before'):dayPick(rows,ep.start,'on_or_after');
  const to=boundary==='event_day'?dayPick(rows,ep.end,'on_or_before'):dayPick(rows,ep.end,'on_or_after');
  if(typeof from==='string')return miss(from);
@@ -146,7 +154,9 @@ export function buildCycleTable(stored:StoredManifest):CycleTableView{
  const cutoffDate=utcDate(m.cutoff);
  const episodes=policyEpisodes(m.events??[],m.gaps??[],cutoffDate);
  const cols=columns.map(id=>resolveColumn(id,m.catalog));
+ // Each column's complete frozen history is sorted/indexed once, rather than once per episode cell.
+ const histories=episodes.length?cols.map(c=>columnHistory(m,c,boundary)):[];
  const cells:CycleTableView['cells']={};
- for(const ep of episodes){const row:Record<string,CycleCell>={};for(const c of cols)row[c.id]=cellOf(m,ep,c,boundary,cutoffDate);cells[String(ep.index)]=row;}
+ for(const ep of episodes){const row:Record<string,CycleCell>={};for(const [i,c] of cols.entries())row[c.id]=cellOf(m,ep,c,boundary,cutoffDate,histories[i]);cells[String(ep.index)]=row;}
  return {version:VERSIONS.cycleTable,episodes_version:VERSIONS.episodes,boundary,manifest_id:stored.manifest_id,cutoff:m.cutoff,episodes,columns:cols,cells,gaps:m.gaps??[]};
 }

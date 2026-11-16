@@ -11,7 +11,7 @@
 // no longer ongoing at the cutoff. A history_truncated event gap puts one explicit 'events_truncated' fact into both the
 // policy_events and episode_changes sections (never an ordinary empty section). Percent asset moves keep the exact ratio
 // (unit 'pct_ratio'). runReview drives one (region, month) unit for the cron.
-import type {Episode,Fact,FrozenSeriesDef,ManifestInput,ManifestRead,Region,ReviewFacts,ReviewStatus,SnapshotRecord,StrategyManifest,StrategyPolicyEvent,Timeliness} from './contract';
+import type {Episode,Fact,FrozenSeriesDef,ManifestInput,ManifestRead,ObservationRow,Region,ReviewFacts,ReviewStatus,SnapshotRecord,StrategyManifest,StrategyPolicyEvent,Timeliness} from './contract';
 import {VERSIONS} from './contract';
 import {policyEpisodes} from './cycle-table';
 import type {StrategyDb} from './db';
@@ -40,22 +40,29 @@ export async function buildReviewManifest(port:StrategyReadPort,region:Region,mo
  const [cur,base]=await Promise.all([port.snapshotUpTo(region,cutoff),port.snapshotUpTo(region,baselineCutoff)]);
  const pair=(s:SnapshotRecord|null)=>region==='US'?{US:s,CN:null}:{US:null,CN:s};
  const b=manifestBuilder(port,cutoff);const bb=manifestBuilder(port,baselineCutoff);
- await b.useSnapshots(pair(cur));await bb.useSnapshots(pair(base));
+ await Promise.all([b.useSnapshots(pair(cur)),bb.useSnapshots(pair(base))]);
  const live=port.catalog();
  for(const d of live)if(d.region===region&&d.role!=='event_source')b.def(d.id);
  const inSnapshot=(s:SnapshotRecord|null)=>{const ids=new Set(s?[...s.observation_ids,...s.history_ids]:[]);return (id:string|undefined)=>id!==undefined&&ids.has(id);};
  const inCur=inSnapshot(cur);
  const timeliness:{series_id:string;state:Timeliness}[]=[];
- for(const d of levelIndicators(live,region)){
-  if(d.status!=='active')continue;
-  if(cur){const l=await b.snapshotValue(d.id,REVIEW_PURPOSE);timeliness.push({series_id:d.id,state:port.timeliness(d,inCur(l?.observation_id)?l!.period_end:null,today)});}
-  if(base)await bb.snapshotValue(d.id,BASELINE_PURPOSE);
+ const levels=levelIndicators(live,region).filter(d=>d.status==='active');
+ const ids=levels.map(d=>d.id);
+ const assets=assetColumns(live,region);
+ // Distinct builders keep the current and baseline availability cutoffs isolated. Each fallback is one batch.
+ const [{events,gaps},current]=await Promise.all([
+  readPolicyEvents(b),
+  cur?b.snapshotValues(ids,REVIEW_PURPOSE):Promise.resolve(new Map<string,ObservationRow|null>()),
+  base?bb.snapshotValues(ids,BASELINE_PURPOSE):Promise.resolve(),
+  ...assets.flatMap(c=>[
+   b.history(c.readId,ASSET_END_PURPOSE,'month_end',{from:`${month}-01`,to:end}),
+   bb.history(c.readId,ASSET_BASE_PURPOSE,'month_end',{from:`${baseMonth}-01`,to:monthEnd(baseMonth)}),
+  ]),
+ ]);
+ if(cur)for(const d of levels){
+  const l=current.get(d.id);
+  timeliness.push({series_id:d.id,state:port.timeliness(d,inCur(l?.observation_id)?l!.period_end:null,today)});
  }
- for(const c of assetColumns(live,region)){
-  await b.history(c.readId,ASSET_END_PURPOSE,'month_end',{from:`${month}-01`,to:end});
-  await bb.history(c.readId,ASSET_BASE_PURPOSE,'month_end',{from:`${baseMonth}-01`,to:monthEnd(baseMonth)});
- }
- const {events,gaps}=await readPolicyEvents(b);
  const params={region,month};
  const mb=bb.build({kind:'review',params,methodVersion:VERSIONS.review,codeVersion});
  const m=b.build({kind:'review',params,methodVersion:VERSIONS.review,codeVersion,extra:{baseline:{cutoff:baselineCutoff,...mb.snapshots},events,gaps,timeliness}});

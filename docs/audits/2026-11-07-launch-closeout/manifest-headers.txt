@@ -1,0 +1,16 @@
+HTTP/2 200
+accept-ranges: bytes
+access-control-allow-origin: *
+age: 0
+cache-control: public, max-age=0, must-revalidate
+content-disposition: inline; filename="manifest.json"
+content-type: application/json; charset=utf-8
+date: Sat, 07 Nov 2026 14:24:07 GMT
+etag: "9c14294faaea236444a747cb1ef69b88"
+last-modified: Sat, 07 Nov 2026 14:24:07 GMT
+server: Vercel
+strict-transport-security: max-age=63072000
+x-matched-path: /manifest.json
+x-vercel-cache: MISS
+x-vercel-id: sfo1::4mq9v-1794061447609-2faf6e5bb866
+content-length: 598

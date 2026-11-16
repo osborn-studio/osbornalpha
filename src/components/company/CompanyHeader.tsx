@@ -140,8 +140,9 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
                       : `${t('citationLinked', { n: cov.citation_summary.linked })} · ${t('citationPending', { n: cov.citation_summary.pending })}`}
                   </span>
                 </Pair>
-                <Pair label={cov.scope_last_status === 'failed' ? t('lastSyncFailed') : t('lastSync')}>
+                <Pair label={t('lastSync')}>
                   <span className="num">{cov.scope_last_success_at?.slice(0, 10) ?? t('none')}</span>
+                  {cov.scope_last_status === 'failed' && <span className="text-[var(--danger)]">{t('lastSyncFailed')}</span>}
                 </Pair>
               </>
             ) : (
@@ -166,7 +167,8 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
 
       <div className="flex basis-full flex-wrap items-center gap-2">
         <WatchlistButton ticker={ticker} />
-        {issuer && <TrackButton issuerId={issuer.issuer_id} />}
+        {/* Live membership probes read the materialized inbox; replay stays on the snapshot path. */}
+        {issuer && !asOf && <TrackButton issuerId={issuer.issuer_id} />}
         <AnalyzeMenu ticker={ticker} />
         <span className="ml-auto text-[11px] text-[var(--text-dim)]">{t('quoteRemoved')}</span>
       </div>

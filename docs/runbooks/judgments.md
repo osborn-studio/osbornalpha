@@ -1,6 +1,6 @@
 # 判断层（F4）运行手册
 
-依据：[规格](../superpowers/specs/2026-11-04-judgment-framework-design.md)、[实施记录](../audits/2026-11-06-judgment-framework/implementation-log.md)。迁移为 `supabase/migrations/20261116090000_judgments.sql`。**合并前保持未锁**：不得修改 `supabase/migrations.lock.json`。合并顺序为 macro #112、再 F4；合并者确认最终 SQL 后运行 `shasum -a 256 supabase/migrations/20261116090000_judgments.sql`，把 `{file,sha256}` 追加到锁文件。锁定后该 SQL 永不再改，后续修复另建迁移。
+依据：[规格](../superpowers/specs/2026-11-04-judgment-framework-design.md)、[实施记录](../audits/2026-11-06-judgment-framework/implementation-log.md)。迁移为 `supabase/migrations/20261116090000_judgments.sql`。迁移已随 #121 在主分支锁定；`supabase/migrations.lock.json` 为哈希依据。锁定 SQL 不再修改，后续修复另建迁移。下文部署步骤是复跑说明，不代表本次已执行。
 
 ## 1. 表、函数与权限
 
@@ -13,6 +13,12 @@
 内部函数：`judgments_settle_after_date`、`judgments_grace_days`、`judgment_operation_payload`、`judgment_settlement_payload`、`judgment_replay_status`、`judgment_append_settlement_internal`。触发器函数随表删除。RPC 签名以 inventory 和迁移为准；`claim_due_judgments` 返回 jsonb 数组，`set_job_state` 返回 `{ok,updated_at}`。
 
 ## 2. 部署顺序
+
+2026-11-07 上线核对：生产 v1 判断数为 0，v2 原先未注册；#132 后已登记 v2 并设 `publishable=true`，公式哈希为 `dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba`，#136 合并后仍无 drift。首次部署曾因真实补登记错误关闭判断开关；#133 修复 JSONB containment，后续扫描完成，旧 superseded 快照的 `upstream_version_mismatch` 保留为正确弃权，当前中美有效快照判断正常。#133–#136 精确提交 `e0b82b25` 已部署，`MACRO_JUDGMENTS_ENABLED=1`、`NEXT_PUBLIC_SITE_URL=https://www.osbornalpha.com`，线上 settle preview/apply 和 calibrate preview 均成功。当前结论及限制见 [上线闭环记录](../audits/2026-11-07-launch-closeout/README.md)。以下 `publishable=false` 指初始代码默认值，不是此次生产状态。
+
+`macro_regime@v2` 的公式哈希覆盖方法实现、结算 resolver、`regime-selection.ts` 的历史 vintage 资格与输入构造规则，以及其导入闭包中的分类规则、目录和日期计算。`db.ts`、`snapshots.ts`、`read-api.ts` 只负责查询、分页、缓存、并行读取和错误映射，不纳入公式哈希；这些 I/O 优化不改变分类或结算输入，因此不应造成方法漂移。注册前仍须核对冻结输入快照与结算证据。
+
+F4 共享输入构造器 `src/lib/judgments/inputs.ts` 及其导入闭包（包括 kline、eastmoney 和 datagateway 来源）按设计进入每个方法的公式哈希，因为它冻结判断输入。因此修改这些文件会使所有方法漂移；缩小该闭包属于 F4 框架变更，不能作为单个宏观方法的哈希调整。
 
 1. 合并 macro #112 后，再合并 F4。由合并者锁定最终迁移并核对 SHA。用生产迁移流程执行 `20261116090000_judgments.sql`，登记 `supabase_migrations.schema_migrations` 对应版本；先确认私有桶 `judgments-calibration` 已建且 `public=false`。
 2. 核对 SQL 授权：anon 对 `judgments` 无 INSERT、对 `register_judgment(jsonb,jsonb)` 无 EXECUTE；service_role 对表无直接 INSERT、可执行登记 RPC；anon 可执行 `judgments_server_time()`。检查九表、RLS、桶。
@@ -33,6 +39,10 @@
 ## 5. 宏观与私有适配器
 
 `macro_regime@v2` 已使用真实宏观分类函数和 `MacroReadApi`，状态 `active`、`publishable=false`。`MACRO_JUDGMENTS_ENABLED` 控制生产装配；目录 `created_at/updated_at` 不可证时输入弃权，当前缺失 / 受限序列不等同于合成夹具。`recommendation_call@v1` 仅私有只读卡片和自评，不写公共 judgments，也不同步公共方法注册表；`pending_fill.condition=null`。私有百分比不发布。
+
+## 宏观快照发布后的即时登记
+
+US macro-sync 与 CN ingest finish 的生产装配会在新快照提交后调用真实 F4 producer；仅 `MACRO_JUDGMENTS_ENABLED=1` 生效，输入绑定该次发布的 snapshot_id / region / as_of。`hook: failed` 不撤销有效事实快照，后续 applying settlement compensation 负责补登记；keyed replay 不重复运行 hook。判断读接口仍有 300 秒公共缓存，前端 snapshot stale guard 必须保留。详情及上线验证边界见 [clock freshness audit](../audits/2026-11-08-clock-freshness.md)。
 
 ## 6. 日常结算与隔离
 

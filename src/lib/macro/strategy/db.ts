@@ -11,6 +11,7 @@
 import {randomUUID} from 'node:crypto';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {canonicalJson,sha256Hex} from './hash';
+import {manifestRequestId,withManifestRequest} from './manifest-request';
 import type {ExplanationProjection,ExplanationState,Region,RenderedExplanation,ReviewFacts,ReviewResult,ReviewStatus,StoredManifest,StrategyManifest} from './contract';
 
 /** A run row as completion recovery reads it (service role). */
@@ -54,7 +55,7 @@ export interface StrategyDb{
 // ---------------------------------------------------------------- transport
 export type StrategyTable='macro_strategy_manifests'|'macro_review_results'|'macro_review_current'|'macro_explanation_runs'|'macro_explanations';
 export type ReadRole='anon'|'admin'|'session';
-export interface SelectSpec{table:StrategyTable;eq:Record<string,string>;in?:{column:string;values:string[]};order:{column:string;ascending:boolean}[];limit:number}
+export interface SelectSpec{columns?:readonly string[];table:StrategyTable;eq:Record<string,string>;in?:{column:string;values:string[]};order:{column:string;ascending:boolean}[];limit:number}
 /** rpc runs as service_role and rejects with the database error (message = code for raised errors); select runs under `role`. */
 export interface StrategyTransport{
  rpc(fn:string,args:Record<string,unknown>):Promise<unknown>;
@@ -88,6 +89,28 @@ export function projectionFrom(r:Record<string,unknown>):ExplanationProjection{
   prompt_version:str(r.prompt_version)??'',validator_version:str(r.validator_version)??'',created_at:iso(r.created_at),finished_at:isoOrNull(r.finished_at)};
 }
 
+// Fixed labels plus an optional validated response UUID: no upstream messages/details or frozen evidence.
+// RPC timing includes client/network/gateway/SQL; it cannot isolate server JSON parsing or waits.
+type ManifestStage='payload_prepare'|'rpc'|'readback';
+function manifestFailureCategory(stage:ManifestStage,e:unknown):string{
+ if(stage==='payload_prepare')return 'invalid_payload';
+ const code=typeof e==='object'&&e!==null?(e as {code?:unknown}).code:undefined;
+ if(code==='57014')return 'query_canceled'; // cancellation is not proof of a statement timeout
+ if(code==='42501')return 'permission_denied';
+ if(code==='PGRST102'||code==='22P02')return 'invalid_payload';
+ const known=typeof e==='object'&&e!==null?CODES.find(c=>c===(e as {message?:unknown}).message):undefined;
+ if(known)return known;
+ if(e instanceof StrategyDbError){
+  const category=CODES.find(c=>c===e.code);if(category)return category;
+  if(['invalid_manifest_id','invalid_manifest_metadata'].includes(e.message))return 'invalid_result';
+ }
+ return 'unknown';
+}
+function logManifest(event:{operation_id:string;stage:ManifestStage;outcome:'ok'|'failed';stage_ms:number;elapsed_ms:number;category?:string;upstream_request_id?:string}){
+ // Diagnostics must never turn a committed write into an apparent failure, or mask an error.
+ try{if(event.outcome==='failed')console.error('[macro-manifest]',event);else console.info('[macro-manifest]',event);}catch{}
+}
+
 export function strategyDbOver(t:StrategyTransport):StrategyDb{
  const rpc=async(fn:string,args:Record<string,unknown>)=>{try{return await t.rpc(fn,args);}catch(e){throw toStrategyDbError(e);}};
  const select=async(role:ReadRole,spec:SelectSpec)=>{try{return await t.select(role,{...spec,limit:Math.min(Math.max(1,Math.trunc(spec.limit)),MAX_SELECT)});}catch(e){throw toStrategyDbError(e);}};
@@ -98,11 +121,44 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
  };
  return {
   async putManifest(body){
-   const hash=sha256Hex(canonicalJson(body));
-   const id=String(await rpc('macro_put_manifest',{p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version}));
-   const stored=await manifestById('admin',id);
-   if(!stored)throw new StrategyDbError('rpc_failed',`manifest_not_readable:${id}`);
-   return stored;
+   return withManifestRequest(async()=>{
+   const operation_id=randomUUID(),started=performance.now();
+   let stage:ManifestStage='payload_prepare',stageStarted=started,transportCategory:string|undefined;
+   // Observe raw codes before normalization; retain the existing thrown errors.
+   const call=async<T>(run:()=>Promise<T>):Promise<T>=>{
+    try{return await run();}catch(e){transportCategory=manifestFailureCategory(stage,e);throw toStrategyDbError(e);}
+   };
+   const completed=()=>{
+    const now=performance.now();
+    logManifest({operation_id,stage,outcome:'ok',stage_ms:now-stageStarted,elapsed_ms:now-started});
+   };
+   try{
+    // Capture one JSON value before awaiting I/O: hash, RPC payload and returned evidence must agree,
+    // even if the caller changes its object while the RPC is in flight. Undefined fields disappear as on wire.
+    const canonical=canonicalJson(body),hash=sha256Hex(canonical);
+    const frozen=JSON.parse(canonical) as StrategyManifest;
+    completed();stage='rpc';stageStarted=performance.now();
+    const id=await call(()=>t.rpc('macro_put_manifest',{p_kind:frozen.kind,p_body:frozen,p_manifest_hash:hash,p_cutoff:frozen.cutoff,p_method_version:frozen.method_version,p_code_version:frozen.code_version,p_catalog_version:frozen.catalog_version}));
+    if(typeof id!=='string'||!UUID.test(id))throw new StrategyDbError('rpc_failed','invalid_manifest_id');
+    // The service-only RPC inserts this exact JSONB value or verifies equality on hash conflict.
+    // Manifest rows have no update/delete grants. Read metadata only; manifest(id) still reads full evidence.
+    completed();stage='readback';stageStarted=performance.now();
+    // Fixed limit 1 already satisfies the shared select wrapper's clamp.
+    const rows=await call(()=>t.select('admin',{table:'macro_strategy_manifests',columns:['manifest_id','manifest_hash','created_at'],eq:{manifest_id:id},order:[],limit:1}));
+    const r=rows[0];
+    if(rows.length!==1||!r||typeof r.manifest_id!=='string'||r.manifest_id.toLowerCase()!==id.toLowerCase()||r.manifest_hash!==hash
+     ||!(r.created_at instanceof Date||typeof r.created_at==='string'&&/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(r.created_at)))
+     throw new StrategyDbError('rpc_failed','invalid_manifest_metadata');
+    const stored={manifest_id:r.manifest_id,manifest_hash:hash,body:frozen,created_at:iso(r.created_at)};
+    completed();return stored;
+   }catch(e){
+    const now=performance.now();
+    const upstream_request_id=stage==='rpc'?manifestRequestId():undefined;
+    logManifest({operation_id,stage,outcome:'failed',category:transportCategory??manifestFailureCategory(stage,e),stage_ms:now-stageStarted,elapsed_ms:now-started,
+     ...(upstream_request_id?{upstream_request_id}:{})});
+    throw e;
+   }
+   });
   },
   manifest:id=>manifestById('anon',id),
   async reviewCurrent(region,month){
@@ -180,9 +236,14 @@ export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;se
   return client as unknown as NarrowClient;
  };
  return {
-  async rpc(fn,args){const {data,error}=await pick('admin').rpc(fn,args);if(error)throw error;return data;},
+  async rpc(fn,args){
+   // Unnamed JSONB RPC accepts this same complete request body without PostgREST's
+   // large json_to_record argument tuple. SQL delegates to the original validated RPC.
+   const {data,error}=await pick('admin').rpc(fn==='macro_put_manifest'?'macro_put_manifest_json':fn,args);
+   if(error)throw error;return data;
+  },
   async select(role,spec){
-   let q=pick(role).from(spec.table).select('*');
+   let q=pick(role).from(spec.table).select(spec.columns?.join(',')??'*');
    for(const [k,v] of Object.entries(spec.eq))q=q.eq(k,v);
    if(spec.in)q=q.in(spec.in.column,spec.in.values);
    for(const o of spec.order)q=q.order(o.column,{ascending:o.ascending});

@@ -5,6 +5,7 @@ import {memoryMacroDb} from './memory-db';
 import {MacroUnavailable,macroReadApi,snapshotAvailableAt} from './read-api';
 import {buildRegimeInput,publishRegion} from './snapshots';
 import {classifyRegime,WEIGHTS_V1} from './regime';
+import {buildRegimeInputFromRows,verifyHistoricalBatches} from './regime-selection';
 import {US_FIXTURE,seedCatalog,seedPoints,yoyPoints} from './testing/seed';
 
 const TODAY='2026-11-06';
@@ -103,6 +104,30 @@ describe('seriesCatalog',()=>{
 });
 
 describe('classifyAsOf',()=>{
+ it('matches direct selection for competing vintages, a running batch and unprovable receipts',async()=>{
+  const {db}=await setup();
+  db.setBatchStatus('revision','running');
+  await seedPoints(db,yoyPoints('US_CPI_INDEX',[['2026-09-30','4.2']]),{fetchedAt:'2026-10-16T05:30:00.000Z',batchId:'revision'});
+  const direct=async(cutoff:string)=>{
+   const built=await buildRegimeInputFromRows('US',{asOf:cutoff,periodEndLte:'2026-10-31'},{
+    latestEligible:db.latestEligible.bind(db),eligibleHistory:db.eligibleHistory.bind(db),eligibleHistoryAsOf:db.eligibleHistoryAsOf.bind(db),
+   });
+   await verifyHistoricalBatches(built,cutoff,db.observationsByIds.bind(db),db.batchFinishedAt.bind(db));
+   return built;
+  };
+  for(const [label,cutoff] of [['running','2026-10-18T00:00:00Z'],['competing vintage','2026-10-25T00:00:00Z']] as const){
+   if(label==='competing vintage')db.setBatchStatus('revision','success',undefined,'2026-10-20T05:30:00.000Z');
+   const built=await direct(cutoff);
+   expect(await buildRegimeInput(db,'US',{asOf:cutoff,periodEndLte:'2026-10-31'}),label).toEqual(built);
+   const api=await macroReadApi(db,{judgments:true}).classifyAsOf('US','2026-10',cutoff,'v1.0');
+   expect(api.regime,label).toEqual(classifyRegime(built.input).regime);
+   expect(api.observation_refs,label).toEqual(built.observations.map(r=>({series_id:r.series_id,period_end:r.period_end,vintage_id:String(r.version),value:Number(r.value_text),unit:catalogById(r.series_id)!.unit,available_at:r.available_at})));
+  }
+  const unprovable={...db,batchFinishedAt:async(ids:string[])=>Object.fromEntries(ids.map(id=>[id,null]))};
+  const built=await buildRegimeInputFromRows('US',{asOf:'2026-10-25T00:00:00Z',periodEndLte:'2026-10-31'},{latestEligible:db.latestEligible.bind(db),eligibleHistory:db.eligibleHistory.bind(db),eligibleHistoryAsOf:db.eligibleHistoryAsOf.bind(db)});
+  await expect(verifyHistoricalBatches(built,'2026-10-25T00:00:00Z',db.observationsByIds.bind(db),unprovable.batchFinishedAt)).rejects.toThrow('historical_cutoff_unsupported');
+  await expect(macroReadApi(unprovable,{judgments:true}).classifyAsOf('US','2026-10','2026-10-25T00:00:00Z','v1.0')).rejects.toMatchObject({code:'historical_cutoff_unsupported'});
+ });
  it('judgments disabled (explicit false or no opts even when the flag is on): regime null, observation_refs and catalog still returned',async()=>{
   const {db}=await setup();
   const on=await macroReadApi(db,{judgments:true}).classifyAsOf('US','2026-10','2026-11-05T00:00:00Z','v1.0');

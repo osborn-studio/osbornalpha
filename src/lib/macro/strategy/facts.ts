@@ -58,9 +58,12 @@ export async function buildSnapshotFactsManifest(port:StrategyReadPort,snapshotI
  const region:Region=pin.snapshots.US?.snapshot_id===snapshotId?'US':'CN';
  const b=manifestBuilder(port,pin.cutoff);
  await b.useSnapshots(pin.snapshots);
- for(const d of levelIndicators(port.catalog(),region)){b.def(d.id);if(d.status==='active')await b.snapshotValue(d.id,LEVEL_PURPOSE,['prev']);}
- for(const id of [SPREAD.a,SPREAD.b])if(b.def(id)?.status==='active')await b.snapshotValue(id,SPREAD_PURPOSE);
- const {events,gaps}=await readPolicyEvents(b);
+ const levels=levelIndicators(port.catalog(),region);
+ for(const d of levels)b.def(d.id);
+ const spread=[SPREAD.a,SPREAD.b].filter(id=>b.def(id)?.status==='active');
+ const [{events,gaps}]=await Promise.all([readPolicyEvents(b),
+  b.snapshotValues(levels.filter(d=>d.status==='active').map(d=>d.id),LEVEL_PURPOSE,['prev']),
+  b.snapshotValues(spread,SPREAD_PURPOSE)]);
  const m=b.build({kind:'explain_facts',params:{subject_kind:'snapshot',snapshot_id:snapshotId,region},methodVersion:VERSIONS.facts,codeVersion,extra:{events,gaps}});
  return {...m,facts:snapshotFacts(m)};
 }

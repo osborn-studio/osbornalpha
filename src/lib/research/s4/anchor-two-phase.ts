@@ -84,9 +84,9 @@ async function requireAdmin(actor:S4Actor,db:PoolClient){
   if(profile.rows[0]?.role!=='admin')fail('scope_denied');
 }
 /** Same per-entry checks as the oracle, against the row the entry claims to receipt. */
-function checkAgainstRow(entry:AnchorReceiptEntry,row:any,userId:string,previous:string,now:number){
+function checkAgainstRow(entry:AnchorReceiptEntry,row:any,userId:string,previous:string){
   const exported=Date.parse(entry.exported_at);
-  if(!Number.isFinite(exported)||exported<Date.parse(row.event.server_time)||exported>now)fail('anchor_integrity_failed');
+  if(!Number.isFinite(exported)||exported<Date.parse(row.event.server_time))fail('anchor_integrity_failed');
   const body=receiptBody(row,userId,previous,entry.exported_at);
   if(canonicalize(entry)!==canonicalize({...body,receipt_hash:digest(body)})||(row.receipt_hash&&row.receipt_hash!==entry.receipt_hash))fail('anchor_integrity_failed');
 }
@@ -107,14 +107,15 @@ async function scanChain(actor:S4Actor,manifest:RunnerManifest,store:AnchorStore
     await session(actor,db);await requireAdmin(actor,db);
     const now=Date.parse(await serverTime(db));
     const receipts=store.readReceipts()[Symbol.asyncIterator]();
-    let next=await receipts.next(),previous=ZERO_HASH,lastSequence:string|null=null,entries=0,pending=0;
+    let next=await receipts.next(),previous=ZERO_HASH,lastSequence:string|null=null,entries=0,pending=0,exportedAfterSnapshot=false;
     const recovered:Recovered[]=[];const tail:DbTail={last_anchored_sequence:null,last_anchored_hash:null,unanchored:0};
     try{
     for await(const row of outboxRows(db,actor.userId)){
       if(digest(row.event)!==row.event_hash)fail('anchor_integrity_failed');
       if(!next.done){
         const entry=next.value;
-        checkAgainstRow(entry,row,actor.userId,previous,now);
+        checkAgainstRow(entry,row,actor.userId,previous);
+        if(Date.parse(entry.exported_at)>now)exportedAfterSnapshot=true;
         previous=entry.receipt_hash;lastSequence=entry.sequence;entries++;
         if(row.anchored_at){tail.last_anchored_sequence=row.sequence;tail.last_anchored_hash=row.receipt_hash;}
         else{tail.unanchored++;recovered.push({sequence:row.sequence,entry});}
@@ -128,6 +129,10 @@ async function scanChain(actor:S4Actor,manifest:RunnerManifest,store:AnchorStore
     }finally{await receipts.return?.(undefined);}
     // The file must not have moved under the scan; a later append is Phase B's compare-and-append problem.
     if(checkpoint.last_hash!==previous||checkpoint.last_sequence!==lastSequence)fail(RETRY);
+    // An oracle append after our DB time sample can have a later export time.
+    // Retry a moved journal before diagnosing that time as corruption; a stable
+    // journal must still pass the exact same export-window check.
+    if(exportedAfterSnapshot)fail('anchor_integrity_failed');
     return {tail:checkpoint,entries,scan_ms:performance.now()-started,recovered,pending,db_tail:tail,generation};
   }finally{
     try{await db.query('rollback');}catch{db.release(true);released=true;}

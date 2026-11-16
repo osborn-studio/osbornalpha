@@ -71,10 +71,16 @@ describe('planMethodologySync / applyMethodologySync (spec §4.1, §5.1b)',()=>{
   expect((await planMethodologySync([method(),method()],db,opts()))[1].problems).toContain('duplicate_in_registry');
   expect(await planMethodologySync([method()],db,opts({only:new Set(['other@v1'])}))).toEqual([]);
  });
- it('licenses.json (D3): the committed file covers exactly ORIGINS, all unverified; reachable keys follow input_kinds',()=>{
+ it('licenses.json (D3): the committed file covers exactly ORIGINS; only owner-confirmed keys are confirmed; reachable keys follow input_kinds',()=>{
   const committed=validateLicenseTable(JSON.parse(readFileSync(join(process.cwd(),LICENSES_PATH),'utf8')));
   expect(Object.keys(committed).sort()).toEqual(Object.keys(ORIGINS).sort());
-  expect(Object.values(committed).every(e=>e.status==='unverified'&&e.confirmed_by===null)).toBe(true);
+  // Owner confirmations are recorded in the file itself (2026-11-07: the two macro_workbench keys, with confirmer, time and terms);
+  // every other key stays unverified until the owner confirms it.
+  const confirmedKeys=['macro_observation×macro_workbench','macro_snapshot×macro_workbench'];
+  for(const [k,e] of Object.entries(committed)){
+   if(confirmedKeys.includes(k)) expect(e).toMatchObject({status:'confirmed',confirmed_by:expect.any(String),confirmed_at:expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),evidence:expect.any(String)});
+   else expect(e).toMatchObject({status:'unverified',confirmed_by:null});
+  }
   expect(reachableOriginKeys({input_kinds:['macro_snapshot','macro_observation']})).toEqual(['macro_observation×macro_workbench','macro_snapshot×macro_workbench']);
   expect(licenseProblems({input_kinds:['price_bar']},committed)).toEqual(['license_unconfirmed:price_bar×datagateway','license_unconfirmed:price_bar×eastmoney']);
   expect(()=>validateLicenseTable({...committed,'x×y':committed['judgment×judgments']})).toThrow(/unknown origin key/);

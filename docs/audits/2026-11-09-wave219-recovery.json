@@ -1,0 +1,473 @@
+{
+  "publicAcceptance": {
+    "timestamp": "2026-11-09T12:06:45.012511+00:00",
+    "localMain": "ff5cdb65a5015c7fb28a5b640c83cc439413f9bd",
+    "deployedRuntimeExpected": "bffe600bca13b5f27b2ca2898f7dff7e4b4cb046",
+    "docsOnlyDifference": [
+      "docs/audits/2026-11-09-wave215-closeout.json",
+      "docs/audits/2026-11-09-wave215-closeout.md",
+      "docs/superpowers/plans/2026-11-07-cross-module-integration.md"
+    ],
+    "checks": [
+      {
+        "host": "osbornalpha.com",
+        "path": "/api/methodologies",
+        "status": 200,
+        "runtimeSha": "bffe600bca13b5f27b2ca2898f7dff7e4b4cb046",
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/methodologies",
+        "status": 200,
+        "runtimeSha": "bffe600bca13b5f27b2ca2898f7dff7e4b4cb046",
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/NOAH/overview",
+        "status": 200,
+        "ticker": "NOAH",
+        "market": "US",
+        "coveragePeriodEnd": "2025-12-31",
+        "latestFilingPeriodEnd": "2025-12-31",
+        "unavailableReasons": {
+          "facts": {
+            "revenue": "multiple_units",
+            "net_income_parent": "multiple_units",
+            "operating_cash_flow": "multiple_units"
+          },
+          "derived": {
+            "revenue_yoy": "multiple_units"
+          }
+        },
+        "evidenceCount": 0,
+        "hasCoverage": true,
+        "hasLatest": true,
+        "passCheck": true,
+        "reasonContractPass": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/AAPL/overview",
+        "status": 200,
+        "ticker": "AAPL",
+        "market": "US",
+        "coveragePeriodEnd": "2026-10-23",
+        "latestFilingPeriodEnd": "2026-09-26",
+        "unavailableReasons": null,
+        "evidenceCount": 5,
+        "hasCoverage": true,
+        "hasLatest": true,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/SMCI/overview",
+        "status": 200,
+        "ticker": "SMCI",
+        "market": "US",
+        "coveragePeriodEnd": "2026-09-30",
+        "latestFilingPeriodEnd": "2026-09-30",
+        "unavailableReasons": null,
+        "evidenceCount": 5,
+        "hasCoverage": true,
+        "hasLatest": true,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/600519.SH/overview",
+        "status": 200,
+        "ticker": "600519.SH",
+        "market": "CN",
+        "coveragePeriodEnd": null,
+        "latestFilingPeriodEnd": null,
+        "unavailableReasons": null,
+        "evidenceCount": 0,
+        "hasCoverage": false,
+        "hasLatest": false,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/000333.SZ/overview",
+        "status": 200,
+        "ticker": "000333.SZ",
+        "market": "CN",
+        "coveragePeriodEnd": null,
+        "latestFilingPeriodEnd": null,
+        "unavailableReasons": null,
+        "evidenceCount": 0,
+        "hasCoverage": false,
+        "hasLatest": false,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/300750.SZ/overview",
+        "status": 200,
+        "ticker": "300750.SZ",
+        "market": "CN",
+        "coveragePeriodEnd": null,
+        "latestFilingPeriodEnd": null,
+        "unavailableReasons": null,
+        "evidenceCount": 0,
+        "hasCoverage": false,
+        "hasLatest": false,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/NOAH/statements?statement=IS&basis=annual&periods=8",
+        "status": 200,
+        "ticker": "NOAH",
+        "periodCount": 8,
+        "rowCount": 7,
+        "evidenceCount": 56,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/industries/sic/3571/constituents?pageSize=20",
+        "status": 200,
+        "tickers": [
+          "ZEPP",
+          "SMCI"
+        ],
+        "total": 2,
+        "currentOnly": true,
+        "smciRevenueEvidence": {
+          "hasFactId": true,
+          "hasRawHash": true,
+          "unit": "USD",
+          "periodStart": "2025-07-01",
+          "periodEnd": "2026-06-30",
+          "availableDate": "2026-08-31"
+        },
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies?market=CN&pageSize=1",
+        "status": 200,
+        "rowCount": 0,
+        "total": 0,
+        "passCheck": true
+      },
+      {
+        "host": "www.osbornalpha.com",
+        "path": "/api/companies/freshness",
+        "status": 200,
+        "freshness": {
+          "datasets": [
+            {
+              "dataset": "facts.us",
+              "status": "fresh",
+              "lastOkAt": "2026-11-09T08:07:54.205+00:00",
+              "lastAttemptAt": "2026-11-09T08:07:54.205+00:00"
+            },
+            {
+              "dataset": "facts.cn",
+              "status": "fresh",
+              "lastOkAt": "2026-11-09T08:35:31.259+00:00",
+              "lastAttemptAt": "2026-11-09T08:35:31.259+00:00"
+            },
+            {
+              "dataset": "company.events",
+              "status": "error",
+              "lastOkAt": "2026-11-07T15:20:34.118+00:00",
+              "lastAttemptAt": "2026-11-09T11:20:34.951+00:00"
+            }
+          ]
+        },
+        "passCheck": true
+      }
+    ]
+  },
+  "authenticatedAcceptance": {
+    "status": "blocked",
+    "error": "cgWindowNotFound",
+    "scope": "No new authenticated UI acceptance"
+  },
+  "productionRecovery": {
+    "aapl": {
+      "status": "writer_recovered",
+      "runtimeSource": "bffe600bca13b5f27b2ca2898f7dff7e4b4cb046",
+      "scope": "AAPL US, one guarded full apply",
+      "preflight": {
+        "readOnly": true,
+        "stateRev": 1,
+        "facts": 3000,
+        "evidenceRows": 3000,
+        "events": 236,
+        "filings": 44,
+        "plannedCoveragePeriodEnd": "2026-09-26"
+      },
+      "apply": {
+        "batchId": "f0d5a671-59b2-468a-aa2b-9dbc1dfe2599",
+        "exitCode": 0,
+        "elapsedSeconds": 23.645,
+        "guardBlockCount": 0,
+        "receiptStatus": "success",
+        "counts": {
+          "fetched": 1,
+          "inserted": 0,
+          "duplicates": 1,
+          "versioned": 0,
+          "quarantined": 0,
+          "failed": 0
+        },
+        "stream": {
+          "market": "US",
+          "sweep": true,
+          "outcome": "unchanged",
+          "attemptId": 3,
+          "basedOnRev": 1,
+          "events": 236,
+          "result": {
+            "upserted": 236,
+            "changed": 0,
+            "retired": 0,
+            "revived": 0
+          },
+          "evidence": {
+            "indexed": 3000,
+            "facts": 3000
+          },
+          "retried": false
+        },
+        "clientStageMs": {
+          "begin_attempt": 278.475,
+          "read_snapshot": 2622.795,
+          "evidence_build": 1794.464,
+          "evidence_replace": 11623.294,
+          "derive": 633.751,
+          "digest_replace": 3205.103
+        },
+        "failedEvidenceUpstreamRequestIdCaptured": false
+      },
+      "databaseReadback": {
+        "observedAt": "2026-11-09T12:13:36.652Z",
+        "digest": {
+          "digested_rev": 1,
+          "last_status": "success",
+          "last_attempt_at": "2026-11-09T12:13:13.703+00:00",
+          "last_success_attempt_id": 3,
+          "last_failed_attempt_id": 2,
+          "swept_at": "2026-11-09T12:13:33.638183+00:00"
+        },
+        "coverage": {
+          "based_on_rev": 1,
+          "latest_period_end": "2026-09-26",
+          "latest_available_date": "2026-11-03",
+          "filings_count": 44,
+          "facts_count": 3000,
+          "concepts_covered": 26,
+          "rebuilt_at": "2026-11-09T12:13:33.638183+00:00",
+          "rebuild_batch_id": "f0d5a671-59b2-468a-aa2b-9dbc1dfe2599"
+        },
+        "previousCoveragePeriodEnd": "2026-10-23",
+        "evidenceCount": 3000,
+        "companyEventsFreshness": {
+          "status": "error",
+          "last_ok_at": "2026-11-07T15:20:34.118+00:00",
+          "last_attempt_at": "2026-11-09T12:13:35.34+00:00",
+          "backlogFailed": 1,
+          "remainingFailedStream": {
+            "observedAt": "2026-11-09T12:16:22.035Z",
+            "ticker": "POOL",
+            "market": "US",
+            "digested_rev": 0,
+            "last_attempt_at": "2026-11-09T10:20:33.792+00:00",
+            "last_status": "failed"
+          }
+        }
+      },
+      "immediatePublicReadback": {
+        "timestamp": "2026-11-09T12:13:47.170334+00:00",
+        "overviewStatus": 200,
+        "ticker": "AAPL",
+        "coveragePeriodEnd": "2026-10-23",
+        "coverageRebuiltAt": "2026-11-07T09:27:39.577Z",
+        "latestPeriodKey": "2025-09-28:2026-09-26:12M",
+        "latestFilingPeriodEnd": "2026-09-26",
+        "evidenceCount": 5,
+        "freshnessHttp": 200,
+        "companyEventsFreshness": {
+          "dataset": "company.events",
+          "status": "error",
+          "lastOkAt": "2026-11-07T15:20:34.118+00:00",
+          "lastAttemptAt": "2026-11-09T12:13:35.34+00:00"
+        }
+      },
+      "historicalCause": "unresolved",
+      "historicalRequestBackendJoin": "unresolved",
+      "laterPublicReadback": {
+        "explicitAsOf": {
+          "timestamp": "2026-11-09T12:14:35.196052+00:00",
+          "path": "/api/companies/AAPL/overview?asOf=2026-11-09",
+          "http": 200,
+          "age": "0",
+          "cacheControl": "public",
+          "vercelCache": "MISS",
+          "upstreamDate": "Mon, 09 Nov 2026 12:14:36 GMT",
+          "coveragePeriodEnd": "2026-09-26",
+          "rebuiltAt": "2026-11-09T12:13:33.638Z",
+          "eventsComputed": "live",
+          "overviewPeriodKey": "2025-09-28:2026-09-26:12M",
+          "bodySha256": "35a3477b0510a9badddd5d061b8a084c5f0941b7ac8a54d731e44687e8575ae0"
+        },
+        "defaultUrl": {
+          "timestamp": "2026-11-09T12:14:35.796901+00:00",
+          "path": "/api/companies/AAPL/overview",
+          "http": 200,
+          "age": "474",
+          "cacheControl": "public",
+          "vercelCache": "HIT",
+          "upstreamDate": "Mon, 09 Nov 2026 12:06:43 GMT",
+          "coveragePeriodEnd": "2026-10-23",
+          "rebuiltAt": "2026-11-07T09:27:39.577Z",
+          "eventsComputed": "materialized",
+          "overviewPeriodKey": "2025-09-28:2026-09-26:12M",
+          "bodySha256": "4c32c649a5a27438e2157c13ca61595624c2da697e2fe62c48b2812b632a549c"
+        }
+      }
+    },
+    "manifest": {
+      "status": "unresolved",
+      "historicalCancellationMechanism": "statement_timeout",
+      "historicalEffectiveBudget": "unknown",
+      "historicalGatewayBackendJoin": "unresolved",
+      "productionReplayPerformed": false
+    }
+  },
+  "codeWork": [
+    {
+      "observedAt": "2026-11-09T12:20:25Z",
+      "number": 220,
+      "headRefOid": "6b6ff304ef26b2211170546f40d898b56d510701",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/220",
+      "state": "OPEN",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "mergeStateStatus": "BLOCKED",
+      "checks": [
+        {
+          "name": "test",
+          "status": "IN_PROGRESS",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42614996725/job/129152544203"
+        },
+        {
+          "name": "provider-date-ingress",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42614996946/job/129152544369"
+        },
+        {
+          "name": "source-fixtures",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42614996920/job/129152545147"
+        }
+      ],
+      "scope": "Automatic retry selection",
+      "localTests": {
+        "passed": 463,
+        "skipped": 3,
+        "postgres": "17.10",
+        "freshDatabase": true
+      },
+      "deployed": false
+    },
+    {
+      "observedAt": "2026-11-09T12:20:25Z",
+      "number": 221,
+      "headRefOid": "6797a2f3f06dcd9735fb9f6adc6d1b4ad590ecb6",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/221",
+      "state": "OPEN",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "mergeStateStatus": "BLOCKED",
+      "checks": [
+        {
+          "name": "test",
+          "status": "IN_PROGRESS",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42615181183/job/129153160153"
+        },
+        {
+          "name": "provider-date-ingress",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42615181193/job/129153160802"
+        },
+        {
+          "name": "source-fixtures",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42615181158/job/129153159740"
+        }
+      ],
+      "scope": "Private manifest request correlation",
+      "localTests": {
+        "passed": 660,
+        "skipped": 48,
+        "databaseIntegration": "environment-gated"
+      },
+      "deployed": false
+    },
+    {
+      "observedAt": "2026-11-09T12:20:25Z",
+      "number": 222,
+      "headRefOid": "151c9e0ea78fb39cdc2b4371262964be90d42f41",
+      "url": "https://github.com/osborn-studio/osbornalpha/pull/222",
+      "state": "OPEN",
+      "reviewDecision": "REVIEW_REQUIRED",
+      "mergeStateStatus": "BLOCKED",
+      "checks": [
+        {
+          "name": "test",
+          "status": "IN_PROGRESS",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42616149843/job/129156403415"
+        },
+        {
+          "name": "provider-date-ingress",
+          "status": "IN_PROGRESS",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42616149876/job/129156403610"
+        },
+        {
+          "name": "source-fixtures",
+          "status": "IN_PROGRESS",
+          "conclusion": "",
+          "detailsUrl": "https://github.com/osborn-studio/osbornalpha/actions/runs/42616149844/job/129156404258"
+        }
+      ],
+      "scope": "Shorter shared cache freshness for current nonempty Overview and company directory",
+      "policy": {
+        "browserMaxAgeSeconds": 0,
+        "sharedMaxAgeSeconds": 60,
+        "staleWhileRevalidate": false
+      },
+      "localTests": {
+        "passed": 530,
+        "skipped": 70
+      },
+      "deployed": false
+    }
+  ],
+  "independentCliRuns": {
+    "model": "gpt-6.1-sol",
+    "launched": 5,
+    "lanes": [
+      "retry selection",
+      "manifest correlation",
+      "public acceptance",
+      "AAPL preflight and recovery",
+      "company cache policy"
+    ]
+  },
+  "productionDeploymentPerformed": false,
+  "productionMigrationApplied": false
+}

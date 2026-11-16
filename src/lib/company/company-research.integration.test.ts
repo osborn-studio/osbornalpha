@@ -29,6 +29,8 @@ import {memorySnapshotObjectStore} from './evidence-index';
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261118090000_company_research.sql';
 const FUNCTIONS_MIGRATION='supabase/migrations/20261118091000_company_research_functions.sql';
+const RETRY_MIGRATION='supabase/migrations/20261124110000_company_digest_retry_selection.sql';
+const LOOKUP_MIGRATION='supabase/migrations/20261123110000_company_evidence_fact_lookup.sql';
 const FENCE_MIGRATION='supabase/migrations/20261118092000_company_evidence_fence.sql';
 const TABLES=['issuer_events','issuer_coverage','company_watches','company_event_reads','company_digest_state','company_fact_evidence'];
 const SERVICE_ONLY=['issuer_events','company_digest_state','company_fact_evidence'];
@@ -429,8 +431,23 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   for(let i=0;i<2;i++){   // replay in lock order: the fence migration supersedes the 3-arg evidence writer and the evidence check
    await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
    await expect(replayMigration(admin,readFileSync(FENCE_MIGRATION,'utf8'))).resolves.toBeUndefined();
+   await expect(replayMigration(admin,readFileSync(LOOKUP_MIGRATION,'utf8'))).resolves.toBeUndefined();
+   await expect(replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
   }
   expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
+ });
+
+ it('retry migration preserves the sweep function identity, owner, ACL and security on replay',async()=>{
+  const properties=()=>fx.q(`select oid, proowner, proacl::text, prosecdef, provolatile, proconfig, prolang
+   from pg_proc where oid='public.company_sweep_due(timestamptz,timestamptz,int,text)'::regprocedure`);
+  const before=await properties();
+  for(let n=0;n<2;n++){
+   await replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'));
+   expect(await properties()).toEqual(before);
+  }
+  for(const role of ['anon','authenticated'] as const)
+   expect((await fails(inTx(admin,{role},tx=>tx.c.query(`select public.company_sweep_due(now(),now(),1)`)))).code).toBe('42501');
+  expect(await inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select public.company_sweep_due(now(),now(),0) v`)).rows[0].v)).toEqual([]);
  });
 
  it('company_canonical_json is byte-identical to canonicalJson; replace stores eventIdOf / payloadHashOf',async()=>{
@@ -480,6 +497,32 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   await fx.publish(s.iss,'US',s.factsBatch,[{available:'2024-05-01',facts:[{period_start:'2024-01-01',period_end:'2024-03-31',duration:'3M'}]}]);
   const a3=await begin(s.iss);
   expect(await code(replace({iss:s.iss,batch:b,attempt:a3,rev:1,events:[ev]}))).toMatchObject({message:'stale_computation'});
+ });
+
+ it.each([{duration:'9M'},{statement:'CF'}])('digest preserves SQL revision guards while withholding incompatible adjacent facts: %j',async change=>{
+  const s=await fx.stream([
+   {available:'2024-02-01',facts:[{value:'100'}]},
+   {available:'2024-03-01',facts:[{value:'110',...change}]},
+   {available:'2024-04-01',facts:[{value:'120',...change}]},
+  ]);
+  const digest=()=>runCompanyDigest({db:pgCompanyDb(admin),tables:pgTableClient(admin),facts:pgFactsDb(admin),
+   readSnapshot:snapshotReader(pgRpcClient(admin,'service_role')),reader:memorySnapshotObjectStore(new Map()),
+   now:()=>new Date(),deadline:null,codeVersion:'revision-guard-regression'},{mode:'full',issuerIds:[s.iss],market:'US'});
+  const first=await digest();
+  expect(first.status).toBe('success');expect(first.errors).toEqual([]);
+  const before=await events(s.iss);
+  expect(before.filter(e=>e.kind==='filing_published')).toHaveLength(3);
+  const revision=before.filter(e=>e.kind==='fact_revised');
+  expect(revision).toHaveLength(1);
+  expect(revision[0].natural_key).toBe('revenue:2023-01-01:2023-12-31:consolidated:USD:2024-04-01');
+  // A forged cross-semantics edge still fails the unchanged real SQL guard.
+  const a=await begin(s.iss),b=await fx.batch();
+  const malformed=await revisedEvent(s.factIds[0][0],s.factIds[1][0]);
+  expect(await code(replace({iss:s.iss,batch:b,attempt:a,rev:1,events:[malformed]}))).toMatchObject({message:'invalid_event',detail:'payload: from/to and the payload are not one natural key'});
+  const second=await digest();expect(second.status).toBe('success');
+  expect(second.detail.events).toMatchObject({changed:0,retired:0,revived:0});
+  const after=await events(s.iss);
+  expect(after.map(({rb,...e})=>e)).toEqual(before.map(({rb,...e})=>e));
  });
 
  it('invalid_event: shape, kinds, cross-stream, visibility (quarantined, older generation, future), value_text, lengths, duplicates, filing consistency, relChange, coverage, rebuild reuse',async()=>{
@@ -769,6 +812,41 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await code(put([row(f0,0)],a2,1))).toMatchObject({message:'stale_computation',code:'55P03'});
   expect(await stored()).toEqual([f0,f1].sort());
   expect(await put([row(f0,0)],a2,2)).toEqual({upserted:1,deleted:1});   // the current rev with the owning attempt passes
+ });
+
+ it('evidence lookup: large whole-stream replacement preserves ownership, atomic rejection and lock serialization',async()=>{
+  const sha=hex('bulk-evidence');const loc=(i:number)=>`bulk/${i}`;const rh=(i:number)=>hex(`${sha}\n${loc(i)}`);
+  for(const market of ['US','CN'] as const){
+   const s=await fx.stream([{facts:Array.from({length:1000},(_,i)=>({concept:`bulk_${i}`,raw_hash:rh(i)}))}],market);
+   const source=market==='US'?'edgar':'tushare';
+   const rows=s.factIds[0].map((id,i)=>({fact_id:id,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`${source}/${s.iss}/${sha}.json`,hash_locator:loc(i),json_pointer:`/facts/${i}`,field:null,source,api:null,url:null,params:null,captured_at:null,http_status:null,page:null,index_version:'company-evidence/1'}));
+   const attempt=await fx.one(`select public.begin_company_digest_attempt($1,$2,now()) v`,[s.iss,market]);
+   const put=(input:unknown[],iss=s.iss,m=market)=>inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select public.replace_company_fact_evidence($1,$2,$3,$5,$4::jsonb) v`,[iss,m,attempt,JSON.stringify(input),await fx.rev(iss,m)])).rows[0].v);
+   const stored=()=>fx.q(`select fact_id::text,verified_at::text from public.company_fact_evidence where issuer_id=$1 and market=$2 order by fact_id`,[s.iss,market]);
+   expect(await put(rows)).toEqual({upserted:1000,deleted:0});const before=await stored();
+   // Last-row failure must retain all previously committed evidence, including timestamps.
+   const wrongStream=await fx.stream([{facts:[{raw_hash:rh(0)}]}],market);
+   const bad={...rows[0],fact_id:wrongStream.factIds[0][0]};
+   for(const invalid of [bad,{...rows[0],fact_id:randomUUID()}]){
+    expect(await fails(put([...rows.slice(0,100),invalid]))).toMatchObject({message:'invalid_evidence',code:'22023',detail:'fact_id: not a fact of this stream'});
+    expect(await stored()).toEqual(before);
+   }
+   const otherMarket=market==='US'?'CN':'US';await fx.scope(s.iss,otherMarket);
+   expect(await fails(put([rows[0]],s.iss,otherMarket))).toMatchObject({message:'invalid_evidence',code:'22023',detail:'fact_id: not a fact of this stream'});
+   expect(await stored()).toEqual(before);
+   // Both the stream fence and conflicting evidence rows can block; release then complete.
+   for(const lock of ['scope','evidence'] as const){
+    const blocker=await openTx(admin,{});
+    try{
+     if(lock==='scope')await blocker.c.query(`select 1 from public.fact_sync_scope where issuer_id=$1 and market=$2 for update`,[s.iss,market]);
+     else await blocker.c.query(`select 1 from public.company_fact_evidence where fact_id=$1 for update`,[rows[0].fact_id]);
+     const pending=put(rows.slice(0,500));await stillBlockedBehind(admin,blocker.pid,pending);
+     await blocker.commit();expect(await pending).toEqual({upserted:500,deleted:lock==='scope'?500:0});
+    }finally{await blocker.rollback();}
+   }
+   expect((await stored()).length).toBe(500);
+   expect(await put([])).toEqual({upserted:0,deleted:500});expect(await stored()).toEqual([]);
+  }
  });
 
  it('company_read_snapshot: read_facts envelope and the stream filings in one statement; ok facts only for every role; counts and citation computed in-statement',async()=>{

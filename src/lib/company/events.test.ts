@@ -29,6 +29,17 @@ describe('deriveIssuerEvents',()=>{
    payload:{concept:'revenue',statement:'IS',periodStart:'2023-01-01',periodEnd:'2023-12-31',duration:'12M',consolidation:'consolidated',unit:'USD',from:{factId:r1.fact_id,value:'100',filingId:f1.filingId,availableDate:'2024-02-01'},to:{factId:r2.fact_id,value:'120',filingId:f2.filingId,availableDate:'2025-02-01'},relChange:'0.2'},meta:{}}]);
   expect(ev.map(e=>[e.occurred_on,e.kind,e.natural_key])).toEqual([...ev].map(e=>[e.occurred_on,e.kind,e.natural_key]).sort((a,b)=>a.join('|')<b.join('|')?-1:1));
  });
+ it.each([{duration:'9M' as const},{statement:'CF' as const}])('withholds incompatible adjacent revisions without bridging or changing identities: %j',change=>{
+  const a=filingSummary({availableDate:'2024-02-01'}),b=filingSummary({availableDate:'2024-03-01'}),c=filingSummary({availableDate:'2024-04-01'});
+  const ra=factRow(a,{value:'100'}),rb=factRow(b,{value:'110',...change}),rc=factRow(c,{value:'120',...change});
+  const ev=derive([ra,rb,rc],[a,b,c]);
+  const revisions=kinds(ev,'fact_revised');
+  expect(revisions).toHaveLength(1);
+  expect(revisions[0]).toMatchObject({natural_key:'revenue:2023-01-01:2023-12-31:consolidated:USD:2024-04-01',payload:{from:{factId:rb.fact_id},to:{factId:rc.fact_id},...('duration' in change?{duration:change.duration}:{statement:change.statement})}});
+  expect(kinds(ev,'filing_published')).toHaveLength(3);
+  // Returning to A's semantics must not invent an A→C edge across B.
+  expect(kinds(derive([ra,rb,{...rc,statement:ra.statement,duration:ra.duration}],[a,b,c]),'fact_revised')).toEqual([]);
+ });
  it('same value disclosed again (same day or later) → no fact_revised',()=>{
   const f1=filingSummary({availableDate:'2024-02-01'}),f2=filingSummary({availableDate:'2024-02-01'}),f3=filingSummary({availableDate:'2025-02-01'});
   const ev=derive([factRow(f1,{value:'100'}),factRow(f2,{value:'100.00'}),factRow(f3,{value:'1e2'})],[f1,f2,f3]);

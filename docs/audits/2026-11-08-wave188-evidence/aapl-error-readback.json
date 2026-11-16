@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-11-08T16:02:10.985308+00:00",
+  "batch": "bd4106c2-bee2-4c6e-a649-3aabf8caffc3",
+  "source": "production SQL Editor read-only exact-message comparison",
+  "status": "partial",
+  "code": "evidence_index_failed",
+  "stage": "statement_timeout",
+  "message_length": 44,
+  "interpretation": "Immediate database cancellation confirmed; historical wait/CPU/statement stage unresolved."
+}

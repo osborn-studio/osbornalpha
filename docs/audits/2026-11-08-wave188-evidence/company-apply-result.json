@@ -1,0 +1,75 @@
+{
+  "before": [
+    {
+      "issuer_id": "19193673-de58-4e27-9df3-9008654c2902",
+      "market": "US",
+      "latest_period_end": "2027-07-17",
+      "facts_count": 2127,
+      "based_on_rev": 1
+    },
+    {
+      "issuer_id": "f5504d31-f09a-4963-9128-2c777a83fb41",
+      "market": "US",
+      "latest_period_end": "2026-10-23",
+      "facts_count": 3000,
+      "based_on_rev": 1
+    }
+  ],
+  "after": [
+    {
+      "issuer_id": "16a8c8be-c550-43d9-9e73-d6da958aa394",
+      "market": "US",
+      "latest_period_end": "2025-12-31",
+      "facts_count": 709,
+      "based_on_rev": 1
+    },
+    {
+      "issuer_id": "19193673-de58-4e27-9df3-9008654c2902",
+      "market": "US",
+      "latest_period_end": "2026-09-30",
+      "facts_count": 2127,
+      "based_on_rev": 1
+    },
+    {
+      "issuer_id": "f5504d31-f09a-4963-9128-2c777a83fb41",
+      "market": "US",
+      "latest_period_end": "2026-10-23",
+      "facts_count": 3000,
+      "based_on_rev": 1
+    }
+  ],
+  "batchId": "bd4106c2-bee2-4c6e-a649-3aabf8caffc3",
+  "at": "2026-11-08T15:59:18.373Z",
+  "dryRun": false,
+  "status": "partial",
+  "streams": [
+    {
+      "issuerId": "16a8c8be-c550-43d9-9e73-d6da958aa394",
+      "outcome": "changed",
+      "events": 59,
+      "evidence": {
+        "indexed": 709,
+        "facts": 709
+      }
+    },
+    {
+      "issuerId": "19193673-de58-4e27-9df3-9008654c2902",
+      "outcome": "unchanged",
+      "events": 299,
+      "evidence": {
+        "indexed": 2127,
+        "facts": 2127
+      }
+    },
+    {
+      "issuerId": "f5504d31-f09a-4963-9128-2c777a83fb41",
+      "outcome": "failed",
+      "code": "evidence_index_failed",
+      "events": 0,
+      "evidence": null
+    }
+  ],
+  "errorCodes": [
+    "evidence_index_failed"
+  ]
+}

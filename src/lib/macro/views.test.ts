@@ -10,6 +10,7 @@ import type {MemoryMacroDb} from './memory-db';
 import {publishRegion} from './snapshots';
 import {US_FIXTURE,seedCatalog,seedPoints,seedRetrieval,yoyPoints} from './testing/seed';
 import {changeOf,overviewEnvelope,scaleBy100} from './views';
+import {OverviewFactsCache} from './overview-facts-cache';
 import type {ViewDeps} from './views';
 
 const TODAY='2026-11-06';
@@ -102,6 +103,93 @@ describe('overviewEnvelope',()=>{
   expect(calls.observationsByIds).toBe(1);
   expect(calls.retrievalsByIds??0).toBe(0);
   expect(calls.seriesHistory??0).toBe(0);
+ });
+ it('measures repeated full overview reads while collection freshness remains live',async()=>{
+  const {db,tables}=await setup();await publish(db);await publish(db);
+  const calls:Record<string,number>={};
+  const counted=new Proxy(db,{get(t,k,r){const v=Reflect.get(t,k,r);return typeof v!=='function'?v:(...a:unknown[])=>{calls[String(k)]=(calls[String(k)]??0)+1;return v.apply(t,a);};}}) as MacroDb;
+  let collectionReads=0;
+  const liveTables={...tables,select:async(...args:Parameters<typeof tables.select>)=>{collectionReads++;return tables.select(...args);}};
+  const deps:ViewDeps={db:counted,tables:liveTables,now:()=>NOW,factsCache:new OverviewFactsCache()};
+  const first=await overviewEnvelope(deps,'US',TODAY);
+  expect(calls).toMatchObject({activeSnapshot:1,previousSnapshot:1,publishState:1,observationsByIds:2,retrievalsByIds:1});
+  expect(collectionReads).toBe(2);collectionReads=0;
+  for(const k of Object.keys(calls))calls[k]=0;
+  await recordAttempt(tables,'macro.fred',{ok:false,cadence:'daily',now:NOW});
+  const second=await overviewEnvelope(deps,'US',TODAY);
+  expect(collectionReads).toBe(2);
+  expect(second.indicators).toEqual(first.indicators);
+  expect(second.collection[0].lastAttemptAt).toBe(NOW.toISOString());
+  expect(second.collection[0].lastAttemptAt).not.toBe(first.collection[0].lastAttemptAt);
+  expect(calls).toMatchObject({activeSnapshot:1,previousSnapshot:1,publishState:1,observationsByIds:0,retrievalsByIds:0});
+ });
+ it('invalidates on day, compact, active metadata and independently changed previous snapshot',async()=>{
+  const {db,tables}=await setup();await publish(db);await publish(db);
+  let activePatch={},previousPatch={},reads=0;
+  const counted=new Proxy(db,{get(t,k,r){
+   if(k==='activeSnapshot')return async(region:Parameters<MacroDb['activeSnapshot']>[0])=>({...await t.activeSnapshot(region),...activePatch});
+   if(k==='previousSnapshot')return async(region:Parameters<MacroDb['previousSnapshot']>[0],before:string)=>({...await t.previousSnapshot(region,before),...previousPatch});
+   if(k==='observationsByIds')return (ids:string[])=>{reads++;return t.observationsByIds(ids);};
+   const v=Reflect.get(t,k,r);return typeof v==='function'?v.bind(t):v;
+  }}) as MacroDb;
+  const deps:ViewDeps={db:counted,tables,factsCache:new OverviewFactsCache()};
+  const read=()=>overviewEnvelope(deps,'US',TODAY);
+  await read();const cold=reads;await read();expect(reads).toBe(cold);
+  const future=await overviewEnvelope(deps,'US','2027-12-31');expect(reads).toBeGreaterThan(cold);
+  expect(future.indicators.find(r=>r.series_id==='US_CPI_YOY')?.timeliness).toBe('late');
+  await overviewEnvelope(deps,'US',TODAY,{compact:true});let before=reads;
+  for(const patch of [{revision:999},{status:'superseded'},{snapshot_id:'replacement'},{catalog_version:'next'},{methodology_version:'next'}]){
+   activePatch=patch;await read();expect(reads).toBeGreaterThan(before);before=reads;
+  }
+  activePatch={};previousPatch={observation_ids:[]};
+  const changed=await read();expect(reads).toBeGreaterThan(before);
+  expect(changed.changes.counts.new_release).toBeGreaterThan(0);
+ });
+ it('never serves a cached active snapshot after it disappears or a new one is published',async()=>{
+  const {db,deps}=await setup();deps.factsCache=new OverviewFactsCache();
+  const first=await publish(db);await overviewEnvelope(deps,'US',TODAY);
+  const second=await publish(db);expect(second.snapshot_id).not.toBe(first.snapshot_id);
+  expect((await overviewEnvelope(deps,'US',TODAY)).snapshotId).toBe(second.snapshot_id);
+  const unavailable={...deps,db:new Proxy(db,{get(t,k,r){if(k==='activeSnapshot')return async()=>null;const v=Reflect.get(t,k,r);return typeof v==='function'?v.bind(t):v;}})};
+  expect((await overviewEnvelope(unavailable,'US',TODAY)).snapshotId).toBeNull();
+ });
+ it('retries failed and incomplete fact reads without poisoning the snapshot cache',async()=>{
+  const {db,deps}=await setup();await publish(db);deps.factsCache=new OverviewFactsCache();
+  const original=db.observationsByIds.bind(db);let failure:'throw'|'partial'|null='throw';
+  db.observationsByIds=async ids=>{if(failure==='throw')throw new Error('temporary');const rows=await original(ids);return failure==='partial'?rows.slice(1):rows;};
+  await expect(overviewEnvelope(deps,'US',TODAY)).rejects.toThrow('temporary');
+  failure='partial';await expect(overviewEnvelope(deps,'US',TODAY)).rejects.toThrow('incomplete_overview_snapshot');
+  failure=null;expect((await overviewEnvelope(deps,'US',TODAY)).snapshotId).not.toBeNull();
+  db.activeSnapshot=async()=>{throw new Error('selection unavailable');};
+  await expect(overviewEnvelope(deps,'US',TODAY)).rejects.toThrow('selection unavailable');
+ });
+ it('does not cache incomplete ancestor or retrieval evidence',async()=>{
+  const {db,deps}=await setup();await publish(db);deps.factsCache=new OverviewFactsCache();
+  const observations=db.observationsByIds.bind(db),retrievals=db.retrievalsByIds.bind(db);
+  let failAncestors=true,failRetrievals=false,reads=0;
+  db.observationsByIds=async ids=>{reads++;return failAncestors&&reads===2?[]:observations(ids);};
+  db.retrievalsByIds=async ids=>failRetrievals?[]:retrievals(ids);
+  await expect(overviewEnvelope(deps,'US',TODAY)).rejects.toThrow('incomplete_overview_provenance');
+  failAncestors=false;failRetrievals=true;
+  await expect(overviewEnvelope(deps,'US',TODAY)).rejects.toThrow('incomplete_overview_provenance');
+  failRetrievals=false;const result=await overviewEnvelope(deps,'US',TODAY);
+  expect(result.indicators.find(r=>r.series_id==='US_CPI_YOY')?.evidence.length).toBeGreaterThan(0);
+ });
+ it('invalidates cached facts on input revision and bypasses all tiers when publication state is unknown',async()=>{
+  const {db,deps}=await setup();await publish(db);
+  const get=db.publishState.bind(db);let inputRevision=100,invalid=false,unavailable=false;
+  db.publishState=async region=>{if(unavailable)throw new Error('offline');return {...await get(region),inputRevision:invalid?NaN:inputRevision};};
+  const cache=new OverviewFactsCache();let lookups=0;
+  deps.factsCache={get:(key,load)=>{lookups++;return cache.get(key,load);}};
+  const observations=db.observationsByIds.bind(db);let reads=0;
+  db.observationsByIds=async ids=>{reads++;return observations(ids);};
+  await overviewEnvelope(deps,'US',TODAY);const cold=reads;
+  await overviewEnvelope(deps,'US',TODAY);expect(reads).toBe(cold);
+  inputRevision++;await overviewEnvelope(deps,'US',TODAY);expect(reads).toBeGreaterThan(cold);
+  const before=reads,count=lookups;invalid=true;
+  await overviewEnvelope(deps,'US',TODAY);expect(lookups).toBe(count);expect(reads).toBeGreaterThan(before);
+  invalid=false;unavailable=true;const unavailableBefore=reads;
+  await overviewEnvelope(deps,'US',TODAY);expect(lookups).toBe(count);expect(reads).toBeGreaterThan(unavailableBefore);
  });
  it('reads exactly the frozen ids (manifest, history, previous manifest) and compact derived rows carry a null retrieval_id',async()=>{
   const {db,tables}=await setup();

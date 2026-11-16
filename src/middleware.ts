@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
+import { loginReturnDestination } from '@/lib/auth/return-destination';
 import { isScannerPath } from '@/lib/security/scanner-paths';
 
 /**
@@ -57,6 +58,9 @@ export async function middleware(request: NextRequest) {
     });
   }
 
+  // Public static web manifest: browsers fetch it without a session.
+  if (rawPathname === '/manifest.json') return NextResponse.next({ request });
+
   const isEnPrefixed = EN_PREFIX.test(rawPathname);
   const pathname = isEnPrefixed ? stripEnPrefix(rawPathname) : rawPathname;
 
@@ -65,7 +69,7 @@ export async function middleware(request: NextRequest) {
   // path. Locale preference is carried by the NEXT_LOCALE cookie, not the URL,
   // for anything behind the auth gate.
   if (isEnPrefixed && !isPublic(pathname)) {
-    return NextResponse.redirect(new URL(pathname, request.url));
+    return NextResponse.redirect(new URL(loginReturnDestination(pathname + request.nextUrl.search), request.url));
   }
 
   const response = isEnPrefixed
@@ -100,7 +104,7 @@ export async function middleware(request: NextRequest) {
   }
   if (!user && !isPublic(pathname)) {
     const url = new URL('/login', request.url);
-    url.searchParams.set('next', pathname);
+    url.searchParams.set('next', loginReturnDestination(pathname + request.nextUrl.search));
     return NextResponse.redirect(url);
   }
   return response;

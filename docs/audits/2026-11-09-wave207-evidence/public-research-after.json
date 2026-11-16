@@ -1,0 +1,166 @@
+{
+  "at": "2026-11-09T04:47:05.229Z",
+  "authenticated": false,
+  "checks": [
+    {
+      "path": "/api/companies?market=US&q=AAPL&pageSize=5",
+      "status": 200,
+      "ms": 1312,
+      "cacheControl": "public",
+      "bodyKeys": [
+        "total",
+        "conceptsTotal",
+        "rows"
+      ],
+      "state": null,
+      "kind": null,
+      "total": 1,
+      "errorCode": null,
+      "rows": [
+        {
+          "issuerId": "f5504d31-f09a-4963-9128-2c777a83fb41",
+          "market": "US",
+          "names": {
+            "zh": null,
+            "en": "Apple Inc."
+          },
+          "primaryTicker": "AAPL",
+          "tickers": [
+            "AAPL"
+          ],
+          "latestPeriodEnd": "2026-10-23",
+          "latestAvailableDate": "2026-11-03",
+          "conceptsCovered": 26,
+          "citationSummary": {
+            "linked": 0,
+            "pending": 0,
+            "edgar": 44
+          },
+          "scopeLastSuccessAt": "2026-11-07T07:52:21.357Z",
+          "scopeLastStatus": "success"
+        }
+      ],
+      "itemsCount": null
+    },
+    {
+      "path": "/api/companies?market=US&q=AAL&pageSize=5",
+      "status": 200,
+      "ms": 802,
+      "cacheControl": "public",
+      "bodyKeys": [
+        "total",
+        "conceptsTotal",
+        "rows"
+      ],
+      "state": null,
+      "kind": null,
+      "total": 1,
+      "errorCode": null,
+      "rows": [
+        {
+          "issuerId": "19193673-de58-4e27-9df3-9008654c2902",
+          "market": "US",
+          "names": {
+            "zh": null,
+            "en": "American Airlines Group Inc."
+          },
+          "primaryTicker": "AAL",
+          "tickers": [
+            "AAL"
+          ],
+          "latestPeriodEnd": "2026-09-30",
+          "latestAvailableDate": "2026-10-22",
+          "conceptsCovered": 17,
+          "citationSummary": {
+            "linked": 0,
+            "pending": 0,
+            "edgar": 46
+          },
+          "scopeLastSuccessAt": "2026-11-07T16:05:54.653Z",
+          "scopeLastStatus": "success"
+        }
+      ],
+      "itemsCount": null
+    },
+    {
+      "path": "/api/companies?market=US&q=NOAH&pageSize=5",
+      "status": 200,
+      "ms": 556,
+      "cacheControl": "public",
+      "bodyKeys": [
+        "total",
+        "conceptsTotal",
+        "rows"
+      ],
+      "state": null,
+      "kind": null,
+      "total": 1,
+      "errorCode": null,
+      "rows": [
+        {
+          "issuerId": "16a8c8be-c550-43d9-9e73-d6da958aa394",
+          "market": "US",
+          "names": {
+            "zh": null,
+            "en": "NOAH HOLDINGS LTD"
+          },
+          "primaryTicker": "NOAH",
+          "tickers": [
+            "NOAH"
+          ],
+          "latestPeriodEnd": "2025-12-31",
+          "latestAvailableDate": "2026-04-29",
+          "conceptsCovered": 22,
+          "citationSummary": {
+            "linked": 0,
+            "pending": 0,
+            "edgar": 10
+          },
+          "scopeLastSuccessAt": "2026-11-07T16:05:33.428Z",
+          "scopeLastStatus": "success"
+        }
+      ],
+      "itemsCount": null
+    },
+    {
+      "path": "/api/industries?scheme=sic&metric=member_count",
+      "status": 200,
+      "ms": 725,
+      "cacheControl": "public",
+      "bodyKeys": [
+        "methodVersion",
+        "runId",
+        "factsAsOf",
+        "historyClass",
+        "scheme",
+        "version",
+        "level",
+        "state",
+        "kind",
+        "datasetKey",
+        "preview",
+        "freshness",
+        "nodes"
+      ],
+      "state": "ok",
+      "kind": "navigation",
+      "total": null,
+      "errorCode": null,
+      "itemsCount": null
+    },
+    {
+      "path": "/api/industries?scheme=sw2021&metric=member_count",
+      "status": 403,
+      "ms": 376,
+      "cacheControl": "no-store",
+      "bodyKeys": [
+        "error"
+      ],
+      "state": null,
+      "kind": null,
+      "total": null,
+      "errorCode": "unlicensed",
+      "itemsCount": null
+    }
+  ]
+}

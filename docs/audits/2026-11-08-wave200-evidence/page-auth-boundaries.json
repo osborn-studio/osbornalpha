@@ -1,0 +1,30 @@
+{
+  "at": "2026-11-09T00:03:25.208Z",
+  "authenticated": false,
+  "rows": [
+    {
+      "path": "/intel/companies",
+      "status": 307,
+      "location": "/login?next=%2Fintel%2Fcompanies",
+      "cacheControl": "public, max-age=0, must-revalidate"
+    },
+    {
+      "path": "/intel/industries?scheme=sic&metric=member_count",
+      "status": 307,
+      "location": "/login?next=%2Fintel%2Findustries",
+      "cacheControl": "public, max-age=0, must-revalidate"
+    },
+    {
+      "path": "/stock/AAL",
+      "status": 307,
+      "location": "/login?next=%2Fstock%2FAAL",
+      "cacheControl": "public, max-age=0, must-revalidate"
+    },
+    {
+      "path": "/macro",
+      "status": 307,
+      "location": "/login?next=%2Fmacro",
+      "cacheControl": "public, max-age=0, must-revalidate"
+    }
+  ]
+}

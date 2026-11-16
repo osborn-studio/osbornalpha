@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server';
+import { loginReturnDestination } from '@/lib/auth/return-destination';
 import { sanitizeAnalyticsId } from '@/lib/analytics/auth-funnel';
 import { getServerSupabase } from '@/lib/supabase/server';
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const next = searchParams.get('next') || '/macro';
+  const requestedNext = searchParams.get('next');
+  // Recovery may finish on the reset screen; login returns intentionally exclude
+  // auth screens. Only these exact local paths bypass that loop prevention.
+  const next = requestedNext === '/reset-password' || requestedNext === '/en/reset-password'
+    ? requestedNext
+    : loginReturnDestination(requestedNext);
   const anonymousId = sanitizeAnalyticsId(searchParams.get('aid'));
 
   if (code) {

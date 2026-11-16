@@ -16,62 +16,69 @@ describe('company ↔ F4 contract',()=>{
  });
  it('strips a calibrated percentage after void while retaining F4 card semantics',()=>{
   const c=card();c.calibration='calibrated';c.lifecycle='void';c.display.percent=70;
-  const parsed=checkJudgmentsResponse(body(c),null);expect(parsed.ok).toBe(true);
+  const parsed=checkJudgmentsResponse(body(c),null,issuer);expect(parsed.ok).toBe(true);
   if(parsed.ok){expect(displayPercent(parsed.cards[0])).toBeNull();expect(visiblePercent(companyJudgmentCard(parsed.cards[0]))).toBeNull();}
  });
  it('accepts F4 serialization, including omitted uncalibrated percent and null input href',()=>{
   const c=card();expect(c.display).not.toHaveProperty('percent');
-  const r=checkJudgmentsResponse(body(c),null);
+  const r=checkJudgmentsResponse(body(c),null,issuer);
   expect(r.ok).toBe(true);
   if(r.ok){expect(r.cards[0].inputs[0].href).toBeNull();expect(displayPercent(r.cards[0])).toBeNull();expect(visiblePercent(r.cards[0])).toBeNull();expect(cardBody(r.cards[0],'en').type).toBe('band');}
  });
+ it.each([null,'2026-06-30'])('rejects a response for a different requested issuer with asOf=%s',asOf=>{
+  const otherIssuer='22222222-2222-4222-8222-222222222222';
+  for(const cards of [[card()],[]]){
+   const response={...body(card(),asOf),cards};
+   expect(checkJudgmentsResponse(response,asOf,otherIssuer)).toEqual({ok:false,reason:'subject_mismatch'});
+  }
+ });
  it('rejects view and replay echoes',()=>{
-  expect(checkJudgmentsResponse(body(card()),'2026-06-30')).toEqual({ok:false,reason:'view_mismatch'});
-  expect(checkJudgmentsResponse(body(card(),'2026-06-30'),'2026-06-29')).toEqual({ok:false,reason:'asof_mismatch'});
+  expect(checkJudgmentsResponse(body(card()),'2026-06-30',issuer)).toEqual({ok:false,reason:'view_mismatch'});
+  expect(checkJudgmentsResponse(body(card(),'2026-06-30'),'2026-06-29',issuer)).toEqual({ok:false,reason:'asof_mismatch'});
  });
  it('rejects late registration, settlement and calibration timestamps',()=>{
   const c=card();c.registered_at='2026-07-01T00:00:00Z';
-  expect(checkJudgmentsResponse(body(c,'2026-06-30'),'2026-06-30')).toEqual({ok:false,reason:'post_cutoff'});
+  expect(checkJudgmentsResponse(body(c,'2026-06-30'),'2026-06-30',issuer)).toEqual({ok:false,reason:'post_cutoff'});
   const s=card() as typeof c&{settlement:unknown};s.settlement={kind:'settled',outcome:'hit',realized:null,settled_at:'2026-07-01T00:00:00Z',evidence_summary:{zh:'结果',en:'result'}};
-  expect(checkJudgmentsResponse(body(s,'2026-06-30'),'2026-06-30')).toEqual({ok:false,reason:'post_cutoff'});
+  expect(checkJudgmentsResponse(body(s,'2026-06-30'),'2026-06-30',issuer)).toEqual({ok:false,reason:'post_cutoff'});
   const cal=card() as typeof c&{calibration_summary:unknown};cal.calibration_summary={n_independent:0,n_total:0,threshold_n:30,brier:null,brier_skill:null,ece_raw_holdout:null,valid_until:'2026-07-30T00:00:00Z',hit_rate:null,href:'/method',computed_at:'2026-07-01T00:00:00Z'};
-  expect(checkJudgmentsResponse(body(cal,'2026-06-30'),'2026-06-30')).toEqual({ok:false,reason:'post_cutoff'});
+  expect(checkJudgmentsResponse(body(cal,'2026-06-30'),'2026-06-30',issuer)).toEqual({ok:false,reason:'post_cutoff'});
  });
  it('F4 serializes calibration provenance for replay validation',()=>{
   const c=serializeBody(toCard(envelope({calibration:{computed_at:'2026-06-01T00:00:00Z',valid_until:'2026-07-30T00:00:00Z'}}),{title:{zh:'测试',en:'Test'},now:'2026-06-30T23:59:59.999Z'}));
   expect(c.calibration_summary?.computed_at).toBe('2026-06-01T00:00:00Z');
-  expect(checkJudgmentsResponse(body(c,'2026-06-30'),'2026-06-30').ok).toBe(true);
+  expect(checkJudgmentsResponse(body(c,'2026-06-30'),'2026-06-30',issuer).ok).toBe(true);
  });
  it('accepts zero counts and every F4 nullable display and settlement variant',()=>{
   const c=card() as Record<string,any>;
   c.display.value=null;
   c.calibration_summary={n_independent:0,n_total:0,threshold_n:0,brier:null,brier_skill:null,ece_raw_holdout:null,valid_until:'2026-07-30T00:00:00Z',hit_rate:null,href:'/method'};
   c.settlement={kind:'void',outcome:null,realized:null,settled_at:'2026-03-02T00:00:00Z',evidence_summary:{zh:'无效',en:'void'}};
-  expect(checkJudgmentsResponse(body(c),null).ok).toBe(true);
-  c.kind='interval';c.display.value=[-1,2];expect(checkJudgmentsResponse(body(c),null).ok).toBe(true);
+  expect(checkJudgmentsResponse(body(c),null,issuer).ok).toBe(true);
+  c.kind='interval';c.display.value=[-1,2];expect(checkJudgmentsResponse(body(c),null,issuer).ok).toBe(true);
  });
  it('accepts the F4 self_assessed and nullable condition variants without inventing a percentage',()=>{
   const c=card() as Record<string,any>;c.calibration='self_assessed';c.condition=null;c.calibration_summary=null;c.display.value=null;
-  expect(checkJudgmentsResponse(body(c),null).ok).toBe(true);
+  expect(checkJudgmentsResponse(body(c),null,issuer).ok).toBe(true);
   expect(displayPercent(c as any)).toBeNull();
  });
  it.each(['financial_fact','financial_metric','macro_observation','macro_snapshot','price_bar','table_rows','judgment','legacy_fill','document_span'])('accepts F4 input kind %s with typed origin',kind=>{
   const c=card() as Record<string,any>;c.inputs[0]={kind,ref:{},available_at:'2026-01-02T00:00:00Z',origin:{publisher:'x',adapter:'x',locator:'x'},href:null};
-  expect(checkJudgmentsResponse(body(c),null).ok).toBe(true);
+  expect(checkJudgmentsResponse(body(c),null,issuer).ok).toBe(true);
  });
  it.each([{range:[]},{range:[2,1]},{range:[0,1,2]}])('rejects invalid interval bounds $range',({range})=>{
   const c=card() as Record<string,any>;c.kind='interval';c.display.value=range;
-  expect(checkJudgmentsResponse(body(c),null)).toEqual({ok:false,reason:'malformed'});
+  expect(checkJudgmentsResponse(body(c),null,issuer)).toEqual({ok:false,reason:'malformed'});
  });
  it('rejects unknown fields throughout the typed F4 card',()=>{
   for(const mutate of [(c:Record<string,any>)=>{c.unknown=true;},(c:Record<string,any>)=>{c.subject.unknown=true;},(c:Record<string,any>)=>{c.inputs[0].origin.unknown=true;},(c:Record<string,any>)=>{c.settlement={kind:'settled',outcome:'hit',realized:{value:'',unit:null,from:null,to:null,label_policy:'first_observed'},settled_at:'2026-03-02T00:00:00Z',evidence_summary:{zh:'x',en:'x'}};}]){
-   const c=card() as Record<string,any>;mutate(c);expect(checkJudgmentsResponse(body(c),null)).toEqual({ok:false,reason:'malformed'});
+   const c=card() as Record<string,any>;mutate(c);expect(checkJudgmentsResponse(body(c),null,issuer)).toEqual({ok:false,reason:'malformed'});
   }
  });
  it('requires merge metadata to name the original issuer',()=>{
   const c=card() as Record<string,any>;c.subject.key='22222222-2222-4222-8222-222222222222';c.merged_from='33333333-3333-4333-8333-333333333333';
-  expect(checkJudgmentsResponse(body(c),null)).toEqual({ok:false,reason:'malformed'});
-  c.merged_from=c.subject.key;expect(checkJudgmentsResponse(body(c),null).ok).toBe(true);
+  expect(checkJudgmentsResponse(body(c),null,issuer)).toEqual({ok:false,reason:'malformed'});
+  c.merged_from=c.subject.key;expect(checkJudgmentsResponse(body(c),null,issuer).ok).toBe(true);
  });
  it.each([
   ['subject key',c=>{c.subject.key=7;}],['method href',c=>{c.methodology.href='javascript:alert(1)';}],
@@ -80,6 +87,6 @@ describe('company ↔ F4 contract',()=>{
   ['uncalibrated percent',c=>{c.display.percent=70;}],['display band',c=>{c.display.band='huge';}],
  ] as Array<[string,(c:Record<string,any>)=>void]>)('fails closed on incompatible %s',(_name,mut)=>{
   const c=card() as unknown as Record<string,any>;mut(c);
-  expect(checkJudgmentsResponse(body(c),null)).toEqual({ok:false,reason:'malformed'});
+  expect(checkJudgmentsResponse(body(c),null,issuer)).toEqual({ok:false,reason:'malformed'});
  });
 });

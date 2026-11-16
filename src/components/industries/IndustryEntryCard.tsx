@@ -1,14 +1,14 @@
 'use client';
 // src/components/industries/IndustryEntryCard.tsx
 // "/intel" research-tab entry card (spec §8.1; canvas "Entry"): title, scope line, and — when the
-// public list answers — facts-as-of and freshness. A 403 says the SW licence is pending; any other
-// failure just omits the status line (the card stays a plain link).
+// public SW list answers — facts-as-of and freshness. Each market has an explicit scheme link;
+// a failed SW status request never hides or redirects either entry.
 import {useEffect,useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
 import type {FreshnessStatus} from '@/lib/dq/freshness';
 import {FreshnessChip} from './FreshnessChip';
-import {INDUSTRIES_PATH} from './hrefs';
+import {INDUSTRIES_PATH,hrefWith} from './hrefs';
 
 type Status={kind:'ok';factsAsOf:string|null;freshness:FreshnessStatus}|{kind:'unlicensed'}|{kind:'none'};
 
@@ -28,11 +28,21 @@ export function IndustryEntryCard(){
     return ()=>ctrl.abort();
   },[]);
   return (
-    <Link href={INDUSTRIES_PATH} data-entry="industries" className="card-base flex flex-col gap-1.5 text-text hover:border-[var(--border-active)] hover:no-underline" style={{marginBottom:0}}>
-      <div className="flex items-center gap-2"><span className="text-sm font-semibold">{t('title')}</span><span className="text-xs text-text-dim">{t('titleEn')}</span><span aria-hidden="true" className="ml-auto text-accent">→</span></div>
-      <span className="text-xs text-text-dim">{t('desc')}</span>
-      {status.kind==='ok'&&<span className="flex items-center gap-2 text-xs text-text-dim">{status.factsAsOf&&<span className="font-mono tabular-nums">{t('factsAsOf',{date:status.factsAsOf})}</span>}<FreshnessChip status={status.freshness} /></span>}
-      {status.kind==='unlicensed'&&<span className="text-xs text-warn">{t('unlicensed')}</span>}
-    </Link>
+    <section data-entry="industries" className="card-base flex flex-col gap-3" style={{marginBottom:0}}>
+      <h2 className="m-0 flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{t('title')}</span><span className="text-xs font-normal text-text-dim">{t('titleEn')}</span></h2>
+      <p className="m-0 text-xs text-text-dim">{t('desc')}</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:'sic',metric:'member_count'})} className="flex flex-col gap-1.5 rounded border border-border p-3 text-text hover:border-[var(--border-active)] hover:no-underline">
+          <span className="flex items-center gap-2 text-sm font-semibold">{t('sicTitle')}<span aria-hidden="true" className="ml-auto text-accent">→</span></span>
+          <span className="text-xs text-text-dim">{t('sicDesc')}</span>
+        </Link>
+        <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:'sw2021',metric:'member_count'})} className="flex flex-col gap-1.5 rounded border border-border p-3 text-text hover:border-[var(--border-active)] hover:no-underline">
+          <span className="flex items-center gap-2 text-sm font-semibold">{t('swTitle')}<span aria-hidden="true" className="ml-auto text-accent">→</span></span>
+          <span className="text-xs text-text-dim">{t('swDesc')}</span>
+          {status.kind==='ok'&&<span className="flex flex-wrap items-center gap-2 text-xs text-text-dim">{status.factsAsOf&&<span className="font-mono tabular-nums">{t('factsAsOf',{date:status.factsAsOf})}</span>}<FreshnessChip status={status.freshness} /></span>}
+          {status.kind==='unlicensed'&&<span className="text-xs text-warn">{t('unlicensed')}</span>}
+        </Link>
+      </div>
+    </section>
   );
 }

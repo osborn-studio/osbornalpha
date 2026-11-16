@@ -15,7 +15,7 @@ export function JudgmentsView({ issuerId, asOf }: { issuerId: string | null; asO
   if (!enabled) return <Callout><strong className="text-[var(--text)]">{t('emptyTitle')}</strong> {t('empty')}</Callout>;
   if (state.status === 'loading' || state.status === 'idle') return <LoadingGrid />;
   if (state.status === 'error') return <ErrorCard message={t('loadFailed', { code: state.code })} onRetry={retry} />;
-  const checked = checkJudgmentsResponse(state.data, asOf);
+  const checked = checkJudgmentsResponse(state.data, asOf, issuerId);
   if (!checked.ok) return <ErrorCard message={asOf ? t('replayFailed') : t('loadFailed', { code: checked.reason })} onRetry={retry} />;
   if (checked.cards.length === 0) return <Callout>{t('none')}</Callout>;
   return <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{checked.cards.map((c) => <JudgmentCard key={c.judgment_id} card={companyJudgmentCard(c)} />)}</div>;

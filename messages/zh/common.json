@@ -6,6 +6,8 @@
   "nav": {
     "macro": "宏观",
     "watchlist": "股票池",
+    "industries": "行业研究（美国 SIC）",
+    "companies": "公司研究",
     "intel": "情报",
     "portfolio": "我的投资",
     "analyst": "分析",

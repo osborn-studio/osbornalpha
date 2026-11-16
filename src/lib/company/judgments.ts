@@ -6,7 +6,7 @@ import type {Bilingual,CalibrationState,Horizon,InputKind,Origin,Realized,Subjec
 import {JUDGMENT_TYPES,UUID_RE} from '@/lib/judgments/wire';
 
 export type JudgmentCardDto=AnyCard;
-export type JudgmentsCheck={ok:true;cards:JudgmentCardDto[]}|{ok:false;reason:'view_mismatch'|'asof_mismatch'|'post_cutoff'|'malformed'};
+export type JudgmentsCheck={ok:true;cards:JudgmentCardDto[]}|{ok:false;reason:'subject_mismatch'|'view_mismatch'|'asof_mismatch'|'post_cutoff'|'malformed'};
 export function judgmentsUrl(issuerId:string,asOf:string|null):string{
  const q=new URLSearchParams({subject_type:'issuer',subject_key:issuerId,view:asOf?'as_known':'latest'});
  if(asOf)q.set('asOf',asOf);
@@ -88,8 +88,9 @@ function normalizeCard(v:unknown):JudgmentCardDto|null{
  if(v.kind!=='probability'&&display.percent!=null)return null;
  return v as unknown as JudgmentCardDto;
 }
-export function checkJudgmentsResponse(body:unknown,asOf:string|null):JudgmentsCheck{
+export function checkJudgmentsResponse(body:unknown,asOf:string|null,issuerId:string):JudgmentsCheck{
  if(!keys(body,ENVELOPE_KEYS)||!validSubject(body.subject)||!nullable(body.codeVersion,str)||!Array.isArray(body.cards))return {ok:false,reason:'malformed'};
+ if(body.subject.key!==issuerId)return {ok:false,reason:'subject_mismatch'};
  if(body.view!==(asOf?'as_known':'latest'))return {ok:false,reason:'view_mismatch'};
  if(body.asOf!==asOf)return {ok:false,reason:'asof_mismatch'};
  const cards:JudgmentCardDto[]=[];

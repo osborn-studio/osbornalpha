@@ -59,8 +59,9 @@ export async function markRowsRead(rows:{eventId:string;issuerId:string;read:boo
  for(const b of readBatches(rows))inserted+=(await markRead(b.issuerId,b.eventIds)).inserted;
  return inserted;
 }
-/** true / false from the inbox's 200 / 404 watch_not_found for one issuer (cheap: limit=1). Other errors throw. */
-export async function isWatching(issuerId:string):Promise<boolean>{
+/** Live: membership via the inbox (limit=1); replay: no membership or materialized-event read. */
+export async function isWatching(issuerId:string,asOf:string|null=null):Promise<boolean>{
+ if(asOf!==null)return false;
  try{await fetchInbox({issuerId,limit:1});return true;}
  catch(e){if(e instanceof TrackingApiError&&e.code==='watch_not_found')return false;throw e;}
 }

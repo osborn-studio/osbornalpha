@@ -28,6 +28,16 @@ export const MAX_WATCH_NOTE=2000;
 type Code=CompanyDbError['code'];
 const MESSAGE_CODES:readonly Code[]=['stale_computation','stale_attempt','invalid_event','unknown_stream','watch_limit','invalid_read','invalid_evidence'];
 export interface PgErrorLike{message?:string;code?:string|null;details?:string|null;detail?:string|null}
+// Keep only a bounded category, privately: receipts and serialized errors retain their original shape.
+const transportCategories=new WeakMap<CompanyDbError,string>();
+const SQLSTATE_CATEGORIES:Readonly<Record<string,string>>=Object.freeze({
+ '57014':'query_canceled','55P03':'lock_unavailable','40P01':'deadlock','40001':'serialization_failure',
+ '23502':'constraint_violation','23503':'constraint_violation','23505':'constraint_violation','23514':'constraint_violation',
+});
+export function companyDbFailureCategory(e:unknown):string{
+ if(!(e instanceof CompanyDbError))return 'unknown';
+ return transportCategories.get(e)??((MESSAGE_CODES as readonly string[]).includes(e.code)?e.code:'unknown');
+}
 /** PostgreSQL / PostgREST error → CompanyDbError (shared by the Supabase, pg and snapshot adapters). `fk` names the code a 23503 maps to. */
 export function toCompanyDbError(e:unknown,fk?:Code):CompanyDbError{
  if(e instanceof CompanyDbError)return e;
@@ -35,9 +45,10 @@ export function toCompanyDbError(e:unknown,fk?:Code):CompanyDbError{
  const message=x.message??String(e);
  const head=message.split(/[\s:]/,1)[0];
  const detail=x.details??x.detail??null;
- if((MESSAGE_CODES as readonly string[]).includes(head))return new CompanyDbError(head as Code,detail?`${head}: ${detail}`:head);
- if(fk!==undefined&&x.code==='23503')return new CompanyDbError(fk,`${fk}: ${message}`);
- return new CompanyDbError('internal',message||'internal');
+ const error=(MESSAGE_CODES as readonly string[]).includes(head)?new CompanyDbError(head as Code,detail?`${head}: ${detail}`:head)
+  :fk!==undefined&&x.code==='23503'?new CompanyDbError(fk,`${fk}: ${message}`):new CompanyDbError('internal',message||'internal');
+ if(typeof x.code==='string'&&Object.hasOwn(SQLSTATE_CATEGORIES,x.code))transportCategories.set(error,SQLSTATE_CATEGORIES[x.code]);
+ return error;
 }
 const invalidRead=(what:string)=>new CompanyDbError('invalid_read',`invalid_read: ${what}`);
 

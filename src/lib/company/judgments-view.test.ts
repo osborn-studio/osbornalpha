@@ -32,4 +32,20 @@ describe('company F4 rendering',()=>{
   expect(html).toContain('ui.lifecycle.void');
   expect(html).not.toContain('70%');
  });
+ it.each([null,'2026-06-30'])('rejects another issuer response when asOf=%s',asOf=>{
+  const otherIssuer='22222222-2222-4222-8222-222222222222';
+  const card=serializeBody(toCard(envelope(),{title:{zh:'测试',en:'Test'},now:'2026-06-30T23:59:59.999Z'}));
+  card.subject={type:'issuer',key:otherIssuer};
+  state.data={codeVersion:'abc1234',subject:{type:'issuer',key:otherIssuer},view:asOf?'as_known':'latest',asOf,cards:[card]};
+  const html=renderToStaticMarkup(createElement(JudgmentsView,{issuerId:issuer,asOf}));
+  expect(html).not.toContain('aria-label="Revenue grows year over year');
+  expect(html).toContain(asOf?'replayFailed':'loadFailed');
+ });
+ it('rejects another issuer empty response instead of showing no judgments',()=>{
+  state.data={codeVersion:'abc1234',subject:{type:'issuer',key:'22222222-2222-4222-8222-222222222222'},view:'latest',asOf:null,cards:[]};
+  const html=renderToStaticMarkup(createElement(JudgmentsView,{issuerId:issuer,asOf:null}));
+  expect(html).toContain('loadFailed');
+  expect(html).not.toContain('>none<');
+ });
+
 });

@@ -1,0 +1,10 @@
+{
+  "recorded_at": "2026-11-08T16:05:53.374981+00:00",
+  "source": "production SQL Editor BEGIN READ ONLY; ROLLBACK",
+  "statement_timeout_ms": 5000,
+  "lock_timeout_ms": 500,
+  "rows_seen": 3000,
+  "checked": 3000,
+  "passed": true,
+  "interpretation": "Persisted AAPL evidence validator passes bounded editor probe; full API RPC timeout and historical wait/stage remain unresolved. No writer RPC executed."
+}

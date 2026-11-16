@@ -1,3 +1,4 @@
 export function isTabActive(pathname: string, href: string): boolean {
-  return pathname === href || pathname.startsWith(href + '/');
+  const path = href.split('?')[0];
+  return pathname === path || pathname.startsWith(path + '/');
 }

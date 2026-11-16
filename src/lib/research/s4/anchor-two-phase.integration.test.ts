@@ -194,6 +194,43 @@ describe.skipIf(!enabled)('S4 two-phase anchor drain (local only)',()=>{
   expect(new Set(lines.map(l=>JSON.parse(l).sequence)).size).toBe(lines.length);
  });
 
+ it('V10: a stable journal with a future export time still quarantines without ACK',async()=>{
+  const {actor}=await owner();const o=setup(actor);
+  await withAbortedAck(()=>expect(drainOutboxTwoPhase(actor,o)).rejects.toThrow('abort_ack'));
+  const path=journalOf(o,actor),lines=readFileSync(path,'utf8').trim().split('\n').map(l=>JSON.parse(l));
+  const {receipt_hash:_hash,...body}=lines.at(-1)!;void _hash;
+  body.exported_at=(await admin.query("select clock_timestamp()+interval '1 day' as future")).rows[0].future.toISOString();
+  lines[lines.length-1]={...body,receipt_hash:digest(body)};
+  writeFileSync(path,lines.map(l=>canonicalize(l)).join('\n')+'\n');
+  const before=readFileSync(path);
+  await expect(drainOutboxTwoPhase(actor,o)).rejects.toThrow('anchor_integrity_failed');
+  expect((await admin.query('select reason from research_s4_integrity where user_id=$1',[actor.userId])).rows).toEqual([{reason:'anchor_integrity_failed'}]);
+  expect((await outbox(actor)).every(r=>r.anchored_at===null&&r.receipt_hash===null)).toBe(true);
+  expect(readFileSync(path)).toEqual(before);
+ });
+
+ it('V10: retries when the oracle appends after Phase A samples its database time',async()=>{
+  const {actor,candidateId}=await owner();const o=setup(actor);
+  await drainOutboxTwoPhase(actor,o);await controlEvents(actor,candidateId,4);
+  let opens=0,oracle:Awaited<ReturnType<typeof drainOutbox>>|undefined;
+  const openFile:NonNullable<TwoPhaseOptions['openFile']>=async(path,flags,mode)=>{
+   // The first open samples the checkpoint; the second starts the receipt scan,
+   // after the repeatable-read snapshot and server time have been sampled.
+   if(path.endsWith('receipts.jsonl')&&++opens===2){
+    await admin.query('select pg_sleep(0.02)');
+    oracle=await drainOutbox(actor,o.root);
+   }
+   return open(path,flags,mode);
+  };
+  const drained=await drainOutboxTwoPhase(actor,{...o,openFile});
+  expect(oracle?.appended).toBe(4);
+  expect(drained).toEqual(expect.objectContaining({status:'drained',appended:0,acknowledged:0,remaining:0,attempts:2,last_hash:oracle?.last_hash}));
+  expect((await admin.query('select reason from research_s4_integrity where user_id=$1',[actor.userId])).rows).toEqual([]);
+  const lines=readFileSync(journalOf(o,actor),'utf8').trim().split('\n');
+  expect(new Set(lines.map(l=>JSON.parse(l).sequence)).size).toBe(lines.length);
+  expect((await outbox(actor)).every(r=>r.anchored_at!==null&&r.receipt_hash!==null)).toBe(true);
+ });
+
  /** Bulk-inserts `total` synthetic ControlEvent rows (records + outbox) for one owner without the per-row runtime path. */
  async function seedTier(a:S4Actor,candidateId:string,total:number){
   const serverTime='2026-10-01T00:00:00.000Z',chunk=20000;

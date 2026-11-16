@@ -12,6 +12,7 @@ import {monthEnd} from './freshness';
 import type {MacroObservationRef,MacroReadApi,MacroSnapshotRow} from './judgment-contract';
 import {METHODOLOGY_VERSION,RULES_VERSION,WEIGHTS_V1,classifyRegime,regionWeights} from './regime';
 import {buildRegimeInput} from './snapshots';
+import {verifyHistoricalBatches} from './regime-selection';
 import type {ObservationRow,Region,SnapshotRecord} from './types';
 
 export const MAX_SNAPSHOTS_PAGE=200;
@@ -49,18 +50,6 @@ async function toRow(db:MacroDb,s:SnapshotRecord,judgments:boolean):Promise<Macr
  const regime=judgments?(await db.regimeOf(s.snapshot_id))?.regime??null:null;   // flag off: no judgment read at all
  return {snapshot_id:s.snapshot_id,region:s.region,as_of:s.as_of,methodology_version:s.methodology_version,catalog_version:s.catalog_version,
   observation_ids:[...s.observation_ids],regime,created_at:s.created_at,status:s.status};
-}
-async function assertHistoricalBatches(db:MacroDb,built:Awaited<ReturnType<typeof buildRegimeInput>>,cutoff:string):Promise<void>{
- const seen=new Map<string,ObservationRow>();
- let pending=[...new Set([...built.observations.map(r=>r.observation_id),...built.historyIds])];
- while(pending.length){
-  const rows=await db.observationsByIds(pending);if(rows.length!==pending.length)throw new MacroUnavailable('historical_cutoff_unsupported');
-  pending=[];
-  for(const row of rows){seen.set(row.observation_id,row);for(const id of row.derived_from??[])if(!seen.has(id))pending.push(id);}
-  pending=[...new Set(pending)];
- }
- const times=await db.batchFinishedAt([...new Set([...seen.values()].map(r=>r.batch_id))]);
- for(const row of seen.values()){const finished=times[row.batch_id];if(!finished||!Number.isFinite(Date.parse(finished))||Date.parse(finished)>Date.parse(cutoff))throw new MacroUnavailable('historical_cutoff_unsupported');}
 }
 /** F4 macro_snapshot input available_at: the latest available_at among the snapshot's observations (null when empty). */
 export async function snapshotAvailableAt(db:MacroDb,snapshot:Pick<SnapshotRecord,'observation_ids'>):Promise<string|null>{
@@ -110,7 +99,8 @@ export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadA
    let built:Awaited<ReturnType<typeof buildRegimeInput>>;
    try{built=await buildRegimeInput(db,region as Region,{asOf:cutoff,periodEndLte:monthEnd(Number(m[1]),Number(m[2]))});}
    catch(e){if(e instanceof Error&&e.message==='historical_cutoff_unsupported')throw new MacroUnavailable('historical_cutoff_unsupported');throw e;}
-   await assertHistoricalBatches(db,built,cutoff);
+   try{await verifyHistoricalBatches(built,cutoff,db.observationsByIds.bind(db),db.batchFinishedAt.bind(db));}
+   catch(e){if(e instanceof Error&&e.message==='historical_cutoff_unsupported')throw new MacroUnavailable('historical_cutoff_unsupported');throw e;}
    const regime=judgments?classifyRegime(built.input).regime:null;        // judgments disabled: no classification (regime = null)
    return {regime,observation_refs:built.observations.map(toRef),catalog:{version:CATALOG_VERSION,weights:regionWeights(region as Region),rules_version:RULES_VERSION}};
   },

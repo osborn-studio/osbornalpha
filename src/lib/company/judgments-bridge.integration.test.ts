@@ -35,7 +35,7 @@ describe.skipIf(!enabled)('company → F4 list route on PG17',()=>{
   for(const asOf of [null,new Date().toISOString().slice(0,10)]){
    const response=await GET(new Request(`https://alpha.example${judgmentsUrl(issuer,asOf)}`));
    expect(response.status).toBe(200);
-   const parsed=checkJudgmentsResponse(await response.json(),asOf);
+   const parsed=checkJudgmentsResponse(await response.json(),asOf,issuer);
    expect(parsed).toEqual({ok:true,cards:[]});
    if(parsed.ok)expect(parsed.cards.length===0).toBe(true); // JudgmentsView's `none` branch
   }
@@ -50,7 +50,7 @@ describe.skipIf(!enabled)('company → F4 list route on PG17',()=>{
   const today=new Date().toISOString().slice(0,10);
   const response=await GET(new Request(`https://alpha.example${judgmentsUrl(issuer,today)}`));
   expect(response.status).toBe(200);
-  const parsed=checkJudgmentsResponse(await response.json(),today);
+  const parsed=checkJudgmentsResponse(await response.json(),today,issuer);
   expect(parsed.ok).toBe(true);
   if(parsed.ok)expect(parsed.cards.map(c=>c.judgment_id)).toEqual([fixture.row.judgment_id]);
  });
@@ -68,7 +68,7 @@ describe.skipIf(!enabled)('company → F4 list route on PG17',()=>{
   const response=await GET(new Request(`https://alpha.example${judgmentsUrl(issuer,null)}`));
   expect(response.status).toBe(200);
   company.data=await response.json();
-  expect(checkJudgmentsResponse(company.data,null)).toEqual({ok:true,cards:[]});
+  expect(checkJudgmentsResponse(company.data,null,issuer)).toEqual({ok:true,cards:[]});
   const html=renderToStaticMarkup(createElement(JudgmentsView,{issuerId:issuer,asOf:null}));
   expect(html).toContain('>none</div>');
   expect(html).not.toContain('%');

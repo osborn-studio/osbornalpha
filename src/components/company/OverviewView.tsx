@@ -53,11 +53,13 @@ function ValueButton({ refv, concept, unit: unitHint, currency, exp }: { refv: V
   );
 }
 
-function QuickValue({ cell, k, periodKey, stateRev, exp, label }: { cell: Cell | undefined; k: string; periodKey: string; stateRev: number; exp: number; label: string }) {
+function QuickValue({ cell, k, periodKey, stateRev, exp, label, unavailableReason }: { cell: Cell | undefined; k: string; periodKey: string; stateRev: number; exp: number; label: string; unavailableReason?: 'multiple_units' }) {
   const tst = useTranslations('company.statements');
   const td = useTranslations('company.durations');
+  const t = useTranslations('company.overview');
   const drawers = useDrawers();
   const dur = (d: string) => (td.has(d) ? td(d) : d);
+  if (!cell && unavailableReason === 'multiple_units') return <span className="text-sm text-[var(--text-dim)]">{t('multipleUnits')}</span>;
   if (!cell) return <span className="num text-[var(--text-muted)]" title={tst('cellMissingTitle')}>—</span>;
   if (cell.kind === 'withheld') {
     return <button type="button" className={`text-sm text-[var(--text-dim)] ${FOCUS}`} onClick={() => drawers.open({ kind: 'withheld', reason: cell.reason, title: label })}>{cell.reason === 'citation_pending' ? tst('cellPending') : tst('cellIncomplete')}</button>;
@@ -111,6 +113,8 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
         {state.status === 'ok' && (() => {
           const o = state.data;
           const latest = o.latest;
+          const hasMultipleUnits = latest && quickItems(market).some(it =>
+            !(it.group === 'facts' ? latest.facts : latest.derived)[it.key] && latest.unavailableReasons?.[it.group]?.[it.key] === 'multiple_units');
           return (
             <>
               <Card aria-label={t('latestTitle')} className="flex flex-col gap-3" data-testid="overview-latest">
@@ -127,10 +131,14 @@ export function OverviewView({ ticker, market, asOf }: { ticker: string; market:
                         <div key={it.key} className="flex min-w-0 flex-col gap-0.5">
                           <span className="text-xs text-[var(--text-dim)]">{tl(it.key)}</span>
                           <span className="num truncate text-[10px] text-[var(--text-muted)]">{it.key}{it.group === 'derived' ? ` · ${t('derived')}` : ''}</span>
-                          <QuickValue cell={(it.group === 'facts' ? latest.facts : latest.derived)[it.key]} k={it.key} periodKey={latest.periodKey ?? ''} stateRev={latest.stateRev} exp={exp} label={tl(it.key)} />
+                          <QuickValue cell={(it.group === 'facts' ? latest.facts : latest.derived)[it.key]} k={it.key} periodKey={latest.periodKey ?? ''} stateRev={latest.stateRev} exp={exp} label={tl(it.key)} unavailableReason={latest.unavailableReasons?.[it.group]?.[it.key]} />
                         </div>
                       ))}
                     </div>
+                    {hasMultipleUnits && <p className="text-xs text-[var(--text-dim)]">
+                      {t('multipleUnitsExplanation')}{' '}
+                      <Link href={companyHref(ticker, { view: 'statements', asOf }) as never} className={`whitespace-nowrap underline underline-offset-4 hover:text-[var(--accent)] ${FOCUS}`}>{t('toStatements')}</Link>
+                    </p>}
                     <p className="text-[11px] text-[var(--text-dim)]">{t('envelope', { rev: String(latest.stateRev) })}</p>
                   </>
                 )}

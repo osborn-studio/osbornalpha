@@ -1,0 +1,48 @@
+{
+ "mode": "apply",
+ "codeVersion": "4ee12c7ccb42d25197f31dd5fb24fe1b35c49ee2",
+ "batchId": "bd6224d7-4e01-4211-b59c-3101e32f1561",
+ "status": "success",
+ "counts": {
+  "fetched": 0,
+  "inserted": 0,
+  "duplicates": 0,
+  "versioned": 0,
+  "quarantined": 0,
+  "failed": 0,
+  "deferred": 0
+ },
+ "errors": [
+  {
+   "code": "deadline_hit",
+   "key": "693b2539-783c-4844-bf65-e2598f23e9a5",
+   "message": "compensation scan stopped at its budget"
+  }
+ ],
+ "idle": true,
+ "preview": false,
+ "detail": {
+  "repaired": 0,
+  "batches": 0,
+  "deadline_hit": false,
+  "compensation": {
+   "status": "stopped",
+   "reason": "deadline",
+   "scanned": 1,
+   "produced": 1,
+   "existing": 0,
+   "skippedFailed": 0,
+   "skippedStalled": 0,
+   "stoppedAt": "693b2539-783c-4844-bf65-e2598f23e9a5",
+   "batchId": "ede49ec3-859b-4c15-9b5b-1069337bb5c5",
+   "errors": [
+    {
+     "code": "deadline_hit",
+     "key": "693b2539-783c-4844-bf65-e2598f23e9a5",
+     "message": "compensation scan stopped at its budget"
+    }
+   ]
+  }
+ },
+ "items": []
+}

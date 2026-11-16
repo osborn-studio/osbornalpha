@@ -8,6 +8,7 @@ import {supabaseTableClient} from '../db/table-client';
 import {supabaseFactsDb} from '../facts/db';
 import {getAdminSupabase} from '../supabase/admin';
 import {supabaseCompanyDb} from './db';
+import {companyEvidenceFetch} from './evidence-request';
 import type {DigestDeps} from './digest';
 import {supabaseSnapshotObjectStore} from './evidence-index';
 import {readSnapshot} from './snapshot-read';
@@ -26,7 +27,7 @@ import type {CompanyDb,ReadSnapshotOptions,ReadSnapshotResult} from './types';
 
 export interface ProductionDigestOptions{deadline:Date|null;codeVersion:string|null;admin?:SupabaseClient;now?:()=>Date}
 export function productionDigestDeps(opts:ProductionDigestOptions):DigestDeps{
- const sb=opts.admin??getAdminSupabase();
+ const sb=opts.admin??getAdminSupabase(companyEvidenceFetch());
  return {db:supabaseCompanyDb(sb),tables:supabaseTableClient(sb),readSnapshot:(i,m,o)=>readSnapshot(sb,i,m,o),facts:supabaseFactsDb(sb),
   reader:supabaseSnapshotObjectStore(sb),now:opts.now??(()=>new Date()),deadline:opts.deadline,codeVersion:opts.codeVersion};
 }

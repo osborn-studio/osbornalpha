@@ -1,0 +1,227 @@
+{
+  "verifierSourceSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+  "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+  "runs": [
+    {
+      "runId": 42551139520,
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42551139520",
+      "attempts": [
+        {
+          "productSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "gate",
+          "workflowSha": "93621b2f3c9d97a3a1124e61d6beeeb6f73c699e",
+          "artifact": "wave206-baseline-204-gate-1",
+          "exitCode": 0,
+          "journeys": 3,
+          "passed": 25,
+          "total": 25,
+          "failures": [],
+          "kline": []
+        },
+        {
+          "productSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "guest",
+          "workflowSha": "93621b2f3c9d97a3a1124e61d6beeeb6f73c699e",
+          "artifact": "wave206-baseline-204-guest-1",
+          "exitCode": 0,
+          "journeys": 5,
+          "passed": 37,
+          "total": 37,
+          "failures": [],
+          "kline": [
+            {
+              "range": "1d",
+              "status": 200,
+              "bars": 60
+            },
+            {
+              "range": "1y",
+              "status": 200,
+              "bars": 246
+            }
+          ]
+        },
+        {
+          "productSha": "aa3443624869ad583527ed2c540585689f2e2f85",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "gate",
+          "workflowSha": "93621b2f3c9d97a3a1124e61d6beeeb6f73c699e",
+          "artifact": "wave206-main-aa344-gate-1",
+          "exitCode": 0,
+          "journeys": 3,
+          "passed": 25,
+          "total": 25,
+          "failures": [],
+          "kline": []
+        },
+        {
+          "productSha": "aa3443624869ad583527ed2c540585689f2e2f85",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "guest",
+          "workflowSha": "93621b2f3c9d97a3a1124e61d6beeeb6f73c699e",
+          "artifact": "wave206-main-aa344-guest-1",
+          "exitCode": 0,
+          "journeys": 5,
+          "passed": 37,
+          "total": 37,
+          "failures": [],
+          "kline": [
+            {
+              "range": "1d",
+              "status": 200,
+              "bars": 62
+            },
+            {
+              "range": "1y",
+              "status": 200,
+              "bars": 246
+            }
+          ]
+        },
+        {
+          "productSha": "b9d039d5e6d727f24214ebc1db771fb01226f8f4",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "gate",
+          "workflowSha": "93621b2f3c9d97a3a1124e61d6beeeb6f73c699e",
+          "artifact": "wave206-pr205-b9d039-gate-1",
+          "exitCode": 0,
+          "journeys": 3,
+          "passed": 25,
+          "total": 25,
+          "failures": [],
+          "kline": []
+        },
+        {
+          "productSha": "b9d039d5e6d727f24214ebc1db771fb01226f8f4",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "guest",
+          "workflowSha": "93621b2f3c9d97a3a1124e61d6beeeb6f73c699e",
+          "artifact": "wave206-pr205-b9d039-guest-1",
+          "exitCode": 1,
+          "journeys": 5,
+          "passed": 36,
+          "total": 37,
+          "failures": [
+            {
+              "journey": "stock",
+              "check": "chart canvas drawn"
+            }
+          ],
+          "kline": [
+            {
+              "range": "1d",
+              "status": 503,
+              "bars": 0
+            },
+            {
+              "range": "1y",
+              "status": 200,
+              "bars": 246
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "runId": 42551794137,
+      "url": "https://github.com/osborn-studio/osbornalpha/actions/runs/42551794137",
+      "attempts": [
+        {
+          "productSha": "aa3443624869ad583527ed2c540585689f2e2f85",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "guest",
+          "workflowSha": "1faffc1e0d17078adaca9b24b7c19a198a732ab8",
+          "priorRunId": "42551139520",
+          "scope": "follow-up-guest",
+          "artifact": "wave206-followup-main-aa344-guest-1",
+          "exitCode": 0,
+          "journeys": 5,
+          "passed": 37,
+          "total": 37,
+          "failures": [],
+          "kline": [
+            {
+              "range": "1d",
+              "status": 200,
+              "bars": 68
+            },
+            {
+              "range": "1y",
+              "status": 200,
+              "bars": 246
+            }
+          ],
+          "font": [
+            "zh-cn=Noto Sans CJK SC",
+            "fonts-noto-cjk 1:20230817+repack1-3"
+          ],
+          "screenshot": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave206/cloud/follow-up/artifacts/wave206-followup-main-aa344-guest-1/verify-20261109-023612/stock-2-1y.png"
+        },
+        {
+          "productSha": "b9d039d5e6d727f24214ebc1db771fb01226f8f4",
+          "verifierSha": "99d86fbdc83b7a1b41385f0348100e613314dde2",
+          "verifierTree": "a32cc612da3642586c617ffecead359a2ec9c9e8",
+          "mode": "guest",
+          "workflowSha": "1faffc1e0d17078adaca9b24b7c19a198a732ab8",
+          "priorRunId": "42551139520",
+          "scope": "follow-up-guest",
+          "artifact": "wave206-followup-pr205-b9d039-guest-1",
+          "exitCode": 0,
+          "journeys": 5,
+          "passed": 37,
+          "total": 37,
+          "failures": [],
+          "kline": [
+            {
+              "range": "1d",
+              "status": 200,
+              "bars": 69
+            },
+            {
+              "range": "1y",
+              "status": 200,
+              "bars": 246
+            }
+          ],
+          "font": [
+            "zh-cn=Noto Sans CJK SC",
+            "fonts-noto-cjk 1:20230817+repack1-3"
+          ],
+          "screenshot": "/Volumes/AIMATE_WORK/tmp/osstack/osbornalpha-wave206/cloud/follow-up/artifacts/wave206-followup-pr205-b9d039-guest-1/verify-20261109-023747/stock-2-1y.png"
+        }
+      ]
+    }
+  ],
+  "pr205": {
+    "head": "b9d039d5e6d727f24214ebc1db771fb01226f8f4",
+    "reviewDecision": "REVIEW_REQUIRED",
+    "checks": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "provider-date-ingress",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "source-fixtures",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
+  },
+  "initial205GuestFailure": "Initial 1D Tencent K-line HTTP 503, zero bars. Provider root cause unknown.",
+  "cleanup": "Diagnostic worktree removed and Git worktrees pruned. Evidence and branch retained."
+}
