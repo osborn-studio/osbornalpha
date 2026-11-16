@@ -3,12 +3,13 @@
 // shape, then the catalog decides which series may be paired. Frozen inputs keep only (observation_id,
 // period_end, value_text), ascending, plus the series actually read. inputs_hash is the SHA-256 of canonical JSON
 // (sorted keys). Server-only (node:crypto).
+import type {AnySeriesDef} from './display-catalog';
 import {createHash} from 'node:crypto';
 import Ajv from 'ajv';
-import {catalogById} from './catalog';
+import {seriesById} from './series-registry';
 import {EVENT_NS,WINDOWS,type AnalysisSpec,type FrozenInputs} from './correlation';
 import type {PolicyEvent} from './events';
-import type {MacroSeriesDef,ObservationRow} from './types';
+import type {ObservationRow} from './types';
 const UUID='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
 const validateShape=new Ajv({strict:true,allErrors:true}).compile({
  type:'object',additionalProperties:false,required:['request_id','kind','indicator_id','asset_id','lag','window'],
@@ -23,14 +24,14 @@ const validateShape=new Ajv({strict:true,allErrors:true}).compile({
  },
 });
 export interface FieldError{field:string;code:string}
-export type ValidatedRequest={ok:true;spec:AnalysisSpec;indicator:MacroSeriesDef;asset:MacroSeriesDef}|{ok:false;errors:FieldError[]};
+export type ValidatedRequest={ok:true;spec:AnalysisSpec;indicator:AnySeriesDef;asset:AnySeriesDef}|{ok:false;errors:FieldError[]};
 export function validateAnalysisRequest(body:unknown):ValidatedRequest{
  if(!validateShape(body))return {ok:false,errors:(validateShape.errors??[]).map(e=>{
   const p=e.params as {missingProperty?:string;additionalProperty?:string};
   return {field:e.instancePath.replace(/^\//,'')||p.missingProperty||p.additionalProperty||'body',code:e.keyword};
  })};
  const spec=body as AnalysisSpec;const errors:FieldError[]=[];
- const ind=catalogById(spec.indicator_id),asset=catalogById(spec.asset_id);
+ const ind=seriesById(spec.indicator_id),asset=seriesById(spec.asset_id);
  if(!ind||ind.role!=='indicator')errors.push({field:'indicator_id',code:'not_indicator'});
  else if(ind.status!=='active')errors.push({field:'indicator_id',code:'not_active'});
  else if(ind.period!=='month')errors.push({field:'indicator_id',code:'not_monthly'});
@@ -46,7 +47,7 @@ export function validateAnalysisRequest(body:unknown):ValidatedRequest{
  return {ok:true,spec,indicator:ind,asset};
 }
 const frozenObs=(rows:readonly ObservationRow[])=>rows.map(r=>({observation_id:r.observation_id,period_end:r.period_end,value_text:r.value_text})).sort((a,b)=>a.period_end.localeCompare(b.period_end));
-export function freezeInputs(a:{indicator:MacroSeriesDef;asset:MacroSeriesDef;indicatorRows:readonly ObservationRow[];assetRows:readonly ObservationRow[];events?:readonly PolicyEvent[];cutoff:string;catalogVersion:string}):FrozenInputs{
+export function freezeInputs(a:{indicator:AnySeriesDef;asset:AnySeriesDef;indicatorRows:readonly ObservationRow[];assetRows:readonly ObservationRow[];events?:readonly PolicyEvent[];cutoff:string;catalogVersion:string}):FrozenInputs{
  const inputs:FrozenInputs={
   indicator:{series_id:a.indicator.id,source_series_id:a.indicator.aliasOf??a.indicator.id,change_kind:a.indicator.changeKind,observations:frozenObs(a.indicatorRows)},
   asset:{series_id:a.asset.id,source_series_id:a.asset.aliasOf??a.asset.id,change_kind:a.asset.changeKind,observations:frozenObs(a.assetRows)},
