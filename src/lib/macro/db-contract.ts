@@ -10,6 +10,7 @@ import {DATASETS} from '../dq/datasets';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
 import type {MacroSeriesDef,ObservationRow,ObservationWrite,PublishInput,Region} from './types';
+import type {AnySeriesDef} from './display-catalog';
 
 export interface MacroContractHarness{
  db:MacroDb;
@@ -44,7 +45,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
   let h:MacroContractHarness;let db:MacroDb;
   beforeAll(async()=>{h=await setup();db=h.db;},60000);
   afterAll(async()=>{await h?.close?.();},30000);
-  const catalog=async(defs:MacroSeriesDef[])=>{const v=`macro-catalog/${randomBytes(6).toString('hex')}`;await db.upsertCatalog(defs,v,'macro-rules/1');return v;};
+  const catalog=async(defs:readonly AnySeriesDef[])=>{const v=`macro-catalog/${randomBytes(6).toString('hex')}`;await db.upsertCatalog(defs,v,'macro-rules/1');return v;};
   /** token: the run's owner token (AKShare path); omitted = a batch without a run (FRED cron). */
   const retrieval=async(b:string,at:string,text=`body-${randomUUID()}`,token:string|null=null)=>{
    const bytes=new TextEncoder().encode(text);const sha=createHash('sha256').update(bytes).digest('hex');

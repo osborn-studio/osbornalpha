@@ -20,7 +20,7 @@ export interface MacroDb{
  /** Finalization receipts for candidate observations; null means the cutoff cannot be proven. service */
  batchFinishedAt(batchIds:string[]):Promise<Record<string,string|null>>;
  /** Upserts macro_series mirror and appends macro_catalog_versions (no-op if the version exists). service */
- upsertCatalog(defs:readonly import('./types').MacroSeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
+ upsertCatalog(defs:readonly import('./display-catalog').AnySeriesDef[],catalogVersion:string,rulesVersion:string):Promise<void>;
  /** RPC macro_put_retrieval: inserts the evidence object if new (by sha256) and ALWAYS a new retrieval row; returns retrieval_id.
   *  ownerToken (第 5 稿 P1-3): the AKShare path passes its run's token (verified under the run lock, else `fenced`); FRED cron
   *  passes nothing (its batch has no run row; a batch WITH a run refuses a missing token). service */

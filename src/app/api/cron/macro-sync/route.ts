@@ -16,13 +16,16 @@
 // writes, ZERO evidence uploads (it never touches deps.db / deps.evidence / deps.tables). A missing
 // code_version refuses a real run (preview does not write, so it needs none). Receipts carry codes,
 // keys and counts only, never messages.
+import {collectableSeriesOf} from '@/lib/macro/series-registry';
+import type {AnySeriesDef} from '@/lib/macro/display-catalog';
 import {NextResponse} from 'next/server';
 import {startBatch} from '@/lib/dq/batches';
 import type {BatchError} from '@/lib/dq/batches';
 import {recordAttempt} from '@/lib/dq/freshness';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import {authorizedCronRequest} from '@/lib/observability/cron-auth';
-import {CATALOG_VERSION,MACRO_CATALOG,collectableOf} from '@/lib/macro/catalog';
+import {DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION} from '@/lib/macro/display-catalog';
+import {CATALOG_VERSION,MACRO_CATALOG} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {IngestAbort,abortError,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
@@ -31,7 +34,7 @@ import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredBackfillD
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
 import {publishRegion} from '@/lib/macro/snapshots';
-import type {EvidenceInput,MacroSeriesDef,ParsedPoint} from '@/lib/macro/types';
+import type {EvidenceInput,ParsedPoint} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;
@@ -41,25 +44,25 @@ const err=(code:string,message:string,status:number)=>NextResponse.json({error:{
 const errCode=(e:unknown)=>e instanceof FredFetchError?e.code:e instanceof FredParseError?`parse_${e.code}`:'fetch_failed';
 const publicErrors=(errors:BatchError[])=>errors.map(e=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
 
-const fetchEvidence=(deps:MacroDeps,def:MacroSeriesDef,signal:AbortSignal,cosd:string)=>
+const fetchEvidence=(deps:MacroDeps,def:AnySeriesDef,signal:AbortSignal,cosd:string)=>
  fetchFredCsv(def.source!.seriesKey,{fetch:deps.fetch,sleep:deps.sleep,now:deps.now,signal,cosd});
-const parseEvidence=(def:MacroSeriesDef,evidence:EvidenceInput)=>
+const parseEvidence=(def:AnySeriesDef,evidence:EvidenceInput)=>
  parseFredCsv(evidence.bytes,{seriesId:def.id,code:def.source!.seriesKey,period:def.period});
-async function fetchAndParse(deps:MacroDeps,def:MacroSeriesDef,signal:AbortSignal,cosd:string){
+async function fetchAndParse(deps:MacroDeps,def:AnySeriesDef,signal:AbortSignal,cosd:string){
  const evidence=await fetchEvidence(deps,def,signal,cosd);
  return {evidence,parsed:parseEvidence(def,evidence)};
 }
 
 /** Backfill is complete only when persisted eligible data reaches back to the start of the full window (T7-2). Any read
  *  failure counts as incomplete: the full window is the safe side. */
-async function backfillComplete(deps:MacroDeps,def:MacroSeriesDef,today:string):Promise<boolean>{
- const firstPeriod=(def as {firstPeriod?:string}).firstPeriod;
+async function backfillComplete(deps:MacroDeps,def:AnySeriesDef,today:string):Promise<boolean>{
+ const firstPeriod=('firstPeriod' in def?def.firstPeriod:undefined);
  try{return (await deps.db.eligibleHistory(def.id,{from:fredCosdFor(def.period,false,today,firstPeriod),to:fredBackfillDoneBy(firstPeriod),maxRows:500})).length>0;}
  catch{return false;}
 }
 
 /** Fetch + parse only. Must never touch deps.db, deps.evidence or deps.tables. */
-async function preview(deps:MacroDeps,defs:MacroSeriesDef[],signal:AbortSignal){
+async function preview(deps:MacroDeps,defs:AnySeriesDef[],signal:AbortSignal){
  const series=[];let fetched=0;
  for(const def of defs){
   try{
@@ -72,9 +75,10 @@ async function preview(deps:MacroDeps,defs:MacroSeriesDef[],signal:AbortSignal){
  return NextResponse.json({ok:series.every(s=>!('error' in s)),preview:true,catalogVersion:CATALOG_VERSION,counts:{fetched},series},{status:200,headers:NO_STORE});
 }
 
-async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,signal:AbortSignal){
+async function sync(deps:MacroDeps,defs:AnySeriesDef[],codeVersion:string,signal:AbortSignal){
  const today=deps.now().toISOString().slice(0,10);
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
+ await deps.db.upsertCatalog(DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION,MACRO_RULES_VERSION);
  const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:'macro.fred',codeVersion,triggeredBy:'cron',
   toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
  let native=emptyChunkCounts(),nativeUsable=0,derivedCounts=emptyChunkCounts(),counts=emptyChunkCounts();const errors:BatchError[]=[];
@@ -95,7 +99,7 @@ async function sync(deps:MacroDeps,defs:MacroSeriesDef[],codeVersion:string,sign
   // backfill decision on persisted eligible rows only: rows left by an abandoned batch never count as history (第 4 稿 P1-5)
   for(const def of defs){
    let evidence:EvidenceInput;
-   try{evidence=await fetchEvidence(deps,def,signal,fredCosdFor(def.period,await backfillComplete(deps,def,today),today,(def as {firstPeriod?:string}).firstPeriod));}
+   try{evidence=await fetchEvidence(deps,def,signal,fredCosdFor(def.period,await backfillComplete(deps,def,today),today,('firstPeriod' in def?def.firstPeriod:undefined)));}
    catch(e){failSeries(errCode(e),def.id);continue;}
    let parsed:ParsedPoint[];
    try{parsed=parseEvidence(def,evidence);}
@@ -151,7 +155,7 @@ async function run(request:Request):Promise<NextResponse>{
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion&&!isPreview)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  const deps=productionMacroDeps({codeVersion:codeVersion??'preview',triggeredBy:'cron'});
- const defs=collectableOf('fred_csv');
+ const defs=collectableSeriesOf('fred_csv');
  const signal=AbortSignal.timeout(DEADLINE_MS);
  try{
   return isPreview?await preview(deps,defs,signal):await sync(deps,defs,codeVersion!,signal);

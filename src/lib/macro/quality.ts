@@ -19,7 +19,9 @@ const BY_UNIT:Record<string,QualityProfile>={
  index_prev_year_100:{min:50,max:200,maxRelJump:0.3},
  cny_per_100usd:{min:400,max:1000,maxRelJump:0.1},
  usd_per_bbl:{min:-100,max:1000,maxRelJump:null},
- usd_mn:{min:0,max:20_000_000,maxRelJump:0.5},
+ // TGA week averages legitimately double or halve around debt-ceiling episodes; the
+ // 20 000 000 ceiling still catches a ×1000 unit error.
+ usd_mn:{min:0,max:20_000_000,maxRelJump:null},
  usd_bn:{min:0,max:10_000,maxRelJump:null},
 };
 const PMI:QualityProfile={min:0,max:100,maxRelJump:0.5};

@@ -13,18 +13,19 @@
 // 第 6 稿: receipts carry `usable` (written rows minus previously_rejected, P2-1); batchFinalizeInput mirrors finishBatch's status
 // and error cap for MacroDb.finalizeBatch (P1-1/P2-4). quarantine() stays the shared, unfenced helper: an open item a fenced
 // worker parked has no members (its link is fenced) and is harmless.
+import type {AnySeriesDef} from './display-catalog';
 import {quarantine} from '../dq/quarantine';
 import {UNACCOUNTED_ERROR,batchStatusFromCounts} from '../dq/batches';
 import type {BatchError} from '../dq/batches';
 import type {TableClient} from '../db/table-client';
-import {MACRO_CATALOG,catalogById} from './catalog';
+import {derivedSeriesOf,seriesById} from './series-registry';
 import {MacroDbError} from './db';
 import type {MacroDb} from './db';
 import {canonical,equals} from './decimal';
 import {deriveSeries} from './derive';
 import type {EvidenceStore} from './evidence';
 import {validatePoint} from './quality';
-import type {Adapter,ChunkCounts,EvidenceInput,FinalStatus,FinalizeInput,MacroSeriesDef,ObservationRow,ObservationWrite,ParsedPoint,Region,WriteConflictReason,WriteResult} from './types';
+import type {Adapter,ChunkCounts,EvidenceInput,FinalStatus,FinalizeInput,ObservationRow,ObservationWrite,ParsedPoint,Region,WriteConflictReason,WriteResult} from './types';
 
 export interface IngestDeps{db:MacroDb;evidence:Pick<EvidenceStore,'put'>;tables:TableClient;codeVersion:string;now:()=>Date}
 /** An adapter's own reading of one value (AKShare DataFrame), already mapped to period_end; cross-check only. */
@@ -168,7 +169,7 @@ async function writeAll(ctx:Ctx,rows:ObservationWrite[]):Promise<void>{
  }
 }
 
-const collectable=(def:MacroSeriesDef|undefined,adapter:Adapter):def is MacroSeriesDef=>
+const collectable=(def:AnySeriesDef|undefined,adapter:Adapter):def is AnySeriesDef=>
  !!def&&def.status==='active'&&!def.derive&&!def.aliasOf&&def.source?.adapter===adapter;
 
 /** ownerToken: the AKShare run's token (第 5 稿 P1-3); omitted / null for cron (its batch has no run row). */
@@ -200,7 +201,7 @@ export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapt
   for(const p of r.parsed)bySeries.set(p.seriesId,[...(bySeries.get(p.seriesId)??[]),p]);
   const writes:ObservationWrite[]=[];
   for(const [seriesId,points] of bySeries){
-   const def=catalogById(seriesId);
+   const def=seriesById(seriesId);
    if(!collectable(def,input.adapter)){ctx.counts.failed+=points.length;ctx.errors.push({code:'unknown_series',key:seriesId});continue;}
    // 第 7 稿 T6-1: distinct canonical values for one period across ALL points, judged before quality / claim filtering —
    // the whole group is quarantined (conflicting_rows), none of it is written or used as the jump baseline.
@@ -244,9 +245,9 @@ export async function ingestEvidence(deps:IngestDeps,input:{batchId:string;adapt
 }
 
 /** Derived series of a region whose input is native come first, so a derived input is written before its dependants. */
-export function derivedOf(region:Region):MacroSeriesDef[]{
- const defs=MACRO_CATALOG.filter(d=>d.region===region&&d.status==='active'&&d.derive);
- const depth=(d:MacroSeriesDef,seen=0):number=>{const input=d.derive?catalogById(d.derive.from):undefined;return input?.derive&&seen<8?1+depth(input,seen+1):0;};
+export function derivedOf(region:Region):AnySeriesDef[]{
+ const defs=derivedSeriesOf(region);
+ const depth=(d:AnySeriesDef,seen=0):number=>{const input=d.derive?seriesById(d.derive.from):undefined;return input?.derive&&seen<8?1+depth(input,seen+1):0;};
  return [...defs].sort((a,b)=>depth(a)-depth(b));
 }
 
@@ -260,7 +261,7 @@ export async function deriveAndWrite(deps:IngestDeps,region:Region,batchId:strin
  const now=deps.now();
  await withPartial(ctx,[],async()=>{
  for(const def of derivedOf(region)){
-  const input=catalogById(def.derive!.from);
+  const input=seriesById(def.derive!.from);
   if(!input){ctx.errors.push({code:'missing_derive_input',key:def.id});continue;}
   let history:ObservationRow[];
   try{history=await deps.db.eligibleHistory(input.id,{includeBatch:batchId,maxRows:DERIVE_MAX_ROWS});}
