@@ -4,10 +4,11 @@
 // gap), cells with change and "from (date) → to (date)", the endpoint evidence drawer, a per-column median chart with a
 // table toggle, and the first_seen footer. Below sm the table becomes one list per column.
 import { useState } from 'react';
+import { barGeometry } from '../charts/chart-geometry';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { Boundary, CycleTableView, ObsRef } from '@/lib/macro/strategy/contract';
 import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
-import { MISSING, barGeometry, columnMedians, cycleCell, cycleCellOf, cycleGroups, cycleScale, episodeView, episodesEmptyKey, formatRaw, shortId, strategyApi, toneClass, toneLevel } from './strategy-view-model';
+import { MISSING, columnMedians, cycleCell, cycleCellOf, cycleGroups, cycleScale, episodeView, episodesEmptyKey, formatRaw, shortId, strategyApi, toneClass, toneLevel } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 const BOUNDARIES: readonly Boundary[] = ['event_day', 'first_trading_day', 'month_end'];

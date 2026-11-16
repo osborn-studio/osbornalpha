@@ -5,6 +5,7 @@
 // the chart/table only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { catalogById } from '@/lib/macro/catalog';
+import { AssetBars } from './charts/AssetBars';
 import { DataTableToggle } from './charts/DataTableToggle';
 import { MacroLineChart } from './charts/MacroLineChart';
 import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
@@ -182,7 +183,8 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
           <Section title={t('detail.assets')}>
             {d.assetsByCycle.length === 0 ? <div className="text-xs text-text-dim">{t('detail.noAssets')}</div> : (
               <>
-                <table className="w-full text-xs">
+                <AssetBars assets={d.assetsByCycle} cycles={d.cycles} locale={locale} t={t} table={
+                  <table className="w-full text-xs">
                   <thead><tr className="text-left text-[10px] text-text-dim"><th className={cell}>{t('detail.assetColumns.cycle')}</th><th className={cell}>{t('detail.assetColumns.asset')}</th><th className={cell}>{t('detail.assetColumns.from')}</th><th className={cell}>{t('detail.assetColumns.to')}</th><th className={`${cell} text-right`}>{t('detail.assetColumns.change')}</th></tr></thead>
                   <tbody>{d.assetsByCycle.map((a) => {
                     const c = d.cycles[a.cycle_index]; const v = assetChangeView(a);
@@ -197,6 +199,7 @@ export function IndicatorDetail({ seriesId, compact = false }: { seriesId: strin
                     );
                   })}</tbody>
                 </table>
+                } />
                 <div className="text-[11px] text-text-dim">{t('detail.assetsNote')}</div>
               </>
             )}
