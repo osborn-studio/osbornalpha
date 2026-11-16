@@ -587,10 +587,10 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.publicInstitutions()).find(i=>i.institution_id===r.inst)).toMatchObject({report_count:1,last_published_date:'2026-03-05'});
    expect(list[0].report).toMatchObject({rules_version:RULES_VERSION,title_model_id:null});
    expect(await db.publicReports({institutionId:r.inst,hasSummary:true,limit:10})).toEqual([]);   // no approved summary
-   expect((await db.publicReports({hasSummary:true,limit:200})).map(b=>b.report.report_id)).toContain(s.rep);
-   const withoutSummary=(await db.publicReports({hasSummary:false,limit:200})).map(b=>b.report.report_id);
-   expect(withoutSummary).toContain(r.rep);
-   expect(withoutSummary).not.toContain(s.rep);
+   // scoped by institution: the shared database may hold thousands of other published reports
+   expect((await db.publicReports({institutionId:s.inst,hasSummary:true,limit:200})).map(b=>b.report.report_id)).toEqual([s.rep]);
+   expect((await db.publicReports({institutionId:s.inst,hasSummary:false,limit:200})).map(b=>b.report.report_id)).toEqual([]);
+   expect((await db.publicReports({institutionId:r.inst,hasSummary:false,limit:200})).map(b=>b.report.report_id)).toContain(r.rep);
    expect(await db.publicAnalysts({institutionId:r.inst,limit:10})).toEqual([]);                 // no public analyst bound
    await db.setPublicEnabled(false,by);
   });
