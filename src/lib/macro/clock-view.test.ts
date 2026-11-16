@@ -1,8 +1,9 @@
 // Clock projection contract tests (P5 draft 8 §§3.3–3.4).
 import {describe,it,expect,vi} from 'vitest';
 import {buildClockView,clockMeta,gateObservations,gateRecord,gateSnapshot,regimeStatusOf} from './clock-view';
-import {CATALOG_VERSION,catalogById} from './catalog';
+import {CATALOG_VERSION,catalogById,MACRO_CATALOG} from './catalog';
 import {METHODOLOGY_VERSION,RULES_VERSION,classifyRegime} from './regime';
+import {regionWeights} from './regime';
 import type {RegimeInput} from './regime';
 import type {ObservationRow,SnapshotRecord,RegimeRecord,RegimeContribution} from './types';
 import type {ClockInput} from './clock-view';
@@ -10,7 +11,7 @@ import type {F4Match,MethodManifest} from './clock-contract';
 const norm={recovery:.355769,overheat:.403846,stagflation:.163462,recession:.076923};
 const scores={recovery:18.5,overheat:21,stagflation:8.5,recession:4};
 const obs=(id:string,date:string,value:string):ObservationRow=>({observation_id:`${id}:${date}`,series_id:id,period_end:date,value_text:value,version:1,available_at:'2026-10-01',availability_basis:'first_seen',ingested_at:'2026-10-01',status:'ok',retrieval_id:null,locator:null,derived_from:null,transform:null,code_version:'v1',batch_id:'b'});
-const c=(id:string,weight:number,rule_id:string,support:RegimeContribution['support']):RegimeContribution=>({series_id:id,observation_id:`${id}:2026-09-30`,weight,rule_id,support,contribution:{recovery:weight*(support.recovery??0),overheat:weight*(support.overheat??0),stagflation:weight*(support.stagflation??0),recession:weight*(support.recession??0)}});
+const c=(id:string,weight:number,rule_id:string,support:RegimeContribution['support']):RegimeContribution=>({series_id:id,observation_id:`${id}:2026-09-30`,weight,rule_id,support:{...support},contribution:{recovery:weight*(support.recovery??0),overheat:weight*(support.overheat??0),stagflation:weight*(support.stagflation??0),recession:weight*(support.recession??0)}});
 function fx():ClockInput{
  const observations=[...[
   ['US_CPI_YOY','2.6','2.5','2.4'],['US_DFF','3.5','3.6','3.6'],['US_DGS10','4','3.9','3.7'],['US_UNRATE','4.1','4.2','4.3'],
@@ -21,7 +22,7 @@ function fx():ClockInput{
  return {snapshot,observations,regimeRecord:rec,f4};
 }
 const rec=(x:ClockInput)=>x.regimeRecord!;
-const status=async(x:ClockInput)=>buildClockView(x);
+const status=async(x:ClockInput)=>{const v=await buildClockView(x);if(v.status!=='ok')expect(Object.keys(v).sort()).toEqual(['version','status','snapshot','regime_status','f4','diagnostics'].sort());return v;};
 function manifestFx():ClockInput{
  const x=fx(),C=new Map(rec(x).contributions.map(c=>[c.series_id,c]));
  const ids=['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX'];
@@ -80,31 +81,51 @@ describe('clock view',()=>{
   ['6.axis',(x:ClockInput)=>{rec(x).regime!.growth_axis=.5;}],
  ] as const)('invariant.%s',async(name,mutate)=>{const x=fx();mutate(x);const spy=x.f4;const v=await status(x);expect(v.status).toBe('reconcile_failed');expect(v.diagnostics[0].code).toBe(`invariant_${name[0]}`);expect(v).not.toHaveProperty('summary');expect(spy).not.toHaveBeenCalled();});
  it('rounding tolerance boundary',async()=>{const x=fx();rec(x).regime!.scores.overheat+=.000004;expect((await status(x)).status).toBe('ok');rec(x).regime!.scores.overheat+=.000002;expect((await status(x)).diagnostics[0].code).toBe('invariant_3');});
- it('clock.status.2 snapshot and rules versions',async()=>{const x=fx();x.snapshot.catalog_version='old';expect((await status(x)).status).toBe('version_unsupported');x.snapshot.catalog_version=CATALOG_VERSION;rec(x).rules_version='old';expect((await status(x)).status).toBe('version_unsupported');expect(x.f4).not.toHaveBeenCalled();});
+ it('clock.status.2 snapshot and rules versions',async()=>{const x=fx();x.snapshot.catalog_version='old';expect((await status(x)).status).toBe('version_unsupported');x.snapshot.catalog_version=CATALOG_VERSION;x.snapshot.methodology_version='old';expect((await status(x)).status).toBe('version_unsupported');x.snapshot.methodology_version=METHODOLOGY_VERSION;rec(x).rules_version='old';expect((await status(x)).status).toBe('version_unsupported');expect(x.f4).not.toHaveBeenCalled();});
  it('clock.status.3 integrity and clock.status.4 missing record',async()=>{const x=fx();x.observations.pop();expect((await status(x)).status).toBe('integrity_error');const y=fx();y.regimeRecord=null;expect((await status(y)).status).toBe('record_missing');});
- it.each(['none','earlier','ineligible','unavailable'] as const)('clock.status.6 %s',async kind=>{const x=fx();x.f4=vi.fn(async():Promise<F4Match>=>kind==='earlier'?{status:kind,judgment_id:'j',earlier_snapshot_id:'prior'}:kind==='ineligible'?{status:kind,judgment_id:'j',lifecycle:'abstained',abstain_reason:'coverage'}:kind==='unavailable'?{status:kind,reason:'timeout'}:{status:kind});const v=await status(x);expect(v.status).toBe(`f4_${kind}`);expect(v).not.toHaveProperty('summary');});
+ it.each(['none','earlier','ineligible','unavailable'] as const)('clock.status.6 %s',async kind=>{const x=fx();x.f4=vi.fn(async():Promise<F4Match>=>kind==='earlier'?{status:kind,judgment_id:'j',earlier_snapshot_id:'prior'}:kind==='ineligible'?{status:kind,judgment_id:'j',lifecycle:'abstained',abstain_reason:'coverage'}:kind==='unavailable'?{status:kind,reason:'timeout'}:{status:kind});const v=await status(x);expect(v.status).toBe(`f4_${kind}`);expect(Object.keys(v).sort()).toEqual(['version','status','snapshot','regime_status','f4','diagnostics'].sort());expect(v).not.toHaveProperty('summary');expect(v.f4).toMatchObject(kind==='earlier'?{judgment_id:'j',earlier_snapshot_id:'prior'}:kind==='ineligible'?{judgment_id:'j',lifecycle:'abstained',abstain_reason:'coverage'}:{judgment_id:null,lifecycle:null,abstain_reason:null,earlier_snapshot_id:null,methodology_version:null});});
  it('invariant.7.selected',async()=>{const x=fx();const card=(await x.f4()) as Extract<F4Match,{status:'card'}>;card.claim.selected='recession';x.f4=async()=>card;const v=await status(x);expect(v.status).toBe('f4_mismatch');expect(v.diagnostics[0].code).toBe('invariant_7');});
+ it.each([['margin',(card:Extract<F4Match,{status:'card'}>)=>{card.claim.margin_pp=0;}],['catalog_version',(card:Extract<F4Match,{status:'card'}>)=>{card.claim.catalog_version='old';}]] as const)('invariant.7.%s',async(_name,mutate)=>{const x=fx(),card=(await x.f4()) as Extract<F4Match,{status:'card'}>;mutate(card);x.f4=async()=>card;const v=await status(x);expect(v.status).toBe('f4_mismatch');expect(v.diagnostics[0].code).toBe('invariant_7');});
  it('regime status states',()=>{const x=fx();expect(regimeStatusOf(null,'US',true)).toBe('unknown');expect(regimeStatusOf(rec(x),'US',false)).toBe('unknown');expect(regimeStatusOf(rec(x),'US',true)).toBe('classified');rec(x).regime=null;expect(regimeStatusOf(rec(x),'US',true)).toBe('zero_score');rec(x).uncovered_weight=50;expect(regimeStatusOf(rec(x),'US',true)).toBe('coverage_below_threshold');});
  it('clock.status.3 rejects duplicate periods and surplus roles',async()=>{
   const x=fx();x.observations.push({...x.observations[0],observation_id:'duplicate'});x.snapshot.observation_ids.push('duplicate');expect((await status(x)).status).toBe('integrity_error');
   const y=fx();y.observations.push(obs('US_CPI_YOY','2026-07-31','2.5'));y.snapshot.observation_ids.push('US_CPI_YOY:2026-07-31');expect((await status(y)).status).toBe('integrity_error');
  });
+ it('clock.status.3 rejects same-count substitution and duplicate snapshot ids',async()=>{const x=fx();x.observations[0]={...x.observations[0],observation_id:'substitute'};expect((await status(x)).status).toBe('integrity_error');const y=fx();y.snapshot.observation_ids[0]=y.snapshot.observation_ids[1];expect((await status(y)).status).toBe('integrity_error');});
+ it('clock.status.3 rejects two versions of one period',async()=>{const x=fx();x.observations.push({...x.observations[0],observation_id:'new-version',version:2});x.snapshot.observation_ids.push('new-version');expect((await status(x)).status).toBe('integrity_error');});
+ it('clock.status.3 rejects more than three rows and a non-role observation',async()=>{const x=fx();x.observations.push(obs('US_DFF','2026-07-31','3.6'));x.snapshot.observation_ids.push('US_DFF:2026-07-31');expect((await status(x)).status).toBe('integrity_error');const y=fx();y.observations=y.observations.filter(o=>o.observation_id!=='US_DFF:2026-06-30');y.snapshot.observation_ids=y.observations.map(o=>o.observation_id);y.observations.push(obs('US_DFF','2026-07-31','3.6'));y.snapshot.observation_ids.push('US_DFF:2026-07-31');expect((await status(y)).status).toBe('integrity_error');});
  it('clock.status.7 rejects distribution and null regime',async()=>{
   const x=fx();const card=(await x.f4()) as Extract<F4Match,{status:'card'}>;card.claim.distribution.recovery+=.001;x.f4=async()=>card;expect((await status(x)).status).toBe('f4_mismatch');
   const y=fx();rec(y).regime=null;expect((await status(y)).status).toBe('f4_mismatch');
  });
- it('clock.status.9 projects a validated method manifest and rejects tampering',async()=>{
-  const x=manifestFx(),rows=rec(x).method_manifest!.rows;
-  expect((await status(x)).status).toBe('ok');
-  rows[0].contribution!.overheat+=.01;expect((await status(x)).diagnostics[0].code).toBe('invariant_9');rows[0].contribution!.overheat-=.01;
-  rows[0].latest_observation_id='US_DFF:2026-08-31';expect((await status(x)).diagnostics[0].code).toBe('invariant_9');rows[0].latest_observation_id='US_DFF:2026-09-30';
-  rows[0].change_kind='pp';expect((await status(x)).diagnostics[0].code).toBe('invariant_9');
- });
+ it('clock.status.9 projects a validated method manifest',async()=>{const v=await status(manifestFx());expect(v.status).toBe('ok');});
+ it.each([
+  ['cell',(row:MethodManifest['rows'][number])=>{row.contribution!.overheat+=.01;}],
+  ['latest_id',(row:MethodManifest['rows'][number])=>{row.latest_observation_id='US_DFF:2026-08-31';}],
+  ['change_kind',(row:MethodManifest['rows'][number])=>{row.change_kind='pp';}],
+ ] as const)('invariant.9.%s',async(_name,mutate)=>{const x=manifestFx();mutate(rec(x).method_manifest!.rows[0]);const v=await status(x);expect(v.status).toBe('reconcile_failed');expect(v.diagnostics[0].code).toBe('invariant_9');});
+ it('invariant.9.null_role_id',async()=>{const x=manifestFx();rec(x).method_manifest!.rows[0].latest_observation_id=null;expect((await status(x)).diagnostics[0].code).toBe('invariant_9');});
  it('invariant.9.misclassified',async()=>{
   const x=manifestFx();rec(x).method_manifest!.rows[0].display_only=true;
   const v=await status(x);expect(v.status).toBe('reconcile_failed');expect(v.diagnostics[0].code).toBe('invariant_9');
   expect(v).not.toHaveProperty('summary');
  });
+ it('clock.status.9 accepts a catalog display row outside weights',async()=>{
+  const x=manifestFx(),def=MACRO_CATALOG.find(d=>d.region==='US'&&d.role==='indicator'&&!Object.hasOwn(regionWeights('US'),d.id)),id=def?.id;
+  // Skip only this case if the current catalog no longer has an unweighted indicator.
+  if(!def||!id)return;
+  const o=obs(id,'2026-09-30','310');x.observations.push(o);x.snapshot.observation_ids.push(o.observation_id);
+  rec(x).method_manifest!.rows.push({series_id:id,type:def.type,unit:def.unit,change_kind:def.changeKind,name:def.name,weight:0,display_only:true,state:'not_matched',reason:def.reason??null,latest_observation_id:o.observation_id,prev_observation_id:null,prev3m_observation_id:null,matched:false,rule_id:null,support:null,contribution:null});
+  const v=await status(x);expect(v.status).toBe('ok');if(v.status==='ok')expect(v.display_only_rows).toContainEqual({series_id:id,name:def.name,unit:def.unit,latest:{observation_id:o.observation_id,period_end:o.period_end,value_text:o.value_text,version:o.version}});
+ });
+ it('f4 exceptions and malformed matches are unavailable with diagnostics',async()=>{const x=fx();x.f4=async()=>{throw new Error('fail');};let v=await status(x);expect(v.status).toBe('f4_unavailable');expect(v.diagnostics).toEqual([{code:'f4_exception',ids:[]}]);x.f4=async()=>({status:'card',claim:{distribution:{recovery:NaN}}} as unknown as F4Match);v=await status(x);expect(v.status).toBe('f4_unavailable');expect(v.diagnostics).toEqual([{code:'f4_malformed',ids:[]}]);});
+ it('accepts sparse stored support and treats missing regimes as zero',async()=>{const x=manifestFx();expect(rec(x).contributions[1].support).toEqual({overheat:.5,stagflation:.3});expect((await status(x)).status).toBe('ok');});
+ it.each([
+  ['extra key',(support:RegimeContribution['support'])=>{(support as Record<string,number>).unknown=.2;}],
+  ['non-finite value',(support:RegimeContribution['support'])=>{support.overheat=NaN;}],
+ ] as const)('invariant.2 rejects support with %s',async(_name,mutate)=>{const x=fx();mutate(rec(x).contributions[1].support);const v=await status(x);expect(v.status).toBe('reconcile_failed');expect(v.diagnostics[0].code).toBe('invariant_2');});
+ it('rejects malformed full regime maps',async()=>{const x=fx();delete (rec(x).contributions[0].contribution as Partial<RegimeContribution['contribution']>).recovery;expect((await status(x)).diagnostics[0].code).toBe('invariant_2');const y=fx();rec(y).regime!.norm.overheat=NaN;expect((await status(y)).diagnostics[0].code).toBe('invariant_5');});
+ it('drops a display change with a non-finite computed value',async()=>{const x=fx();const latest=x.observations.find(o=>o.observation_id==='US_DTWEXBGS:2026-09-30')!;latest.value_text='9'.repeat(400);const v=await status(x);expect(v.status).toBe('ok');if(v.status==='ok')expect(v.rows.find(r=>r.series_id==='US_DTWEXBGS')?.display_change).toBeNull();});
 
  it('gate helpers return the same ordered status as buildClockView',()=>{
   const x=fx();expect(gateSnapshot(x.snapshot)).toEqual({ok:true});expect(gateObservations(x.snapshot,x.observations)).toEqual({ok:true});expect(gateRecord(rec(x))).toEqual({ok:true});
