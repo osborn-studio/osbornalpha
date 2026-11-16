@@ -69,6 +69,13 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    expect(await db.manifest('not-a-uuid')).toBeNull();
   });
 
+  it('putManifest: large body preserves canonical identity, concurrent replay and full readback',async()=>{
+   const body=testManifest('cycle_table',{salt:'大'.repeat(400000)}),canonical=canonicalJson(body);
+   const [a,b]=await Promise.all([db.putManifest(body),db.putManifest(body)]);
+   expect(a).toEqual(b);expect(a.manifest_hash).toBe(sha256Hex(canonical));
+   expect(await db.manifest(a.manifest_id)).toEqual(a);
+  });
+
   it('publishReview: absent pointer = generation 0, replayed before stale, A→B→A advances to the original A result, older cutoff is stale',async()=>{
    const m=month();
    expect(await db.reviewCurrent('US',m)).toBeNull();

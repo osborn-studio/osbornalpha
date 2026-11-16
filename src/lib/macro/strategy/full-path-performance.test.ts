@@ -2,6 +2,7 @@
 // No credentials or network; auth and PostgreSQL/Next storage backends are simulated.
 import {createClient} from '@supabase/supabase-js';
 import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
 import {closeSync,constants,openSync,realpathSync,writeFileSync} from 'node:fs';
 import {basename,dirname,join,resolve,sep} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -48,17 +49,18 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
   if(url.origin!=='https://fixture.invalid')throw new Error('non-fixture transport forbidden');
   const table=url.pathname.replace('/rest/v1/','');
   let result:unknown,total=0,offset=0,rowCount=0;
-  if(table==='rpc/macro_put_manifest_json'){
+  if(table==='rpc/macro_put_manifest_json'||table==='rpc/macro_put_manifest_gz'){
    expect(req.method).toBe('POST');
-   const args=JSON.parse(body);
-   expect(digest(args.p_body)).toBe(args.p_manifest_hash);
+   const args=JSON.parse(body),gz=table.endsWith('_gz');
+   const decoded=gz?JSON.parse(gunzipSync(Buffer.from(args.p_body_gz,'base64')).toString()):args.p_body;
+   expect(digest(decoded)).toBe(args.p_manifest_hash);
    let stored=rows.macro_strategy_manifests.find(r=>r.manifest_hash===args.p_manifest_hash);
-   if(stored)expect(stored.body).toEqual(args.p_body);
+   if(stored)expect(stored.body??JSON.parse(gunzipSync(Buffer.from(String(stored.body_gz).slice(2),'hex')).toString())).toEqual(decoded);
    else{
-    stored={manifest_id:`00000000-0000-4000-8000-${String(rows.macro_strategy_manifests.length+1).padStart(12,'0')}`,manifest_hash:args.p_manifest_hash,body:args.p_body,created_at:CREATED};
+    stored={manifest_id:`00000000-0000-4000-8000-${String(rows.macro_strategy_manifests.length+1).padStart(12,'0')}`,manifest_hash:args.p_manifest_hash,body:gz?null:decoded,...(gz?{body_gz:`\\x${Buffer.from(args.p_body_gz,'base64').toString('hex')}`,body_bytes:args.p_body_bytes}:{}),created_at:CREATED};
     rows.macro_strategy_manifests.push(stored);
    }
-   result=stored.manifest_id;
+   result=gz?{manifest_id:stored.manifest_id,outcome:'replayed'}:stored.manifest_id;
   }else{
    expect(req.method).toBe('GET');
    if(!(table in rows))throw new Error(`unexpected fixture table:${table}`);
@@ -134,7 +136,8 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    const body=await response.text(),elapsedMs=performance.now()-start;
    expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('private, no-store');
    const parsed=JSON.parse(body);
-   const stored=t.rows.macro_strategy_manifests.find(r=>r.manifest_id===parsed.manifest_id)! as unknown as StoredManifest;
+   const raw=t.rows.macro_strategy_manifests.find(r=>r.manifest_id===parsed.manifest_id)!;
+   const stored={...raw,body:raw.body??JSON.parse(gunzipSync(Buffer.from(String(raw.body_gz).slice(2),'hex')).toString())} as unknown as StoredManifest;
    expect(stored).toBeDefined();expect(stored.body).toEqual(JSON.parse(canonicalJson(reference)));
    expect(stored.manifest_hash).toBe(digest(reference));
    expect(parsed).toEqual(buildCycleTable(stored));
@@ -153,7 +156,7 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    const cold=phase==='cold'||phase==='cache-reset-cold';
    if(cold){
     expect(t.peak()).toBe(HISTORY_PAGE_CONCURRENCY);
-    expect(byTable['rpc/macro_put_manifest_json']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
+    expect(byTable['rpc/macro_put_manifest_gz']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
     const histories=t.calls.filter(c=>c.table==='macro_observations');
     expect(t.historyHeaders.filter(h=>h==='count=exact')).toHaveLength(13);
     expect(new Set(histories.map(c=>c.series)).size).toBe(13);
