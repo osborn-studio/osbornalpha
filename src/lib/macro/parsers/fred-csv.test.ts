@@ -1,7 +1,9 @@
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import {MACRO_CATALOG} from '../catalog';
+import {canonical} from '../decimal';
 import {FredParseError,parseFredCsv} from './fred-csv';
 
 const enc=(s:string)=>new TextEncoder().encode(s);
@@ -66,6 +68,8 @@ describe('parseFredCsv (synthetic)',()=>{
 // from FRED on 2026-11-06 with the same URLs; Step 3 says how to confirm them against the recorded files.
 interface ManifestEntry{code:string;series_id:string;url:string;fetched_at:string;sha256:string;content_type:string;http_status:number}
 const manifest:ManifestEntry[]=JSON.parse(readFileSync(new URL('../fixtures/fred/manifest.json',import.meta.url),'utf8'));
+// WP-D catalog rows arrive in PR-3; their recorded fixtures are already staged here.
+const STAGED_WPD=['WALCL','RRPONTSYD','WTREGEN'];
 const fixture=(code:string)=>new Uint8Array(readFileSync(new URL(`../fixtures/fred/${code}.csv`,import.meta.url)));
 const defOf=(code:string)=>{const d=MACRO_CATALOG.find(x=>x.source?.adapter==='fred_csv'&&x.source.seriesKey===code&&!x.derive&&!x.aliasOf);if(!d)throw new Error(`no def for ${code}`);return d;};
 const parse=(code:string)=>{const d=defOf(code);return parseFredCsv(fixture(code),{seriesId:d.id,code,period:d.period});};
@@ -74,12 +78,12 @@ const row=(code:string,periodEnd:string)=>parse(code).find(p=>p.periodEnd===peri
 describe('parseFredCsv (recorded fixtures)',()=>{
  it('has one fixture per active native FRED series, each matching its manifest hash and URL',()=>{
   const want=MACRO_CATALOG.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf).map(d=>d.source!.seriesKey).sort();
-  expect(manifest.map(m=>m.code).sort()).toEqual(want);
+  expect(manifest.map(m=>m.code).sort()).toEqual([...want,...STAGED_WPD].sort());
   for(const m of manifest){
    expect(createHash('sha256').update(fixture(m.code)).digest('hex'),m.code).toBe(m.sha256);
    expect(m.url).toBe(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${m.code}&cosd=2015-01-01`);
    expect(m.http_status).toBe(200);
-   expect(parse(m.code).length,m.code).toBeGreaterThan(100);
+   if(!STAGED_WPD.includes(m.code))expect(parse(m.code).length,m.code).toBeGreaterThan(100);
   }
  });
  it('reads exact value texts and lines of known rows',()=>{
@@ -106,5 +110,52 @@ describe('parseFredCsv (recorded fixtures)',()=>{
   expect(row('DGS10','2025-01-20')).toBeUndefined();     // MLK day: "2025-01-20,"
   expect(row('CPIAUCSL','2025-10-31')).toBeUndefined();  // 2025 shutdown: "2025-10-01,"
   expect(row('UNRATE','2025-10-31')).toBeUndefined();
+ });
+});
+
+describe('weekly and sparse daily FRED series (WP-D fixtures)',()=>{
+ const fx=(code:string)=>new Uint8Array(readFileSync(join(process.cwd(),'src/lib/macro/fixtures/fred',`${code}.csv`)));
+ for(const code of STAGED_WPD){
+  it(`${code}: recorded bytes match the manifest hash, URL and HTTP status`,()=>{
+   const entry=manifest.find(m=>m.code===code);
+   expect(entry,code).toBeDefined();
+   expect(createHash('sha256').update(fx(code)).digest('hex')).toBe(entry!.sha256);
+   expect(entry!.url).toContain(`id=${code}&cosd=2015-01-01`);
+   expect(entry!.http_status).toBe(200);
+  });
+ }
+ const expectBoundaryRows=(code:string,seriesId:string,pts:ReturnType<typeof parseFredCsv>)=>{
+  const lines=new TextDecoder().decode(fx(code)).split('\n');
+  const lastLine=lines.findLastIndex(line=>line.length>0);
+  for(const lineIndex of [1,lastLine]){
+   const [periodEnd,raw]=lines[lineIndex].split(',');
+   expect(pts[lineIndex===1?0:pts.length-1],`${code} line ${lineIndex+1}`).toEqual({
+    seriesId,periodEnd,valueText:canonical(raw),locator:{kind:'csv_row',line:lineIndex+1,column:1},
+   });
+  }
+ };
+ it('WALCL: weekly Wednesday levels parse with period day; first and last rows match the bytes',()=>{
+  const pts=parseFredCsv(fx('WALCL'),{seriesId:'US_WALCL_W',code:'WALCL',period:'day'});
+  expectBoundaryRows('WALCL','US_WALCL_W',pts);
+  for(const p of pts)expect(new Date(`${p.periodEnd}T00:00:00Z`).getUTCDay(),p.periodEnd).toBe(3);
+ });
+ it('WTREGEN: weekly week-average levels, Wednesdays only',()=>{
+  const pts=parseFredCsv(fx('WTREGEN'),{seriesId:'US_WTREGEN_W',code:'WTREGEN',period:'day'});
+  expectBoundaryRows('WTREGEN','US_WTREGEN_W',pts);
+  for(const p of pts)expect(new Date(`${p.periodEnd}T00:00:00Z`).getUTCDay()).toBe(3);
+ });
+ it('RRPONTSYD: empty values (no operation that day) produce no point; values keep decimal text',()=>{
+  const text=new TextDecoder().decode(fx('RRPONTSYD'));const empty=text.split('\n').filter(l=>/^\d{4}-\d{2}-\d{2},$/.test(l)).length;
+  const pts=parseFredCsv(fx('RRPONTSYD'),{seriesId:'US_RRPONTSYD_D',code:'RRPONTSYD',period:'day'});
+  expect(empty).toBeGreaterThan(0);expect(pts.length+empty).toBe(text.trimEnd().split('\n').length-1);
+  for(const [index,line] of text.split('\n').entries()){
+   if(index===0||!line)continue;
+   const [periodEnd,raw]=line.split(',');
+   if(!raw||raw==='.')continue;
+   const point=pts.find(p=>p.periodEnd===periodEnd&&p.locator.kind==='csv_row'&&p.locator.line===index+1);
+   expect(point,`RRPONTSYD line ${index+1}`).toBeDefined();
+   expect(point!.valueText,`RRPONTSYD line ${index+1}`).toBe(canonical(raw));
+   expect(point!.locator,`RRPONTSYD line ${index+1}`).toEqual({kind:'csv_row',line:index+1,column:1});
+  }
  });
 });

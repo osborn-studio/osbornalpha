@@ -81,11 +81,38 @@
   "http_status": 200
  },
  {
+  "code": "RRPONTSYD",
+  "series_id": "US_RRPONTSYD_D",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=RRPONTSYD&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T12:11:52.815Z",
+  "sha256": "20c78ee3ed99c5a5ef2abb678ef19e4d829a28629a5d9210cffb45fc86fdd031",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
   "code": "UNRATE",
   "series_id": "US_UNRATE",
   "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2015-01-01",
   "fetched_at": "2026-11-07T02:37:55.708Z",
   "sha256": "e2629d9953d8ae24a5d41d4d1f33b606bb10d2a01400e2ac34945b3e871f9e0d",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "WALCL",
+  "series_id": "US_WALCL_W",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=WALCL&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T12:11:52.180Z",
+  "sha256": "75a9310572a857d4b5f6c2e680112cc862e918e31015cf489a52ad0796664448",
+  "content_type": "application/csv",
+  "http_status": 200
+ },
+ {
+  "code": "WTREGEN",
+  "series_id": "US_WTREGEN_W",
+  "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=WTREGEN&cosd=2015-01-01",
+  "fetched_at": "2026-11-07T12:11:53.190Z",
+  "sha256": "7412fd4ce562feed01905d5b204d533e4d3092195cf979aa2757b410a66c0628",
   "content_type": "application/csv",
   "http_status": 200
  }

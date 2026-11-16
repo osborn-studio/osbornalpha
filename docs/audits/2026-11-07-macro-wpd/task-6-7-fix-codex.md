@@ -1,0 +1,3 @@
+Applied the four fixes in [fred-csv.test.ts](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/macro-wpd-fed/src/lib/macro/parsers/fred-csv.test.ts) and [record-fred-fixtures.ts](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/macro-wpd-fed/scripts/macro/record-fred-fixtures.ts). The tests now include the three staged codes, verify their recorded bytes and manifest metadata, and compare parsed rows with values derived from the CSV. The recorder rejects invalid CLI options with a usage line and exit code 2.
+
+**Checks:** 44 tests passed across 3 files; typecheck and lint passed. Two invalid CLI cases returned exit code 2. No commit was made, and `v2-closure.txt` was untouched.
