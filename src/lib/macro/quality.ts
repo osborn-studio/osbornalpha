@@ -13,12 +13,14 @@ import type {RuleResult} from '../dq/rules';
 import type {MacroSeriesDef,SeriesType} from './types';
 
 export const MACRO_RULES_VERSION='macro-rules/1';
-export const KNOWN_UNITS=['pct','index','index_1982_84_100','index_2009_11_100','index_prev_year_100','cny_per_100usd','usd_per_bbl'] as const;
+export const KNOWN_UNITS=['pct','index','index_1982_84_100','index_2009_11_100','index_prev_year_100','cny_per_100usd','usd_per_bbl','usd_mn','usd_bn'] as const;
 export interface QualityProfile{min:number;max:number;maxRelJump:number|null}
 const BY_UNIT:Record<string,QualityProfile>={
  index_prev_year_100:{min:50,max:200,maxRelJump:0.3},
  cny_per_100usd:{min:400,max:1000,maxRelJump:0.1},
  usd_per_bbl:{min:-100,max:1000,maxRelJump:null},
+ usd_mn:{min:0,max:20_000_000,maxRelJump:0.5},
+ usd_bn:{min:0,max:10_000,maxRelJump:null},
 };
 const PMI:QualityProfile={min:0,max:100,maxRelJump:0.5};
 const INDEX_LEVEL:QualityProfile={min:0,max:100000,maxRelJump:0.5};

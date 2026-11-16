@@ -7,9 +7,13 @@ import type {MacroDeps} from '@/lib/macro/deps';
 import {memoryMacroDb} from '@/lib/macro/memory-db';
 import type {EvidenceInput} from '@/lib/macro/types';
 
-const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn()}));
+const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn(),laterFirstPeriod:false}));
 vi.mock('@/lib/macro/deps',()=>({productionMacroDeps:mocks.deps}));
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
+vi.mock('@/lib/macro/catalog',async(importOriginal)=>{
+ const actual=await importOriginal<typeof import('@/lib/macro/catalog')>();
+ return {...actual,collectableOf:(adapter:Parameters<typeof actual.collectableOf>[0])=>actual.collectableOf(adapter).map(d=>mocks.laterFirstPeriod&&d.source?.seriesKey==='DFF'?{...d,firstPeriod:'2002-12-18'}:d)};
+});
 // Typed loosely (Record) so cases can resolve other receipts (stale / failed) or reject (fenced); 4 params like publishRegion.
 const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string,_today?:string,_opts?:unknown):Promise<Record<string,unknown>>=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped',replayed:false})));
 vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
@@ -35,7 +39,7 @@ function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:E
 let fetchCalls:string[],failCodes:Set<string>,overrides:Map<string,string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
 beforeEach(()=>{
  vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';
- early=false;fetchCalls=[];failCodes=new Set();overrides=new Map();
+ early=false;mocks.laterFirstPeriod=false;fetchCalls=[];failCodes=new Set();overrides=new Map();
  tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
  const fetch=(async(input:string|URL|Request)=>{
   const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
@@ -114,6 +118,15 @@ describe('macro-sync cron',()=>{
   await GET(req());
   const dff=fetchCalls.find(u=>codeOfUrl(u)==='DFF')!,cpi=fetchCalls.find(u=>codeOfUrl(u)==='CPIAUCSL')!;
   expect(dff).toContain('cosd=2025-10-02');expect(cpi).toContain('cosd=2020-11-01');
+ });
+ it('uses a series firstPeriod to decide when its backfill is complete',async()=>{
+  mocks.laterFirstPeriod=true;
+  overrides.set('DFF','observation_date,DFF\n2003-01-03,4.0\n2026-09-30,4.1\n2026-10-01,4.2\n');
+  await GET(req());
+  expect(fetchCalls.find(u=>codeOfUrl(u)==='DFF')).toContain('cosd=2002-12-18');
+  fetchCalls=[];
+  await GET(req());
+  expect(fetchCalls.find(u=>codeOfUrl(u)==='DFF')).toContain('cosd=2025-10-02');
  });
  it('a failing series makes the batch partial; the rest is written and freshness stays ok',async()=>{
   failCodes.add('DFF');
