@@ -241,7 +241,7 @@ describe('overviewEnvelope',()=>{
   const {deps}=await setup();
   const env=await overviewEnvelope(deps,'CN',TODAY);
   expect(env).toMatchObject({snapshotId:null,asOf:null,methodologyVersion:null,catalogCounts:null});
-  expect(env.collection).toEqual([{dataset:'macro.akshare',status:'missing',lastOkAt:null,lastAttemptAt:null}]);
+  expect(env.collection).toEqual([{dataset:'macro.akshare',status:'missing',lastOkAt:null,lastAttemptAt:null},{dataset:'macro.bis',status:'missing',lastOkAt:null,lastAttemptAt:null}]);
   expect(env.indicators.length).toBe(11);
   expect(env.indicators.every(r=>r.value_text===null&&r.change===null&&r.presence==='missing'&&r.observation_id===null)).toBe(true);
   // data presence and release timeliness are separate (第 4 稿 P1-3): no data ⇒ timeliness 'missing' only where a release
