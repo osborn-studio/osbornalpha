@@ -4,8 +4,8 @@
 export type StrategyLinkKey='transmission'|'history'|'review';
 export interface StrategyLinkTab{key:StrategyLinkKey;href:string}
 export const STRATEGY_LINK_TABS:readonly StrategyLinkTab[]=[
- {key:'transmission',href:'/intel/macro/transmission'},
- {key:'history',href:'/intel/macro/history'},
- {key:'review',href:'/intel/macro/review'},
+ {key:'transmission',href:'/macro/transmission'},
+ {key:'history',href:'/macro/history'},
+ {key:'review',href:'/macro/review'},
 ];
 export const strategyLinkTabs=(enabled:boolean):readonly StrategyLinkTab[]=>enabled?STRATEGY_LINK_TABS:[];
