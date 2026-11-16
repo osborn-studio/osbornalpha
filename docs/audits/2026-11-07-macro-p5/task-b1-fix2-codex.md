@@ -1,0 +1,5 @@
+Applied the B1 fix round without committing. Changed [clock-view.ts](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f/src/lib/macro/clock-view.ts) and [clock-view.test.ts](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f/src/lib/macro/clock-view.test.ts). The requested policy-rate assertion was already present in the sibling test, so that file needed no edit.
+
+The requested Vitest run passed **47 tests across 2 files**. Typecheck and lint passed. `git diff --check` passed.
+
+**Deviation:** The required four-key support guard rejects sparse support objects emitted directly by `classifyRegime`; the test fixtures normalize those objects to the required stored shape. No files outside the allowed scope were changed by this fix round.
