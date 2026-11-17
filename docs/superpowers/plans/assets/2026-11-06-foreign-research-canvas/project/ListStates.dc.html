@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>列表三态 404 与 stock 块</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1440px; height: 1500px; padding: 32px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-content: start">
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">列表 · 空馆藏 Empty library</div>
+    <div class="callout" style="padding: 28px; display: flex; flex-direction: column; gap: 6px">
+      <div class="h3">尚无已发布研报</div>
+      <span>研报由管理员上传并经许可确认后发布。<span class="fog">No published reports yet. Reports are uploaded by admins and published after licence confirmation.</span></span>
+    </div>
+  </section>
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">列表 · 筛选无结果 No results</div>
+    <div class="row"><span class="chip ac">机构：Jefferies ×</span><span class="chip ac">评级：卖出 ×</span></div>
+    <div class="callout" style="padding: 28px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start">
+      <div class="h3">没有符合条件的报告</div>
+      <button class="btn sm">清除筛选 Clear filters</button>
+    </div>
+  </section>
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">列表 · 加载失败 Load failed</div>
+    <div class="errcard row"><span class="dot err"></span><span>报告列表加载失败。不回退到示例数据。</span><button class="btn sm" style="margin-left: auto">重试 Retry</button></div>
+  </section>
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">列表 · 加载中 Loading</div>
+    <div style="display: flex; flex-direction: column; gap: 8px"><div class="sk" style="height: 20px"></div><div class="sk" style="height: 20px; width: 92%"></div><div class="sk" style="height: 20px; width: 96%"></div><div class="sk" style="height: 20px; width: 88%"></div></div>
+  </section>
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">详情 · 404（撤回 / 取消发布 / 开关关闭）</div>
+    <div class="callout" style="padding: 28px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start">
+      <div class="h2">找不到这份报告</div>
+      <span>报告不存在，或已不再公开。<span class="fog">This report does not exist or is no longer public.</span></span>
+      <a class="btn sm" href="Main.dc.html">返回外资研报</a>
+    </div>
+    <div class="tiny">三种原因对外一律 404，不区分措辞，避免泄露撤回状态。</div>
+  </section>
+  <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">详情 · 缺失态</div>
+    <table class="t dense"><tbody>
+      <tr><td>目标价</td><td class="wh">报告未给出目标价（absent）</td></tr>
+      <tr><td>方法论参数</td><td class="wh">报告未写明 · 不显示此行</td></tr>
+      <tr><td>独立摘要</td><td class="wh">尚无摘要</td></tr>
+      <tr><td>引用片段</td><td class="wh">无公开片段</td></tr>
+    </tbody></table>
+  </section>
+  <section class="card pad" style="grid-column: span 2; display: flex; flex-direction: column; gap: 12px">
+    <div class="lbl-state">4 · /stock/[ticker] 块 “馆藏研报（n）”</div>
+    <div class="card" style="background: #141417; padding: 0">
+      <div class="row" style="padding: 12px 16px"><span class="h3">馆藏研报（5）<span class="en">Library reports</span></span><a href="Main.dc.html?tk=600519.SH" style="margin-left: auto; font-size: 13px">全部 →</a></div>
+      <table class="t dense">
+        <tbody>
+          <tr><td class="m dim" style="padding-left: 16px">2026-11-01</td><td>Goldman Sachs</td><td><a href="Detail.dc.html" style="color: #fafafa">Margin resilience through the cycle</a></td><td><span class="chip sq">买入</span></td><td class="n" style="padding-right: 16px"><button class="src">CNY 1,980</button></td></tr>
+          <tr><td class="m dim" style="padding-left: 16px">2026-09-12</td><td>UBS</td><td><a href="#" style="color: #fafafa">Channel inventory check</a></td><td><span class="chip sq">持有</span></td><td class="n" style="padding-right: 16px"><button class="src">CNY 1,620</button></td></tr>
+          <tr><td class="m dim" style="padding-left: 16px">2026-07-03</td><td>HSBC</td><td><a href="#" style="color: #fafafa">Pricing power revisited</a></td><td><span class="chip sq">买入</span></td><td class="n wh" style="padding-right: 16px">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tiny">最近 5 条；没有报告时整块隐藏。原 mock 研报块与 consensus mock 回退一并移除（consensus 返回 source: none）。</div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

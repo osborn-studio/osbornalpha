@@ -38,6 +38,7 @@ function duration(value: number | null): string {
 export function AdminUsageClient() {
   const t = useTranslations('admin.usage');
   const securitiesT = useTranslations('admin.securities');
+  const researchT = useTranslations('foreign-research.admin.shell');
   const locale = useLocale();
   const [range, setRange] = useState<UsageWindowKey>('7d');
   const [state, setState] = useState<ViewState>({ status: 'loading', data: null });
@@ -73,6 +74,7 @@ export function AdminUsageClient() {
           <div className="mb-2 flex gap-3 text-xs">
             <span className="font-medium text-accent">{securitiesT('usageLink')}</span>
             <Link href="/admin/securities" className="text-text-dim hover:text-text">{securitiesT('securitiesLink')}</Link>
+            <Link href="/admin/broker-research" className="text-text-dim hover:text-text">{researchT('title')}</Link>
           </div>
           <h1 className="text-xl font-bold">{t('title')}</h1>
           <p className="mt-1 text-xs text-text-dim">{t('subtitle')}</p>

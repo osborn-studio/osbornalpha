@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>研报管理 文档页</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1400px">
+  <header class="top"><div class="wrap" style="display: flex; align-items: center; gap: 16px; height: 56px"><span class="brand">OsbornAlpha</span><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><a href="AdminOverview.dc.html" class="cap">研报管理</a><span class="tiny">/ 文档 8c1…</span></div></header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 20px; padding-top: 24px; padding-bottom: 48px">
+    <section style="display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap">
+      <div><h1 class="h1" style="font-size: 24px">GS_Moutai_2026-11-01.pdf</h1><div class="row" style="margin-top: 6px"><span class="chip warn">待复核 needs review</span><span class="hash">sha256 9a4c1f0e…be27</span><span class="tiny">许可 GS 机构订阅 v3 · 18 页</span></div></div>
+      <div class="row" style="margin-left: auto">
+        <button class="btn">查看原文（签名链接）</button>
+        <button class="btn">解析 Parse</button>
+        <button class="btn">抽取 Extract</button>
+        <button class="btn">生成摘要 Summarize</button>
+        <a class="btn pri" href="Review.dc.html">去复核 Review →</a>
+      </div>
+    </section>
+    <div class="tiny">查看原文：先写访问日志，再现铸签名 URL（只发给管理员）。解析与抽取是两个独立动作，各自 maxDuration 300 s。</div>
+
+    <section class="card" style="padding: 0">
+      <div class="row" style="padding: 14px 16px"><h2 class="h2">运行 <span class="en">Runs · immutable</span></h2></div>
+      <table class="t">
+        <thead><tr><th style="padding-left: 16px">run</th><th>类型</th><th>开始</th><th>状态</th><th>产物 / 请求</th><th>代码 · 提示词</th><th style="padding-right: 16px"></th></tr></thead>
+        <tbody>
+          <tr><td class="hash" style="padding-left: 16px">run 4b7…</td><td>summary</td><td class="m dim">11-02 10:05</td><td><span class="chip">success</span></td><td class="hash">resp 1c0…</td><td class="hash">a71e0c2 · sum/3</td><td style="padding-right: 16px"><button class="btn ghost sm">详情</button></td></tr>
+          <tr><td class="hash" style="padding-left: 16px">run 2f1…</td><td>extract</td><td class="m dim">11-02 09:41</td><td><span class="chip warn">partial · 2 字段缺</span></td><td class="hash">resp 77e…</td><td class="hash">a71e0c2 · ext/5</td><td style="padding-right: 16px"><button class="btn ghost sm">详情</button></td></tr>
+          <tr><td class="hash" style="padding-left: 16px">run 0aa…</td><td>parse</td><td class="m dim">11-01 21:10</td><td><span class="chip">success · 18 页</span></td><td class="hash">artifact 5d9…</td><td class="hash">a71e0c2 · pdf-parse 4.1</td><td style="padding-right: 16px"><button class="btn ghost sm">详情</button></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start">
+      <section class="card pad" style="display: flex; flex-direction: column; gap: 12px">
+        <div class="row"><h2 class="h3">撤回 Withdraw</h2></div>
+        <p class="cap" style="margin: 0">撤回后公开路由 404，签名链接一律 410；证据与审计保留。</p>
+        <div class="field"><label for="wr">原因（必填）</label><input id="wr" class="inp" placeholder="例如：许可终止"></div>
+        <button class="btn" style="align-self: flex-start">撤回 Withdraw</button>
+      </section>
+      <section class="card pad" style="display: flex; flex-direction: column; gap: 12px; border-color: rgba(225,29,72,.4)">
+        <div class="row"><h2 class="h3">清除 Purge</h2><span class="chip err">不可逆</span></div>
+        <ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px">
+          <li class="step done"><span class="no">✓</span><div class="cap">1 · 撤回（已完成 2026-11-03）</div></li>
+          <li class="step done"><span class="no">✓</span><div class="cap">2 · 取消全部发布快照（3）</div></li>
+          <li class="step cur"><span class="no">3</span><div class="cap" style="color: #fafafa">3 · 删除私有桶原文与页面图像</div></li>
+          <li class="step"><span class="no">4</span><div class="cap">4 · 删除全文、跨度、原始模型响应</div></li>
+          <li class="step"><span class="no">5</span><div class="cap">5 · 写清除回执（保留哈希与审计）</div></li>
+        </ol>
+        <div class="field"><label for="cf">输入文档 sha256 前 8 位以确认</label><input id="cf" class="inp m" placeholder="9a4c1f0e"></div>
+        <button class="btn dis" disabled style="align-self: flex-start; border-color: rgba(225,29,72,.5)">执行步骤 3</button>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -25,6 +25,9 @@ import { CompanyTrackingView } from '@/components/company/tracking/CompanyTracki
 import { AiView } from './legacy/AiView';
 import { SignalsView } from './legacy/SignalsView';
 import { HoldingsView } from './legacy/HoldingsView';
+// FOREIGN ↓ library reports on the company overview (spec §9.4)
+import { LibraryReportsBlock } from '@/app/(app)/intel/foreign-research/components/LibraryReportsBlock';
+// FOREIGN ↑
 
 export interface CompanyPageProps {
   data: CompanyPageData; view: ViewId; asOf: string | null; highlight: string | null; focus?: FocusTarget | null; isAdmin: boolean; locale: 'zh' | 'en';
@@ -100,6 +103,9 @@ function CompanyShell({ data, view, asOf, highlight, focus = null, isAdmin, loca
       <ViewTabs ticker={ticker} view={view} asOf={asOf} right={asOf ? undefined : <ReplayOpener ticker={ticker} view={view} />} />
       <DrawerHost ticker={ticker} asOf={asOf} admin={isAdmin && adminView && view === 'statements'}>
         <div>{renderBody()}</div>
+        {/* FOREIGN ↓ current library reports appear below the overview, outside historical replay */}
+        {view === 'overview' && !asOf && <div className="mt-5"><LibraryReportsBlock ticker={ticker} /></div>}
+        {/* FOREIGN ↑ */}
       </DrawerHost>
       <Disclaimer />
     </div>

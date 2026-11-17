@@ -16,6 +16,7 @@ function percent(value: number) {
 
 export function AdminSecuritiesClient() {
   const t = useTranslations('admin.securities');
+  const researchT = useTranslations('foreign-research.admin.shell');
   const locale = useLocale();
   const [state, setState] = useState<State>({ status: 'loading', data: null });
 
@@ -41,6 +42,7 @@ export function AdminSecuritiesClient() {
           <div className="mb-2 flex gap-3 text-xs">
             <Link href="/admin/usage" className="text-text-dim hover:text-text">{t('usageLink')}</Link>
             <span className="font-medium text-accent">{t('securitiesLink')}</span>
+            <Link href="/admin/broker-research" className="text-text-dim hover:text-text">{researchT('title')}</Link>
           </div>
           <h1 className="text-xl font-bold">{t('title')}</h1>
           <p className="mt-1 text-xs text-text-dim">{t('subtitle')}</p>

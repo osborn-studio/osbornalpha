@@ -38,6 +38,9 @@ criticalSuites.push('src/lib/company/handlers/target-fence.test.ts', 'src/lib/co
 criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');
 criticalSuites.push('src/lib/judgments/integration/macro-bridge.integration.test.ts');
 // /F4
+// FOREIGN ↓ broker research critical suites
+criticalSuites.push('src/lib/broker-research/broker-research.integration.test.ts', 'src/lib/broker-research/pipeline.integration.test.ts');
+// FOREIGN ↑
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

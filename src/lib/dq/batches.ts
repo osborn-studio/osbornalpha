@@ -65,7 +65,11 @@ function capErrors(errors:BatchError[]):BatchError[]{
  * failed. `rejected_summary` (malformed or invalid input rows) is deliberately NOT informational:
  * it makes the batch partial, or failed when nothing landed.
  */
-export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary'] as const;
+export const INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary',
+ // FOREIGN ↓ broker research: absence of an eval receipt is informational (spec §7.4)
+ 'eval_receipt_absent',
+ // FOREIGN ↑
+] as const;
 // F3 document pipeline (spec §10): informational codes of the HK candidate generator, the
 // comparative / en-zh checks and the LLM boundary. Kept outside INFO_CODES, whose exact value is
 // pinned by src/lib/facts/rules.test.ts (not editable by F3); isInfoError consults both lists.
