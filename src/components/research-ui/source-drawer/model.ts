@@ -6,11 +6,11 @@
 import type {ResearchState} from '../states';
 import {DRAWER_SECTIONS, type DrawerSectionId, type DrawerText, type SourceDrawerInput} from './types';
 
-export interface SectionRow {key: string; label: string; value: string | null; mono: boolean; href?: string; state?: ResearchState; copy?: boolean}
+export interface SectionRow {key: string; label: string; value: string | null; mono: boolean; href?: string; newTab?: boolean; state?: ResearchState; copy?: boolean}
 export interface SectionModel {id: DrawerSectionId; no: 1|2|3|4|5|6; rows: SectionRow[]}
 export type Labels = (key: string, values?: Record<string, string | number>) => string;
 export function drawerSections(input: SourceDrawerInput, labels: Labels, text: DrawerText): SectionModel[] {
-  const row = (key: string, value: string | null, mono = false, extra: Partial<SectionRow> = {}): SectionRow => ({key, label: labels(`fields.${key}`), value, mono, ...extra});
+  const row = (key: string, value: string | null, mono = false, extra: Partial<SectionRow> = {}): SectionRow => ({key, label: labels(`fields.${key}`), value: value === '' ? null : value, mono, ...extra});
   if (input.variant === 'withheld' || input.variant === 'retracted') {
     return [{id: 'identity', no: 1, rows: [row('object', input.identity.label), row('evidenceId', input.identity.id, true),
       ...(input.variant === 'withheld' ? [row('reason', input.reason.text)] : [row('category', input.retraction.category), row('retractedAt', input.retraction.at, true)])]}];
@@ -24,7 +24,7 @@ export function drawerSections(input: SourceDrawerInput, labels: Labels, text: D
     times: [row('period', p.times.period, true), row('availableAt', p.times.available_at, true), row('ingestedAt', p.times.ingested_at, true)],
     transform: [...(e?.transform_label !== undefined ? [row('transform', e.transform_label)] : []), row('methodVersion', p.transform.method_version, true), row('mappingVersion', p.transform.mapping_version, true), row('codeVersion', p.transform.code_version, true)],
     licence: [row('status', p.licence.status), row('note', text(p.licence.note_key)), row('attribution', text(p.attribution_key))],
-    links: [{key: 'module', label: moduleLabel, value: moduleLabel, mono: false, href: p.links.module_href}, ...(e?.links ?? []).map((link, i) => ({key: `link-${i}`, label: link.label, value: link.label, mono: false, href: link.href}))],
+    links: [{key: 'module', label: moduleLabel, value: moduleLabel, mono: false, href: p.links.module_href}, ...(e?.links ?? []).map((link, i) => ({key: `link-${i}`, label: link.label, value: link.label, mono: false, href: link.href, newTab: link.newTab}))],
   };
   return DRAWER_SECTIONS.map((id, i) => ({id, no: (i + 1) as SectionModel['no'], rows: [...rows[id], ...(e?.rows?.[id] ?? []).map(r => ({...r, mono: r.mono ?? false}))]}));
 }

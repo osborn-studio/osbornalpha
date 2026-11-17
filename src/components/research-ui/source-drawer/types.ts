@@ -16,7 +16,7 @@ export interface SourceDrawerPayload {
 }
 export const DRAWER_SECTIONS = ['identity','source','times','transform','licence','links'] as const;
 export type DrawerSectionId = typeof DRAWER_SECTIONS[number];
-export interface DrawerRow {key: string; label: string; value: string; mono?: boolean; href?: string; state?: ResearchState}
+export interface DrawerRow {key: string; label: string; value: string; mono?: boolean; href?: string; newTab?: boolean; state?: ResearchState}
 export interface SourceDrawerExtras {
   title?: string;
   value?: string;
@@ -28,7 +28,7 @@ export interface SourceDrawerExtras {
   transform_label?: string;
   rows?: Partial<Record<DrawerSectionId, readonly DrawerRow[]>>;
   revisions?: readonly {period: string; value: string; available: string; version: string; current: boolean}[];
-  links?: readonly {label: string; href: string}[];
+  links?: readonly {label: string; href: string; newTab?: boolean}[];
   states?: readonly ResearchState[];
 }
 export interface ValueAt {value: string; available_at: string}

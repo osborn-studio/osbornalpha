@@ -7,6 +7,7 @@ import ReviewIndexPage from '../../../src/app/(app)/macro/review/page';
 import ReviewMonthPage from '../../../src/app/(app)/macro/review/[region]/[month]/page';
 import { SourceDrawer, type DrawerTarget } from '../../../src/components/macro/SourceDrawer';
 import { useMacroT } from '../../../src/components/macro/use-macro-t';
+import research from '../../../messages/en/research.json';
 import macro from '../../../messages/en/macro.json';
 import macroStrategy from '../../../messages/en/macroStrategy.json';
 import { notFound } from './navigation';
@@ -38,7 +39,7 @@ export async function fixturePage(input: FixturePageInput) {
     page = await ReviewMonthPage({ params: Promise.resolve({ region, month }) });
   } else if (/^\/intel\/macro\/[^/]+$/.test(path)) page = await SeriesPage({ params: Promise.resolve({ seriesId: decodeURIComponent(path.split('/').at(-1)!) }) });
   else notFound();
-  return <NextIntlClientProvider locale="en" messages={{ macro, macroStrategy }} timeZone="UTC" now={new Date('2026-11-07T12:00:00Z')}>
+  return <NextIntlClientProvider locale="en" messages={{ macro, macroStrategy, research }} timeZone="UTC" now={new Date('2026-11-07T12:00:00Z')}>
     <div data-fixture-only="true"><HydrationMarker /><p role="note">Synthetic fixture harness · real page components · simulated framework routing and capability gates</p>{page}</div>
   </NextIntlClientProvider>;
 }

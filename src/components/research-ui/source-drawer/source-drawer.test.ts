@@ -75,8 +75,9 @@ for(const [locale,messages] of [['zh',zh],['en',en]] as const)describe(locale,()
  it.each(['http://example.com','https://example.com'])('opens external row and button links safely: %s',url=>{
   const html=render({...ok,payload:{...ok.payload,source:{...ok.payload.source,url},links:{module_href:url+'/module'}},extras:{links:[{label:'Internal',href:'/macro/x'},{label:'External',href:url+'/extra'}]}});
   const links=[...html.matchAll(/<a[^>]*>/g)].map(m=>m[0]);
-  const external=links.filter(link=>link.includes(`href="${url}`));
-  expect(external).toHaveLength(4);
+  const external=links.filter(link=>link.includes(`href="${url}`) && !link.includes('/module'));
+  expect(external).toHaveLength(2);
+  for(const link of links.filter(link=>link.includes('/module')))expect(link).not.toContain('target=');
   for(const link of external){expect(link).toContain('target="_blank"');expect(link).toContain('rel="noopener noreferrer"');}
   const internal=links.find(link=>link.includes('href="/macro/x"'));
   expect(internal).toBeDefined();expect(internal).not.toContain('target=');expect(internal).not.toContain('rel=');
@@ -90,8 +91,31 @@ for(const [locale,messages] of [['zh',zh],['en',en]] as const)describe(locale,()
  it('renders withheld identity and reason only',()=>{const html=render(withheld);expect(html.match(/data-drawer-section=/g)).toHaveLength(1);expect(html).toContain('data-research-state="withheld"');expect(html).toContain('[reason-text]');expect(html).toContain('[reason-code]');for(const id of ['source','times','transform'] as const)expect(html).not.toContain(`data-drawer-section="${id}"`);expect(html).not.toContain('<table');});
  it('renders retraction without history',()=>{const html=render(retracted);expect(html.match(/data-drawer-section=/g)).toHaveLength(1);expect(html).toContain('data-research-state="retracted"');expect(html).not.toContain('<table');});
  it('renders both revision values',()=>{const html=render(revised);expect(html).toContain('4.2');expect(html).toContain('4.3');expect(html).toContain('data-research-state="revised"');expect(html).toContain(messages.drawer.revised.note);});
- it('replaces pending rows with static status bars',()=>{const html=render(ok,{pending:['source','times']});expect(html.match(/aria-busy="true"/g)).toHaveLength(2);for(const id of ['source','times']){const section=html.split(`data-drawer-section="${id}"`)[1].split('</section>')[0];expect(section).not.toContain('<dl');}expect(html).not.toContain('[publisher-secret]');});
- it('renders a failed section note once',()=>{expect(render(ok,{failed:['times'],failedText:'[failed]'}).match(/\[failed\]/g)).toHaveLength(1);});
+ it('keeps known pending rows, drops unknown rows and suppresses slots and tables',()=>{
+  const html=render({...revised,payload:{...revised.payload,source:{...revised.payload.source,adapter:''}}},{pending:['source','times'],slots:{source:h('span',null,'[slot]')}});
+  expect(html.match(/aria-busy="true"/g)).toHaveLength(2);
+  const source=html.split('data-drawer-section="source"')[1].split('</section>')[0];
+  expect(source).toContain('[publisher-secret]');expect(source).not.toContain('<dt class="text-text-dim">'+messages.drawer.fields.adapter);
+  expect(source).not.toContain(messages.drawer.fields.url);expect(source.indexOf('[publisher-secret]')).toBeLessThan(source.indexOf('aria-busy'));
+  expect(html).not.toContain('[slot]');expect(html).not.toContain('<table');
+ });
+ it('renders three failed sections with one alert and omits empty later sections',()=>{
+  const html=render(ok,{failed:['transform','times','source'],failedText:'[failed]',slots:{times:h('span',null,'[slot]')}});
+  expect(html.match(/\[failed\]/g)).toHaveLength(1);expect(html).toContain('role="alert"');
+  const source=html.split('data-drawer-section="source"')[1].split('</section>')[0];
+  expect(source).toContain('[publisher-secret]');expect(source).toContain('[failed]');
+  expect(html).not.toContain('data-drawer-section="transform"');expect(html).not.toContain('[slot]');
+ });
+ it('normalises empty standard values to the missing badge',()=>{
+  const input:SourceDrawerInput={...ok,payload:{...ok.payload,source:{...ok.payload.source,publisher:''}}};
+  expect(drawerSections(input,labels,labels)[1].rows[0].value).toBeNull();
+  expect(render(input)).toMatch(/<dd[^>]*><span[^>]*data-research-state="missing"/);
+ });
+ it('opens archived hashes and flagged rows and links in new tabs only',()=>{
+  const html=render({...ok,payload:{...ok.payload,source:{...ok.payload.source,evidence_sha256:'[sha]'}},extras:{evidence_href:'/proof',links:[{label:'Raw',href:'/raw',newTab:true},{label:'Local',href:'/local'}],rows:{source:[{key:'extra',label:'Extra',value:'Extra',href:'/extra',newTab:true}]}}});
+  for(const href of ['/proof','/raw','/extra'])expect(html.match(new RegExp('<a[^>]*href="'+href+'"[^>]*>'))?.[0]).toContain('target="_blank" rel="noopener noreferrer"');
+  for(const href of ['/local','/module/[id]'])expect([...html.matchAll(/<a[^>]*>/g)].filter(m=>m[0].includes('href="'+href+'"')).every(m=>!m[0].includes('target='))).toBe(true);
+ });
  it('marks judgments and renders revision history',()=>{const html=render({variant:'ok',payload:payload('judgment'),extras:{revisions:[{period:'[period]',value:'4.2',available:'[at]',version:'v1',current:true}]}});expect(html).toContain(messages.marks.judgment);expect(html).toContain('aria-current="true"');});
 });
 

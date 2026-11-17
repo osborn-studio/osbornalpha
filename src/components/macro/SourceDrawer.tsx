@@ -3,7 +3,7 @@
 // Fetches /api/macro/series/[id]/versions. A field that cannot be shown keeps its name and reads 缺失. Derived values
 // show their transform and the proof of each input. Read failure never hides the published value.
 import { useEffect, useState } from 'react';
-import {SourceDrawer as SharedSourceDrawer} from '../research-ui';
+import {SourceDrawer as SharedSourceDrawer} from '../research-ui/source-drawer/SourceDrawer';
 import {macroDrawerInput, macroDrawerText} from './source-drawer-adapter';
 import type { MacroT } from './use-macro-t';
 import { isMissingInput, proofRows, selectVersion, type DrawerRow, type Locale, type SourceJson, type VersionsJson } from './view-model';

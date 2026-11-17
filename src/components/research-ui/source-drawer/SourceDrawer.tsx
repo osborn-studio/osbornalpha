@@ -27,8 +27,8 @@ const caption = 'text-[10px] font-medium uppercase tracking-[0.05em] text-text-d
 const warning = 'rounded border border-warn p-2 text-xs';
 const button = 'inline-flex items-center justify-center rounded border border-border px-3 py-2 text-xs';
 
-function externalLinkProps(href: string) {
-  return /^https?:\/\//.test(href) ? {target: '_blank', rel: 'noopener noreferrer'} : {};
+function externalLinkProps(href: string, newTab = false) {
+  return (newTab || /^https?:\/\//.test(href)) ? {target: '_blank', rel: 'noopener noreferrer'} : {};
 }
 
 export function SourceDrawer({input, onClose, text = identityText, pending = [], failed = [], failedText, slots}: SourceDrawerProps) {
@@ -80,20 +80,24 @@ export function SourceDrawer({input, onClose, text = identityText, pending = [],
           <h2 className="break-words text-base font-semibold">{header.title}{header.value !== null && <> <span className={mono}>{header.value}</span></>}{header.period !== null && <> <span className={`${mono} text-xs font-normal text-text-dim`}>{header.period}</span></>}</h2>
           <div className="flex flex-wrap gap-2"><span className="hidden sm:inline-flex"><MarkTag kind={header.mark} /></span>{header.states.map(state => <StateBadge key={state} state={state} />)}</div>
         </header>
-        {drawerSections(input, t, text).map(section => <section key={section.id} data-drawer-section={section.id} className={`space-y-2 border-t border-border px-4 py-3 ${section.id === 'links' && !section.rows.some(row => row.key !== 'module' && row.href) ? 'hidden sm:block' : ''}`}>
+        {drawerSections(input, t, text).map((section, index, sections) => {
+          const isPending = pending.includes(section.id);
+          const isFailed = failed.includes(section.id);
+          const incomplete = isPending || isFailed;
+          const rows = incomplete ? section.rows.filter(row => row.value !== null && row.value !== '') : section.rows;
+          const showFailure = isFailed && !sections.slice(0, index).some(previous => failed.includes(previous.id));
+          if (isFailed && !showFailure && rows.length === 0) return null;
+          return <section key={section.id} data-drawer-section={section.id} className={`space-y-2 border-t border-border px-4 py-3 ${section.id === 'links' && !section.rows.some(row => row.key !== 'module' && row.href) ? 'hidden sm:block' : ''}`}>
           <h3 className={caption}><span className={mono}>{section.no}</span>{` · ${t(`sections.${section.id}`)}`}</h3>
-          {pending.includes(section.id) ? <div role="status" aria-busy="true" className="space-y-2">
-            <span className="sr-only">{t('loadingLabel')}</span>
-            <div className="h-3 w-[60%] rounded-[3px] bg-bg-card" /><div className="h-3 w-[90%] rounded-[3px] bg-bg-card" /><div className="h-3 w-[75%] rounded-[3px] bg-bg-card" />
-          </div> : failed.includes(section.id) ? <p className={warning}>{failedText ?? t('loadFailed')}</p> : <>
+          <>
             {section.id === 'links' ? <div className="flex flex-wrap gap-2">
-              {section.rows.map(row => row.href && <a key={row.key} href={row.href} {...externalLinkProps(row.href)} className={`${row.key === 'module' ? 'hidden sm:inline-flex' : 'inline-flex'} min-h-[32px] items-center justify-center rounded border border-border px-3 py-2 text-xs`}>{row.value}</a>)}
+              {rows.map(row => row.href && <a key={row.key} href={row.href} {...(row.key === 'module' ? {} : externalLinkProps(row.href, row.newTab || row.key === 'sha256'))} className={`${row.key === 'module' ? 'hidden sm:inline-flex' : 'inline-flex'} min-h-[32px] items-center justify-center rounded border border-border px-3 py-2 text-xs`}>{row.value}</a>)}
             </div> : <dl className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-3 gap-y-[5px] text-xs sm:grid-cols-[128px_minmax(0,1fr)]">
-              {section.rows.map(row => <div key={row.key} className="contents">
+              {rows.map(row => <div key={row.key} className="contents">
                 <dt className="text-text-dim">{row.label}</dt>
                 <dd className={`break-words text-text ${row.mono ? mono : ''}`}>
                   {row.value === null ? <StateBadge state="missing" /> : <>
-                    {row.href ? <a href={row.href} {...externalLinkProps(row.href)} className="underline decoration-dotted">{row.value}</a> : row.value}
+                    {row.href ? <a href={row.href} {...(row.key === 'module' ? {} : externalLinkProps(row.href, row.newTab || row.key === 'sha256'))} className="underline decoration-dotted">{row.value}</a> : row.value}
                     {row.state && <> <StateBadge state={row.state} /></>}
                     {row.copy && sha && <button type="button" onClick={copyHash} className={`${button} ml-2 hidden sm:inline-flex`}>{copyLabel(false)}</button>}
                   </>}
@@ -101,21 +105,26 @@ export function SourceDrawer({input, onClose, text = identityText, pending = [],
                 </dd>
               </div>)}
             </dl>}
-            {section.id === 'times' && revisions && revisions.length > 0 && <table className="w-full text-xs">
+            {!incomplete && section.id === 'times' && revisions && revisions.length > 0 && <table className="w-full text-xs">
               <thead><tr>{(['period','value','available','version'] as const).map(key => <th key={key} className={`px-1.5 py-1 font-medium text-text-dim ${key === 'period' ? 'pl-0' : ''} ${key === 'value' ? 'text-right' : 'text-left'}`}>{t(`revisions.${key}`)}</th>)}</tr></thead>
               <tbody>{revisions.map((revision, i) => <tr key={`${revision.version}-${i}`} aria-current={revision.current ? 'true' : undefined} className={`border-t border-border ${revision.current ? '' : 'text-text-dim'}`}>
                 <td className={`${mono} px-1.5 pl-0 py-1`}>{revision.period}</td><td className={`${mono} px-1.5 py-1 text-right`}>{revision.value}</td><td className={`${mono} px-1.5 py-1`}>{revision.available}</td><td className={`${mono} px-1.5 py-1`}>{revision.version}</td>
               </tr>)}</tbody>
             </table>}
-            {section.id === 'times' && revised && <><table className="w-full text-xs"><tbody>{(['frozen','current'] as const).map(key => <tr key={key} className="border-t border-border"><th scope="row" className="px-1.5 pl-0 py-1 text-left font-medium">{t(`revised.${key}`)}</th><td className={`${mono} px-1.5 text-right`}>{revised[key].value}</td><td className={`${mono} px-1.5 text-text-dim`}>{revised[key].available_at}</td></tr>)}</tbody></table><p className={warning}>{t('revised.note')}</p></>}
-            {slots?.[section.id]}
-          </>}
-        </section>)}
+            {!incomplete && section.id === 'times' && revised && <><table className="w-full text-xs"><tbody>{(['frozen','current'] as const).map(key => <tr key={key} className="border-t border-border"><th scope="row" className="px-1.5 pl-0 py-1 text-left font-medium">{t(`revised.${key}`)}</th><td className={`${mono} px-1.5 text-right`}>{revised[key].value}</td><td className={`${mono} px-1.5 text-text-dim`}>{revised[key].available_at}</td></tr>)}</tbody></table><p className={warning}>{t('revised.note')}</p></>}
+            {!incomplete && slots?.[section.id]}
+            {isPending && <div role="status" aria-busy="true" className="space-y-2">
+              <span className="sr-only">{t('loadingLabel')}</span>
+              <div className="h-3 w-[60%] rounded-[3px] bg-bg-card" /><div className="h-3 w-[90%] rounded-[3px] bg-bg-card" /><div className="h-3 w-[75%] rounded-[3px] bg-bg-card" />
+            </div>}
+            {showFailure && <p role="alert" className={warning}>{failedText ?? t('loadFailed')}</p>}
+          </>
+        </section>;})}
         {input.variant === 'withheld' && <p className="mx-4 my-3 rounded border border-border p-2 text-xs text-text-dim">{t('withheldNote')}</p>}
         {input.variant === 'retracted' && <p className="mx-4 my-3 rounded border border-danger p-2 text-xs">{t('retractedNote')}</p>}
       </div>
       {exposed && <div className="sticky bottom-0 flex gap-2 border-t border-border bg-bg-elevated px-3.5 py-2.5 sm:hidden">
-        <a href={exposed.payload.links.module_href} {...externalLinkProps(exposed.payload.links.module_href)} className={`${button} min-h-[44px] flex-1 bg-accent font-semibold text-bg`}>{t(`links.module.${kind}`)}</a>
+        <a href={exposed.payload.links.module_href} className={`${button} min-h-[44px] flex-1 bg-accent font-semibold text-bg`}>{t(`links.module.${kind}`)}</a>
         {sha && <button type="button" onClick={copyHash} className={`${button} min-h-[44px]`}>{copyLabel(true)}</button>}
       </div>}
     </div>
