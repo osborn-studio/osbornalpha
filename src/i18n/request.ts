@@ -43,6 +43,9 @@ const MESSAGE_DOMAINS = [
   // FOREIGN ↓ foreign broker research (plan Task D2)
   'foreign-research',
   // FOREIGN ↑
+  // TOPICS ↓ topic research (spec 2026-11-16 §7): public pages / admin pages
+  'topics', 'topicsAdmin',
+  // TOPICS ↑
 ] as const;
 
 export default getRequestConfig(async () => {
