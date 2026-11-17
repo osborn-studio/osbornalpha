@@ -1,5 +1,6 @@
 // US SIC snapshot aggregation (§19), deliberately no cross-run reuse in v1. One snapshot membership
-// set and one US envelope per issuer serve all buckets. Batch reads use 40 issuers × two chunks;
+// set and one US envelope per issuer serve all buckets. Batch transport fetches only current
+// 12M rows in the grid/prior-year window, using 40 issuers × two chunks;
 // fallback reads/uploads are bounded (default sixteen);
 // staging follows code/bucket/metric order regardless of completion order. dryRun computes and
 // self-checks every manifest with zero mutations, including no batch, quarantine or freshness writes.
@@ -17,7 +18,7 @@ import {aggregationPreview,mapBounded,memberOf,rowOf} from './aggregation-common
 import {buildAggregateManifest,encodeManifest} from './manifest';
 import {membersAtPure} from './memberships';
 import {assertDay,cellKey} from './method';
-import {AGG_CONCEPTS_US,CONFIG_HASH_US,METHOD_VERSION_US,READINESS_MIN_PERCENT_US,expectedGridUs} from './method-us';
+import {AGG_CONCEPTS_US,CONFIG_HASH_US,METHOD_VERSION_US,READINESS_MIN_PERCENT_US,expectedGridUs,usEnvelopeWindow} from './method-us';
 import {replayFromManifest} from './replay';
 import type {AggregationHooks,AggregationReceipt,AggregationTimings} from './run-aggregation';
 import {IndustryDbError} from './types-us';
@@ -61,12 +62,12 @@ export async function runIndustryAggregationUs(deps:IndustryDeps,opts:Aggregatio
   mark('envelopes');
   let issuers:Map<string,IssuerFacts>;
   if(deps.factsBatch){
-   const reader=deps.factsBatch,size=opts.envelopeBatch??ENVELOPE_BATCH_US;
+   const reader=deps.factsBatch,size=opts.envelopeBatch??ENVELOPE_BATCH_US,window=usEnvelopeWindow(grid.period_ends);
    if(!Number.isInteger(size)||size<1||size>FACTS_BATCH_MAX)throw new RunError('invalid_envelope_batch');
    const chunks:string[][]=[];for(let i=0;i<universe.length;i+=size)chunks.push(universe.slice(i,i+size));
    const entries=await mapBounded(chunks,async ids=>{
     checkBudget();
-    const envelopes=await reader.readFactsBatch(ids,'US',{concepts:[...AGG_CONCEPTS_US],asOf:opts.factsAsOf,history:true});
+    const envelopes=await reader.readFactsBatch(ids,'US',{concepts:[...AGG_CONCEPTS_US],asOf:opts.factsAsOf,history:false,...window,durations:['12M']});
     for(const id of envelopes.keys())if(!ids.includes(id))throw new RunError('batch_incomplete',id);
     return ids.map((id):readonly [string,IssuerFacts]=>{
      const env=envelopes.get(id);if(!env)throw new RunError('batch_incomplete',id);

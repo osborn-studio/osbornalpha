@@ -26,8 +26,8 @@ I-3 独立前置验证：[`2026-11-07-industry-closeout.md`](../audits/2026-11-0
 
 ### US SIC 聚合（规格 §19）
 
-Envelopes use `read_facts_batch` in chunks of 40, with two chunks in flight; migration `20261201090000_facts_read_batch.sql` must be applied before this code runs in production.
-The previous 811 per-issuer calls (16 concurrent, mean 237 ms, max 7.2 s) hit the API role’s 8 s statement timeout and failed the 240 s cron after 27 s; the measured set-based statement over all 811 issuers took 24 s (about 30 ms/issuer).
+Envelopes use `read_facts_batch_slice` in chunks of 40, with two chunks in flight; migration `20261203090000_facts_read_batch_slice.sql` must be applied before this code runs in production. The already-applied `20261201090000_facts_read_batch.sql` and its five-argument function remain unchanged.
+The full batch read took 3.3–4.2 s per 40-issuer chunk, with later chunks exceeding the API role’s 8 s statement timeout. Narrowing to current 12M rows with period_end within [first bucket year − 1, last bucket year] reduces 160,046 rows (~126 MB JSON, 811 issuers) to about 17,000 rows. Production EXPLAIN ANALYZE measured 0.05–0.6 s per narrowed chunk (warm/cold). The 10,000-row cap applies to narrowed rows; issuers previously truncated by unused history may now contribute.
 
 
 `aggregate-sic` 汇总快照日当前 SIC 成分的已披露 USD 财年数据；不是历史成分。最近三个已完成财年桶按财年结束年份归类。页面与抽屉标明 `membership_on` 和历史重建口径。无 active run 时保持分类导航。

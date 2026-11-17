@@ -132,13 +132,30 @@ describe('US run',()=>{
 
 describe('US batch envelopes',()=>{
  it('keeps receipts, rows, dependencies and all canonical manifests identical',async()=>{
-  const {deps,db,facts}=await fixture();
+  const {deps,db,facts,ids}=await fixture();
+  const original=facts.readFacts.getMockImplementation()!;
+  const full=async(id:string)=>{
+   const env=await original(id),seed=env.rows[0];
+   const extra:FactRow[]=[...(['3M','6M','9M'] as const).map(duration=>({...seed,fact_id:id+duration,duration})),
+    ...[2021,2026].map(y=>({...seed,fact_id:id+y,period_start:`${y}-01-01`,period_end:`${y}-12-31`})),
+    {...seed,fact_id:id+'old',is_current:false,disclosure_seq:1},
+    {...seed,fact_id:id+'eur',unit:'EUR'}];
+   if(id===ids[0])extra.push({...env.rows.at(-3)!,fact_id:id+'ambiguous',period_start:'2025-02-01',period_end:'2025-11-30'});
+   if(id===ids[1])env.rows=env.rows.map(r=>({...r,unit:'EUR'}));
+   return {...env,rows:[...env.rows,...extra]};
+  };
+  facts.readFacts.mockImplementation(full);
   const stage=vi.spyOn(db,'stageMetricRows'),dependencies=vi.spyOn(db,'stageRunDependencies');
   const canonical:unknown[][]=[[],[]];
   const run=async(i:number)=>runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01'},{replay:m=>{canonical[i].push(encodeManifest(m));return replayFromManifest(m);}});
   const a=await run(0),rows=stage.mock.calls.map(c=>c[1]),refs=dependencies.mock.calls.map(c=>c.slice(1));stage.mockClear();dependencies.mockClear();
-  deps.factsBatch=memoryFactsBatchReader({readFacts:facts.readFacts.getMockImplementation()!});facts.readFacts.mockClear();
+  const reader=memoryFactsBatchReader({readFacts:async(id,_market,o)=>{
+   const env=await full(id);
+   return {...env,rows:env.rows.filter(r=>(o.history||r.is_current)&&(!o.from||r.period_end>=o.from)&&(!o.to||r.period_end<=o.to))};
+  }});
+  const readFactsBatch=vi.fn(reader.readFactsBatch);deps.factsBatch={readFactsBatch};facts.readFacts.mockClear();
   const b=await run(1);
+  expect(readFactsBatch).toHaveBeenCalledWith(ids,'US',{concepts:[...AGG_CONCEPTS_US],asOf:'2026-04-01',history:false,from:'2022-01-01',to:'2025-12-31',durations:['12M']});
   const content=({timings:_,batchId:__,runId:___,generation:____,activatedAt:_____,...r}:typeof a)=>r;
   expect(a.status).toBe('active');expect(content(b)).toEqual(content(a));
   expect(stage.mock.calls.map(c=>c[1])).toEqual(rows);expect(dependencies.mock.calls.map(c=>c.slice(1))).toEqual(refs);
