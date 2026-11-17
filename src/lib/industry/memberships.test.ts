@@ -1,7 +1,7 @@
 // src/lib/industry/memberships.test.ts
 import {describe,it,expect} from 'vitest';
 import {countUnresolved,effectiveValidTo,isMemberAt,membersAt,membersAtPure,unresolvedAt} from './memberships';
-import type {IndustryDb,MembershipRow,SourceMembershipRow} from './types';
+import type {IndustryDb,MembershipRow,SourceMembershipRow} from './types-us';
 
 const I='11111111-1111-4111-8111-111111111111',J='22222222-2222-4222-8222-222222222222';
 let n=0;

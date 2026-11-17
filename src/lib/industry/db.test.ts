@@ -8,7 +8,7 @@ import {describe,expect,it} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
 import type {ScopeRow} from '../facts/types';
-import {IndustryDbError,STAGE_CHUNK,supabaseIndustryDb,toIndustryDbError} from './db';
+import {IndustryDbError,metricRunFromTable,STAGE_CHUNK,supabaseIndustryDb,toIndustryDbError} from './db';
 import {cell,industryDbContract,mark,newRun,nodes,sha,sourceInput,threeRows} from './db-contract';
 import {DATASET_KEYS,DEFAULT_LICENSES,isDatasetKey,isLicensedStatus,schemeDatasetKey} from './licenses';
 import {memoryIndustryDb,mulDecimalText,trimScale} from './memory-industry-db';
@@ -28,6 +28,13 @@ industryDbContract('memoryIndustryDb contract',async()=>{
   version:async()=>{const v=`t${hex(4)}`;db.seedLicense(`scheme:sw2021:${v}`,'internal');return v;},
   factScope:async(i,rev)=>{scope.set(i,rev);},
   ageManifest:async(_hash,seconds)=>{offset+=seconds*1000;db.setNow(new Date(Date.now()+offset).toISOString());}};
+});
+
+it('SQL run normalisation preserves optional snapshot grid keys without adding keys to legacy grids',()=>{
+ const base={...newRun('2021','b'),run_id:'run',generation:1,status:'building',coverage_summary:{},created_at:'2026-04-01T00:00:00Z',activated_at:null};
+ const grid={codes:['2000'],period_ends:['2025-12-31'],metrics:['net_margin'],cell_rule:'fiscal_year_bucket/1',membership_on:'2026-04-01'};
+ expect(metricRunFromTable({...base,expected_grid:grid}).expected_grid).toEqual(grid);
+ expect(metricRunFromTable(base).expected_grid).toEqual(base.expected_grid);
 });
 
 describe('licences',()=>{

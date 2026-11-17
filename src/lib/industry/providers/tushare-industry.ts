@@ -19,7 +19,7 @@ import {decodeColumns,isNumToken,scanJsonNumbers} from '../../facts/json-numbers
 import type {Budget,RawSnapshot} from '../../facts/types';
 import type {SnapshotStore} from '../../facts/snapshot-store';
 import {SNAPSHOT_BUCKET} from '../../facts/snapshot-store';
-import type {IndustryDeps} from '../types';
+import type {IndustryDeps} from '../types-us';
 
 export type TushareCall=NonNullable<IndustryDeps['tushare']>;
 export type IndustryProviderErrorCode='quota_exhausted'|'tushare_unavailable'|'tushare_error'|'paging_not_advancing'|'too_many_pages'|'row_shape'|'parse_error'|'fixture_missing';

@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 // src/app/api/cron/industry-sync/route.test.ts
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 
@@ -8,7 +9,7 @@ vi.mock('@/lib/industry/jobs',async(importOriginal)=>{
  return {...real,runIndustryJob:mocks.run,productionIndustryDeps:mocks.deps};
 });
 
-import {IndustryDbError} from '@/lib/industry/types';
+import {IndustryDbError} from '@/lib/industry/types-us';
 import {GET,POST} from './route';
 
 const AUTH={authorization:'Bearer cron-secret'};
@@ -78,4 +79,19 @@ describe('industry sync cron',()=>{
   res=await GET(req('job=memberships-sic',AUTH));
   expect((await res.json()).error.code).toBe('sync_failed');
  });
+});
+
+it('aggregate-sic runs without FACTS_CN_ENABLED while SW remains gated',async()=>{
+ delete process.env.FACTS_CN_ENABLED;
+ process.env.CRON_SECRET='cron-secret';
+ mocks.codeVersion.mockReturnValue('abc123');mocks.deps.mockReturnValue({tag:'deps'});
+ mocks.run.mockResolvedValue({job:'aggregate-sic',receipt:{batchId:'b',status:'success',counts:{},errors:[]}});
+ expect((await GET(req('job=aggregate-sic',AUTH))).status).toBe(200);
+ expect(mocks.run).toHaveBeenCalledWith('aggregate-sic',{tag:'deps'},expect.objectContaining({dryRun:false,triggeredBy:'cron',deadlineMs:240000}));
+ const sw=await GET(req('job=aggregate',AUTH));expect(sw.status).toBe(403);expect((await sw.json()).error.code).toBe('job_disabled');
+});
+
+it('schedules SIC aggregation weekly at 04:30 UTC Sunday',()=>{
+ const {crons}=JSON.parse(readFileSync('vercel.json','utf8')) as {crons:{path:string;schedule:string}[]};
+ expect(crons.filter(c=>c.path==='/api/cron/industry-sync?job=aggregate-sic')).toEqual([{path:'/api/cron/industry-sync?job=aggregate-sic',schedule:'30 4 * * 0'}]);
 });

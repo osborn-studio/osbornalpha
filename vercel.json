@@ -85,6 +85,10 @@
     {
       "path": "/api/cron/judgments-calibrate",
       "schedule": "0 4 * * 1"
+    },
+    {
+      "path": "/api/cron/industry-sync?job=aggregate-sic",
+      "schedule": "30 4 * * 0"
     }
   ]
 }

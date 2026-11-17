@@ -4,7 +4,7 @@
 import {formatMetricValue} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
-import type {AggMetric} from '@/lib/industry/types';
+import type {AggMetric} from '@/lib/industry/types-us';
 
 export type Translate=(key:string,values?:Record<string,string|number>)=>string;
 
@@ -13,7 +13,9 @@ export function missingReasonOf(cell:PublicCell|null):string{return cell?(cell.m
 
 export function cellText(cell:PublicCell|null,metric:AggMetric,locale:Locale,t:Translate):string{
   if(!cell||cell.display==='missing'||(cell.display==='value'&&cell.value===null))return t(`missing.${missingReasonOf(cell)}`);
+  if(cell.display==='members')return t('coverage.tooFewMembers',{n:cell.nMembers});
+  if(cell.display==='coverageSic')return t('coverage.lowCoverage',{n:cell.nWithData,d:cell.nMembers});
   if(cell.display==='unresolved')return t('coverage.unresolved',{n:cell.nUnresolved});
   if(cell.display==='insufficient')return t('coverage.ratio',{n:cell.nWithData,d:cell.nMembers+cell.nUnresolved});
-  return formatMetricValue(metric,cell.value??'',locale);
+  return formatMetricValue(metric,cell.value??'',locale,cell.unit);
 }

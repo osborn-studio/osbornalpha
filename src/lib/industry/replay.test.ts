@@ -8,7 +8,7 @@ import {buildAggregateManifest,encodeManifest} from './manifest';
 import type {BuildManifestInput} from './manifest';
 import {filterManifest} from './read';
 import {replayCell,replayFromManifest} from './replay';
-import type {AggregateManifest,ManifestMember} from './types';
+import type {AggregateManifest,ManifestMember} from './types-us';
 
 const A='00000000-0000-4000-8000-00000000000a',B='00000000-0000-4000-8000-00000000000b',C='00000000-0000-4000-8000-00000000000c';
 let n=0;
