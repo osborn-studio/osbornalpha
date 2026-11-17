@@ -148,4 +148,4 @@ jobs:
       - name: Next-resolved patched image runtime
         run: node scripts/ci/sharp-runtime-smoke.mjs
       - run: npm run build
-      - run: npm audit --omit=dev --audit-level=high
+      - run: npx tsx scripts/ci/npm-audit.ts
