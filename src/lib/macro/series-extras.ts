@@ -1,20 +1,21 @@
 // src/lib/macro/series-extras.ts
-// Detail-page extras for GET /api/macro/series/[id] (spec §3.3, §6): derived US policy events, the FOMC calendar,
+// Detail-page extras for GET /api/macro/series/[id] (spec §3.3, §6): derived US policy and CN quote events, the FOMC calendar,
 // cycle segments and enabled same-region asset moves per cycle. Reads full histories through
 // MacroDb.seriesHistory, which pages to completion and throws `truncated` beyond maxRows; a partial series is never
 // segmented. With asOf, every read is limited to rows available at asOf.
+import type {AnySeriesDef} from './display-catalog';
 import {MACRO_CATALOG} from './catalog';
 import {CYCLES_VERSION,assetChangeOverCycle,lastCompleteMonthEnd,policyCycles,seriesCycles,type AssetCycleChange,type Cycle,type InsufficientSegment} from './cycles';
 import type {MacroDb} from './db';
-import {EVENTS_VERSION,US_TARGET_LOWER_ID,US_TARGET_UPPER_ID,derivePolicyEvents,type PolicyEvent} from './events';
+import {EVENTS_VERSION,QUOTE_EVENTS_VERSION,US_TARGET_LOWER_ID,US_TARGET_UPPER_ID,derivePolicyEvents,deriveRateQuoteEvents,type PolicyEvent,type RateQuoteEvent} from './events';
 import {fomcCalendarEvents,type CalendarEvent} from './fomc';
-import type {Bilingual,MacroSeriesDef} from './types';
+import type {Bilingual} from './types';
 export const DAILY_MAX_ROWS=20_000,MONTHLY_MAX_ROWS=5_000;
 export interface AssetByCycle extends AssetCycleChange{cycle_index:number;asset_id:string;asset_name:Bilingual}
-export interface SeriesExtras{events:PolicyEvent[];calendar:CalendarEvent[];cycles:Cycle[];insufficient:InsufficientSegment[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
-export async function seriesExtras(db:Pick<MacroDb,'seriesHistory'>,def:MacroSeriesDef,opts:{asOf?:string}):Promise<SeriesExtras>{
+export interface SeriesExtras{events:PolicyEvent[];quoteEvents:RateQuoteEvent[];calendar:CalendarEvent[];cycles:Cycle[];insufficient:InsufficientSegment[];assetsByCycle:AssetByCycle[];eventsVersion:string;quoteEventsVersion:string;cyclesVersion:string}
+export async function seriesExtras(db:Pick<MacroDb,'seriesHistory'>,def:AnySeriesDef,opts:{asOf?:string}):Promise<SeriesExtras>{
  const read=(id:string,maxRows:number)=>db.seriesHistory(id,{asOf:opts.asOf,maxRows});
- let events:PolicyEvent[]=[];let lastTargetDay:string|null=null;
+ let events:PolicyEvent[]=[],quoteEvents:RateQuoteEvent[]=[];let lastTargetDay:string|null=null;
  if(def.region==='US'){
   const [upper,lower]=await Promise.all([read(US_TARGET_UPPER_ID,DAILY_MAX_ROWS),read(US_TARGET_LOWER_ID,DAILY_MAX_ROWS)]);
   events=derivePolicyEvents(upper,lower);
@@ -22,6 +23,11 @@ export async function seriesExtras(db:Pick<MacroDb,'seriesHistory'>,def:MacroSer
  }
  let cycles:Cycle[]=[],insufficient:InsufficientSegment[]=[];
  if(def.region==='US'&&def.type==='policy_rate'){if(lastTargetDay)cycles=policyCycles(events,lastTargetDay);}
+ else if(def.region==='CN'&&def.type==='policy_rate'&&def.derive?.from.endsWith('_Q')){
+  const quotes=await read(def.derive.from,DAILY_MAX_ROWS);
+  quoteEvents=deriveRateQuoteEvents(def.derive.from,quotes);
+  if(quotes.length)cycles=policyCycles(quoteEvents,quotes[quotes.length-1].period_end);
+ }
  else if(def.period==='month'&&def.role!=='event_source'){
   const r=seriesCycles(await read(def.aliasOf??def.id,MONTHLY_MAX_ROWS));cycles=r.cycles;insufficient=r.insufficient;
  }
@@ -35,5 +41,5 @@ export async function seriesExtras(db:Pick<MacroDb,'seriesHistory'>,def:MacroSer
    assets.forEach((a,ai)=>assetsByCycle.push({cycle_index:ci,asset_id:a.id,asset_name:a.name,...assetChangeOverCycle(histories[ai],{start:c.start,end},a.changeKind)}));
   });
  }
- return {events,calendar:def.region==='US'?fomcCalendarEvents(opts.asOf):[],cycles,insufficient,assetsByCycle,eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
+ return {events,quoteEvents,calendar:def.region==='US'?fomcCalendarEvents(opts.asOf):[],cycles,insufficient,assetsByCycle,eventsVersion:EVENTS_VERSION,quoteEventsVersion:QUOTE_EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
 }

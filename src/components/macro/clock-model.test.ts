@@ -53,6 +53,14 @@ describe("clock presentation evidence", () => {
     expect(quadrantRows(rows, "overheat")[0].amount).toBe(0);
     expect(quadrantRows(rows, "recovery")[0].amount).toBe(1);
   });
+  it("breaks equal contribution ties by weight, then series id", () => {
+    const rows = [
+      { seriesId: "Z", weight: 10, contribution: { recovery: 2, overheat: 0, stagflation: 0, recession: 0 } },
+      { seriesId: "B", weight: 15, contribution: { recovery: 2, overheat: 0, stagflation: 0, recession: 0 } },
+      { seriesId: "A", weight: 15, contribution: { recovery: 2, overheat: 0, stagflation: 0, recession: 0 } },
+    ];
+    expect(quadrantRows(rows, "recovery").map(r => r.seriesId)).toEqual(["A", "B", "Z"]);
+  });
   it("does not attach current rule explanations to a different rules version", () => {
     expect(
       clockRowsFrom({ ...dto, rulesVersion: "future" }, "bound", "en")[0].rule,

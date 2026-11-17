@@ -14,13 +14,14 @@
 // item whose exact member this item disposed of completes the link (0); claimIngest declares its batch running.
 // There is no ingest_batches table here: setBatchStatus declares a batch's status and a batch never
 // declared counts as success (= SQL after finishBatch). For unit tests and the shared contract.
+import type {AnySeriesDef} from './display-catalog';
 import {randomUUID} from 'node:crypto';
 import {recordAttempt} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
 import {canonicalJson} from './catalog';
 import {MacroDbError,highestPerPeriod,selectEligibleHistoryAsOf} from './db';
 import type {MacroDb} from './db';
-import type {ChunkCounts,ChunkRecord,EvidenceObject,FinalizeResult,FinishFence,FinishProgress,IngestRunState,MacroSeriesDef,ObservationRow,ObservationWrite,QuarantineMember,Region,RegimeRecord,Retrieval,SnapshotRecord,WriteResult} from './types';
+import type {ChunkCounts,ChunkRecord,EvidenceObject,FinalizeResult,FinishFence,FinishProgress,IngestRunState,ObservationRow,ObservationWrite,QuarantineMember,Region,RegimeRecord,Retrieval,SnapshotRecord,WriteResult} from './types';
 
 const VALUE=/^-?(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -65,7 +66,7 @@ export function memoryMacroDb(opts:{tables?:TableClient}={}):MemoryMacroDb{
  // Snapshot cursor (SQL macro_next_snapshot_cursor, review A4): strictly increasing, 1 ms apart at least, even under a pinned clock.
  const cursorNow=()=>{const ms=Math.max(msOf(now()),lastCursorMs+1);lastCursorMs=ms;return new Date(ms).toISOString();};
  const catalogVersions=new Map<string,{json:string;rules:string}>();
- const series=new Map<string,MacroSeriesDef>();
+ const series=new Map<string,AnySeriesDef>();
  const evidence=new Map<string,EvidenceObject>();
  const retrievals=new Map<string,Retrieval>();
  let observations:ObservationRow[]=[];

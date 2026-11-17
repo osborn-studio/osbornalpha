@@ -9,12 +9,14 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {factInsert,filingInsert} from '../facts/db-contract';
 import type {FactInsert,FactRow,FactsDb,FilingInsert,FilingRow} from '../facts/types';
 import {eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
-import {MAX_COMPANY_WATCHES} from './db';
+import {EVIDENCE_CHUNK_ROWS,MAX_COMPANY_WATCHES} from './db';
 import {CompanyDbError} from './types';
 import type {CompanyDb,CoverageInput,EventInput,EvidenceIndexRow,Market} from './types';
 
 export interface CompanyContractHarness{
  db:CompanyDb;facts:FactsDb;
+ upsertEvidence(issuer:string,market:Market,attempt:number,rev:number,rows:EvidenceIndexRow[]):Promise<{upserted:number}>;
+ pruneEvidence(issuer:string,market:Market,attempt:number,rev:number,keep:string[]):Promise<{deleted:number}>;
  issuer(name?:string):Promise<string>;
  user():Promise<string>;
  /** A running ingest batch with code_version 'test-sha' and tool_versions {node:'test'}. */
@@ -225,6 +227,46 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    await db.replaceDigest(recent.iss,'US',b,await attempt(recent.iss),randomUUID(),1,false,[],coverageInput());
    expect(await db.markDigestFailed(recent.iss,'US',second,retry)).toBe(false);
    expect((await selected(retry)).map(x=>x.issuerId)).toEqual([normal.iss]);
+  });
+
+  it('chunked evidence round-trips; a mid-write revision change and stale prune retain stored rows',async()=>{
+   const {iss,fb}=await ready();const sha='a'.repeat(64);const n=EVIDENCE_CHUNK_ROWS+1;
+   const rh=(i:number)=>sha256Utf8(`${sha}\nrow/${i}`);
+   const s=await publish(iss,fb,[{facts:Array.from({length:n},(_,i)=>({concept:`bulk_${i}`,raw_hash:rh(i)}))}]);
+   const rows:EvidenceIndexRow[]=s.facts[0].map((f,i)=>({fact_id:f.fact_id,raw_hash:rh(i),snapshot_sha256:sha,snapshot_path:`edgar/${iss}/${sha}.json`,hash_locator:`row/${i}`,json_pointer:`/facts/${i}`,
+    field:null,source:'edgar',api:null,url:null,params:null,captured_at:null,http_status:null,page:null,index_version:'company-evidence/1'}));
+   const a=await attempt(iss);const ids=rows.map(r=>r.fact_id);
+   expect(await db.replaceEvidence(iss,'US',a,1,rows)).toEqual({upserted:n,deleted:0});
+   expect((await db.evidenceOf(ids)).size).toBe(n);
+   expect(await h.upsertEvidence(iss,'US',a,1,[])).toEqual({upserted:0});
+   await expect(h.upsertEvidence(iss,'US',a,1,Array(501).fill(rows[0]))).rejects.toMatchObject({code:'invalid_evidence',message:'invalid_evidence: rows: at most 500 per call'});
+   await expect(h.upsertEvidence(iss,'US',a,1,Array(500).fill(rows[0]))).rejects.toMatchObject({code:'invalid_evidence',message:'invalid_evidence: rows: duplicate fact_id'});
+   await expect(h.pruneEvidence(iss,'US',a,1,null as never)).rejects.toMatchObject({code:'invalid_evidence',message:'invalid_evidence: keep: array expected'});
+   expect(await h.upsertEvidence(iss,'US',a,1,rows.slice(0,EVIDENCE_CHUNK_ROWS))).toEqual({upserted:EVIDENCE_CHUNK_ROWS});
+   await h.facts.releaseLease(iss,'US',fb,'success','2030-01-01T00:00:00Z');
+   await publish(iss,fb,[{facts:[{concept:'next',raw_hash:'next'}]}]);
+   await expect(h.upsertEvidence(iss,'US',a,1,rows.slice(EVIDENCE_CHUNK_ROWS))).rejects.toMatchObject({code:'stale_computation'});
+   await expect(h.pruneEvidence(iss,'US',a,1,[])).rejects.toMatchObject({code:'stale_computation'});
+   expect((await db.evidenceOf(ids)).size).toBe(n);
+   expect(await db.replaceEvidence(iss,'US',a,2,rows.slice(0,1))).toEqual({upserted:1,deleted:n-1});
+   const b=await h.batch(),newer=await attempt(iss);
+   await db.replaceDigest(iss,'US',b,newer,randomUUID(),2,false,[],coverageInput());
+   await expect(h.pruneEvidence(iss,'US',a,2,[])).rejects.toMatchObject({code:'stale_attempt'});
+   await expect(h.pruneEvidence(randomUUID(),'US',newer,2,[])).rejects.toMatchObject({code:'unknown_stream'});
+   expect((await db.evidenceOf(ids)).size).toBe(1);
+  });
+  it('backlog details count active streams, order failures and limit the named list to 20',async()=>{
+   const before=await db.backlog();
+   for(let i=0;i<22;i++){
+    const {iss,fb}=await ready();await publish(iss,fb,[{facts:[{}]}]);
+    for(let j=0;j<2;j++)await db.markDigestFailed(iss,'US',await attempt(iss),new Date('2026-01-01T00:00:00.000Z'));
+   }
+   const got=await db.backlog();
+   expect(got.failedStreams).toBe(before.failedStreams+22);expect(got.activeStreams).toBe(before.activeStreams+22);
+   expect(got.streams).toHaveLength(20);
+   const sorted=[...got.streams].sort((a,b)=>b.consecutiveFailures-a.consecutiveFailures||a.issuerId.localeCompare(b.issuerId)||a.market.localeCompare(b.market));
+   expect(got.streams).toEqual(sorted);
+   for(const r of got.streams){expect(Object.keys(r).sort()).toEqual(['issuerId','market','consecutiveFailures','lastAttemptAt','nextAttemptAt'].sort());expect(r.lastAttemptAt).toMatch(/T.*Z$/);expect(r.nextAttemptAt).toMatch(/T.*Z$/);}
   });
 
   it('replaceEvidence verifies rows and replaces the stream; evidenceOf batches by 100 and returns visible facts only',async()=>{

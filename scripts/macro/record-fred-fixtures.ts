@@ -7,7 +7,7 @@
 import {createHash} from 'node:crypto';
 import {existsSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {MACRO_CATALOG} from '../../src/lib/macro/catalog';
+import {ALL_SERIES} from '../../src/lib/macro/series-registry';
 
 const DIR=join(process.cwd(),'src/lib/macro/fixtures/fred');
 const COSD='2015-01-01';
@@ -23,7 +23,7 @@ async function main(){
  }
  const codes=options.get('--codes')?.split(',');
  const ids=options.get('--ids')?.split(',');
- const catalogDefs=MACRO_CATALOG.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf);
+ const catalogDefs=ALL_SERIES.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf);
  const selectedCodes=codes??catalogDefs.map(d=>d.source!.seriesKey);
  if(selectedCodes.some(code=>!(/^[A-Z0-9_]{1,40}$/).test(code))||(ids!==undefined&&(ids.length!==selectedCodes.length||ids.some(id=>id.length===0))))usage();
  const defs=selectedCodes.map((code,i)=>({id:ids?.[i]??(codes?code:catalogDefs[i].id),source:{seriesKey:code}}));

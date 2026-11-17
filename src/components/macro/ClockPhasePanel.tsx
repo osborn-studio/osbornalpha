@@ -2,7 +2,8 @@
 import { useId, useRef } from "react";
 import type { Regime } from "@/lib/macro/judgment-contract";
 import type { MacroT } from "./use-macro-t";
-import { quadrantRows, type ClockRow } from "./clock-model";
+import { quadrantRows } from "./clock-model";
+import type { WeightedRow } from "./clock-weighted";
 import { ClockBreakdown } from "./ClockBreakdown";
 
 export function ClockPhasePanel({
@@ -22,19 +23,19 @@ export function ClockPhasePanel({
   index: number;
   current: boolean;
   expanded: boolean;
-  rows: ClockRow[];
+  rows: WeightedRow[];
   t: MacroT;
   locale: "zh" | "en";
   metadataLoading: boolean;
   onToggle: () => void;
   onClose: () => void;
-  onEvidence?: (row: ClockRow) => void;
+  onEvidence?: (row: WeightedRow) => void;
 }) {
   const id = useId();
   const trigger = useRef<HTMLButtonElement | null>(null);
   const w = (key: string) => t(`judgment.widget.${key}`);
   const ranked = quadrantRows(rows, regime);
-  const drivers = ranked.filter((r) => r.amount > 0).slice(0, 2);
+  const drivers = ranked.filter((r) => r.amount > 0).slice(0, 3);
   const close = () => {
     onClose();
     trigger.current?.focus();
@@ -43,6 +44,7 @@ export function ClockPhasePanel({
     <article
       data-phase={regime}
       data-current={current || undefined}
+      data-expanded={expanded || undefined}
       className="clock-panel"
       onKeyDown={(e) => {
         if (expanded && e.key === "Escape") {
@@ -86,7 +88,7 @@ export function ClockPhasePanel({
               <a href={`/macro/${encodeURIComponent(row.seriesId)}`}>
                 {row.name}
               </a>
-              <span>{row.value ?? w("missingValue")}</span>
+              <span>{row.latest?.value ?? w("missingValue")}</span>
               <strong>+{row.amount}</strong>
             </div>
           ))

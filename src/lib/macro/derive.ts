@@ -11,9 +11,10 @@
 // month_end inputs include the completion witness (first later-month observation).
 // available_at = the max available_at of ALL inputs of the row; derived_from = the input observation
 // ids; transform = '<kind>@1'. Quarterly series are never forward-filled into months.
+import type {AnySeriesDef} from './display-catalog';
 import {equals,minus100,yoyPct} from './decimal';
 import {monthEnd,monthKey,shiftMonthEnd} from './periods';
-import type {MacroSeriesDef,ObservationRow,ObservationWrite} from './types';
+import type {ObservationRow,ObservationWrite} from './types';
 
 export const DERIVE_VERSION=1;
 type DerivedWrite=Extract<ObservationWrite,{derived_from:string[]}>;
@@ -30,7 +31,7 @@ function normalise(rows:readonly ObservationRow[]):ObservationRow[]{
  return [...best.values()].sort((a,b)=>a.period_end<b.period_end?-1:a.period_end>b.period_end?1:0);
 }
 
-export function deriveSeries(def:MacroSeriesDef,inputs:readonly ObservationRow[],opts:{now:Date}):DerivedWrite[]{
+export function deriveSeries(def:AnySeriesDef,inputs:readonly ObservationRow[],opts:{now:Date}):DerivedWrite[]{
  const rule=def.derive;
  if(!rule)throw new Error(`not_derived:${def.id}`);
  if(!(opts.now instanceof Date)||!Number.isFinite(opts.now.getTime()))throw new Error('invalid_now');
