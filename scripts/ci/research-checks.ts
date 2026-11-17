@@ -12,7 +12,7 @@ export const criticalSuites = [
   'entity-keys/entity-keys.integration.test.ts', 'ledger/calls-import.integration.test.ts',
   'cluster/alignments.integration.test.ts', 'fanout/run.integration.test.ts',
   'cards/cards.integration.test.ts', 'thesis-extension.integration.test.ts', 'weekly/weekly.integration.test.ts',
-].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts', 'src/lib/entities/identifiers.integration.test.ts', 'src/lib/entities/ah-link.integration.test.ts', 'src/lib/dq/dq-extensions.integration.test.ts', 'src/lib/dq/reconcile/ixbrl-pair.integration.test.ts', 'src/lib/dq/reconcile/lineage.integration.test.ts', 'src/lib/facts/sync-cn.integration.test.ts', 'src/lib/dq/calendar.integration.test.ts')
+].map(p => `src/lib/research/${p}`).concat('src/lib/observability/quote-snapshot.integration.test.ts', 'src/lib/analyst/recommendations-append-only.integration.test.ts', 'src/lib/dq/dq-foundation.integration.test.ts', 'src/lib/entities/issuers.integration.test.ts', 'src/lib/entities/issuers-write.integration.test.ts', 'src/lib/facts/facts.integration.test.ts', 'src/lib/facts/read-batch.integration.test.ts', 'src/lib/facts/sync-us.integration.test.ts', 'src/lib/entities/identifiers.integration.test.ts', 'src/lib/entities/ah-link.integration.test.ts', 'src/lib/dq/dq-extensions.integration.test.ts', 'src/lib/dq/reconcile/ixbrl-pair.integration.test.ts', 'src/lib/dq/reconcile/lineage.integration.test.ts', 'src/lib/facts/sync-cn.integration.test.ts', 'src/lib/dq/calendar.integration.test.ts')
  // F6 begin
  .concat('src/lib/evals/evals-store.integration.test.ts', 'src/lib/evals/evals-facts.integration.test.ts', 'src/lib/evals/gold/registration-lifecycle.test.ts')
  // F6 end
@@ -38,6 +38,9 @@ criticalSuites.push('src/lib/company/handlers/target-fence.test.ts', 'src/lib/co
 criticalSuites.push('src/lib/judgments/judgments.integration.test.ts', 'src/lib/judgments/judgments-db.integration.test.ts', 'src/lib/judgments/settle.integration.test.ts', 'src/lib/judgments/calibrate.integration.test.ts');
 criticalSuites.push('src/lib/judgments/integration/macro-bridge.integration.test.ts');
 // /F4
+// FOREIGN ↓ broker research critical suites
+criticalSuites.push('src/lib/broker-research/broker-research.integration.test.ts', 'src/lib/broker-research/pipeline.integration.test.ts');
+// FOREIGN ↑
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');

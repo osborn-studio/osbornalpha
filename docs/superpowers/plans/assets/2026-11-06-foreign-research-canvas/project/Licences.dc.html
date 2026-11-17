@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>研报管理 许可</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1350px">
+  <header class="top"><div class="wrap" style="display: flex; align-items: center; gap: 16px; height: 56px"><span class="brand">OsbornAlpha</span><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><a href="AdminOverview.dc.html" class="cap">研报管理</a><span class="tiny">/ 许可</span></div></header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 20px; padding-top: 24px; padding-bottom: 48px">
+    <div class="row"><h1 class="h1">许可 <span class="en" style="font-size: 16px">Licences</span></h1><button class="btn pri" style="margin-left: auto">新建许可 New licence</button></div>
+    <section class="card" style="padding: 0">
+      <table class="t">
+        <thead><tr><th style="padding-left: 16px">许可</th><th>版本</th><th>状态</th><th>允许公开</th><th class="n">文档</th><th class="n">公开片段</th><th style="padding-right: 16px"></th></tr></thead>
+        <tbody>
+          <tr><td style="padding-left: 16px">GS 机构订阅</td><td class="m">v3</td><td><span class="chip ac">已确认 2026-10-02</span></td><td class="cap">元数据 · 目标价 · 片段 ≤ 120 字 · 摘要</td><td class="n m">31</td><td class="n m">44</td><td style="padding-right: 16px"><button class="btn ghost sm">查看</button></td></tr>
+          <tr style="background: rgba(202,138,4,.06)"><td style="padding-left: 16px">UBS 研究门户</td><td class="m">v2 → v3</td><td><span class="chip warn">待确认（实质性修改）</span></td><td class="cap">v3 起不允许公开目标价</td><td class="n m">22</td><td class="n m">18</td><td style="padding-right: 16px"><button class="btn sm">确认 v3</button></td></tr>
+          <tr><td style="padding-left: 16px">HSBC 客户授权</td><td class="m">v1</td><td><span class="chip ac">已确认 2026-08-19</span></td><td class="cap">元数据 · 摘要（不含目标价与片段）</td><td class="n m">12</td><td class="n m">0</td><td style="padding-right: 16px"><button class="btn ghost sm">查看</button></td></tr>
+        </tbody>
+      </table>
+    </section>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start">
+      <section class="card pad" style="display: flex; flex-direction: column; gap: 14px">
+        <div class="lbl-state">表单 · UBS 研究门户 v3（草稿）</div>
+        <div class="field"><label for="ln">名称</label><input id="ln" class="inp" value="UBS 研究门户"></div>
+        <fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px">
+          <legend class="cap" style="margin-bottom: 6px">允许公开 Allowed public fields</legend>
+          <label class="row cap"><input type="checkbox" checked style="accent-color: #ca8a04; width: 16px; height: 16px"> 元数据（机构、标题、日期、评级）</label>
+          <label class="row cap"><input type="checkbox" style="accent-color: #ca8a04; width: 16px; height: 16px"> 目标价</label>
+          <label class="row cap"><input type="checkbox" checked style="accent-color: #ca8a04; width: 16px; height: 16px"> 独立摘要</label>
+          <label class="row cap"><input type="checkbox" checked style="accent-color: #ca8a04; width: 16px; height: 16px"> 片段，每段 ≤ <input class="inp m" style="width: 64px; height: 28px; display: inline-block" value="80"> 字</label>
+        </fieldset>
+        <div class="field"><label for="ev">依据 Evidence</label><input id="ev" class="inp" value="合同第 7.2 条（2026-10 修订）"></div>
+        <div class="row"><button class="btn pri">保存为 v3 并确认</button><button class="btn ghost">取消</button></div>
+      </section>
+      <section class="card pad" style="display: flex; flex-direction: column; gap: 14px">
+        <div class="lbl-state">实质性修改的影响 Affected</div>
+        <p class="cap" style="margin: 0">v3 收紧了公开范围。确认后以下内容自动取消公开，等待重新发布：</p>
+        <table class="t dense"><tbody>
+          <tr><td>已公开目标价的报告</td><td class="n m">22</td></tr>
+          <tr><td>超过 80 字的公开片段</td><td class="n m">6</td></tr>
+          <tr><td>受影响的发布快照</td><td class="n m">22</td></tr>
+        </tbody></table>
+        <a href="#" style="font-size: 13px">查看受影响片段清单 →</a>
+        <hr class="hr">
+        <div class="ml">版本历史</div>
+        <table class="t dense"><tbody>
+          <tr><td class="m">v3</td><td class="tiny">草稿 · 2026-11-03</td><td class="tiny">目标价 → 不公开</td></tr>
+          <tr><td class="m">v2</td><td class="tiny">确认 2026-06-11</td><td class="tiny">片段上限 120 → 80</td></tr>
+          <tr><td class="m">v1</td><td class="tiny">确认 2026-02-20</td><td class="tiny">初版</td></tr>
+        </tbody></table>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1350}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

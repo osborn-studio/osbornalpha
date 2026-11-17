@@ -40,6 +40,9 @@ const MESSAGE_DOMAINS = [
   // /F4
   // Research shared foundation (unified canvas 2026-11-17)
   'research',
+  // FOREIGN ↓ foreign broker research (plan Task D2)
+  'foreign-research',
+  // FOREIGN ↑
 ] as const;
 
 export default getRequestConfig(async () => {

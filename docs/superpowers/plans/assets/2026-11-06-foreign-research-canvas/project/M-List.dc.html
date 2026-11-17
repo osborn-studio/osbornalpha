@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>移动 外资研报列表</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 390px; height: 1300px; display: flex; flex-direction: column">
+  <div class="mtop"><span class="brand">外资研报</span><span class="en">Broker research</span></div>
+  <div style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; flex: 1">
+    <div class="tiny">馆藏 <span class="m" style="color: #fafafa">186</span> 篇 · 机构 <span class="m" style="color: #fafafa">14</span> 家 · 最近入库 <span class="m" style="color: #fafafa">11-01</span></div>
+    <div class="field"><label for="q">标的 Security</label><input id="q" class="inp" style="height: 44px" placeholder="代码或名称"></div>
+    <div class="scrollx" style="display: flex; gap: 8px"><button class="chip ac" style="height: 32px">全部评级</button><button class="chip" style="height: 32px">买入</button><button class="chip" style="height: 32px">持有</button><button class="chip" style="height: 32px">卖出</button><button class="chip" style="height: 32px">机构 ▾</button></div>
+    <a class="card pad" href="M-Detail.dc.html" style="display: flex; flex-direction: column; gap: 6px; color: #fafafa; text-decoration: none">
+      <div class="row"><span class="cap">Goldman Sachs</span><span class="tiny" style="margin-left: auto">2026-11-01</span></div>
+      <div style="font-weight: 600">Margin resilience through the cycle</div>
+      <div class="row"><span class="chip m">600519.SH</span><span class="cap">Buy</span><span class="chip sq">买入</span></div>
+      <div class="row"><span class="m">CNY 1,980</span><span class="tiny">空间 +34.9%（派生）</span><span class="chip" style="margin-left: auto">AI 摘要</span></div>
+    </a>
+    <a class="card pad" href="#" style="display: flex; flex-direction: column; gap: 6px; color: #fafafa; text-decoration: none">
+      <div class="row"><span class="cap">UBS</span><span class="tiny" style="margin-left: auto">2026-10-28</span></div>
+      <div style="font-weight: 600">储能出货与海外产能 <span class="tag">译</span></div>
+      <div class="row"><span class="chip m">300750.SZ</span><span class="cap">Neutral</span><span class="chip sq">持有</span></div>
+      <div class="row"><span class="wh">目标价 —（许可不允许公开）</span></div>
+    </a>
+    <a class="card pad" href="#" style="display: flex; flex-direction: column; gap: 6px; color: #fafafa; text-decoration: none">
+      <div class="row"><span class="cap">Morgan Stanley</span><span class="tiny" style="margin-left: auto">2026-10-12</span></div>
+      <div style="font-weight: 600">Initiation: not rated pending coverage</div>
+      <div class="row"><span class="chip m">MSFT</span><span class="cap">Not Rated</span><span class="chip sq">未评级</span></div>
+      <div class="row"><span class="wh">报告未给出目标价</span></div>
+    </a>
+    <button class="btn lg" style="justify-content: center">加载更多</button>
+  </div>
+  <nav class="tabbar" aria-label="底部导航">
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 11l8-7 8 7v9H4z"></path></svg>首页</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 4v16M12 4v10M19 4v13"></path></svg>自选</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><circle cx="12" cy="12" r="8"></circle></svg>雷达</a>
+    <a class="on" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3h9l3 3v15H6z"></path><path d="M9 10h6M9 14h6"></path></svg>研究</a>
+    <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>设置</a>
+  </nav>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

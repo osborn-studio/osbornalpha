@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>研报管理 访问日志</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1000px">
+  <header class="top"><div class="wrap" style="display: flex; align-items: center; gap: 16px; height: 56px"><span class="brand">OsbornAlpha</span><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><a href="AdminOverview.dc.html" class="cap">研报管理</a><span class="tiny">/ 访问日志</span></div></header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 24px; padding-bottom: 48px">
+    <h1 class="h1">访问日志 <span class="en" style="font-size: 16px">Access log</span></h1>
+    <p class="cap" style="margin: 0; max-width: 72ch">每次返回全文、跨度或签名 URL 的请求都先写一行，再返回内容。只追加，不可编辑。</p>
+    <div class="row" style="gap: 12px">
+      <button class="sel"><span class="k">管理员</span>全部 ▾</button>
+      <button class="sel"><span class="k">动作</span>全部 ▾</button>
+      <button class="sel m">2026-10-05 → 2026-11-04 ▾</button>
+      <button class="btn sm" style="margin-left: auto">导出 CSV</button>
+    </div>
+    <section class="card" style="padding: 0">
+      <table class="t">
+        <thead><tr><th style="padding-left: 16px">时间<span class="en">At</span></th><th>管理员<span class="en">Admin</span></th><th>动作<span class="en">Action</span></th><th>对象<span class="en">Object</span></th><th>结果<span class="en">Result</span></th><th style="padding-right: 16px">请求<span class="en">Request</span></th></tr></thead>
+        <tbody>
+          <tr><td class="m dim" style="padding-left: 16px">2026-11-03 14:02:11</td><td>[admin A]</td><td>signed_url</td><td class="hash">doc 8c1…</td><td><span class="chip">200 · 60 s</span></td><td class="hash" style="padding-right: 16px">req 7a2…</td></tr>
+          <tr><td class="m dim" style="padding-left: 16px">2026-11-02 09:44:30</td><td>[admin A]</td><td>page_text</td><td class="hash">doc 8c1… p.1–3</td><td><span class="chip">200</span></td><td class="hash" style="padding-right: 16px">req 19f…</td></tr>
+          <tr><td class="m dim" style="padding-left: 16px">2026-11-02 09:41:02</td><td>[admin B]</td><td>field_spans</td><td class="hash">report r_e10…</td><td><span class="chip">200</span></td><td class="hash" style="padding-right: 16px">req c03…</td></tr>
+          <tr><td class="m dim" style="padding-left: 16px">2026-10-28 18:10:45</td><td>[admin B]</td><td>signed_url</td><td class="hash">doc 2b0…（已撤回）</td><td><span class="chip warn">410 withdrawn</span></td><td class="hash" style="padding-right: 16px">req 5d1…</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

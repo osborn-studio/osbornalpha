@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>外资研报 来源抽屉</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 1440px; height: 1200px; padding: 32px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start">
+  <aside class="drawer" aria-label="来源抽屉 目标价" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06); display: flex; gap: 8px">
+      <div style="flex: 1"><div class="lbl-state">来源 · LLM 抽取 + 人工确认</div><div class="h3" style="margin-top: 6px">目标价 · 600519.SH</div><div class="m" style="font-size: 24px; margin-top: 4px">1,980.00 CNY · 12M</div></div>
+      <button class="ibtn" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+    </div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px">
+      <div class="row" style="padding: 8px 12px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px"><span class="cap" style="color: #fafafa">私有馆藏（不对外提供原文）</span></div>
+      <dl class="kv" style="grid-template-columns: 120px 1fr">
+        <dt>页码</dt><dd class="m">第 1 页</dd>
+        <dt>抽取方式</dt><dd>LLM 抽取 / 人工确认</dd>
+        <dt>入库 available_at</dt><dd class="m">2026-11-01 21:14</dd>
+        <dt>代码版本</dt><dd class="m">a71e0c2</dd>
+        <dt>规则版本</dt><dd class="m">broker-rules/1 · typed/1</dd>
+        <dt>发布快照</dt><dd class="hash">pub 5d2e…9f01</dd>
+      </dl>
+      <div><div class="ml" style="margin-bottom: 6px">片段 Snippet</div><blockquote class="cap" style="margin: 0; padding: 10px 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 6px">“[逐字片段 ≤ N 字]”</blockquote></div>
+    </div>
+  </aside>
+  <aside class="drawer" aria-label="来源抽屉 人工新增" style="border: 1px solid rgba(255,255,255,.06); border-radius: 8px">
+    <div style="padding: 16px; border-bottom: 1px solid rgba(255,255,255,.06)"><div class="lbl-state">来源 · 人工新增</div><div class="h3" style="margin-top: 6px">永续增长率 · 600519.SH</div><div class="m" style="font-size: 24px; margin-top: 4px">3.0%</div></div>
+    <div style="padding: 16px; display: flex; flex-direction: column; gap: 14px">
+      <dl class="kv" style="grid-template-columns: 120px 1fr">
+        <dt>页码</dt><dd class="m">第 14 页</dd>
+        <dt>抽取方式</dt><dd>人工新增（模型未抽到，复核员按原文补录）</dd>
+        <dt>入库 available_at</dt><dd class="m">2026-11-02 09:40</dd>
+        <dt>代码 · 规则</dt><dd class="m">a71e0c2 · broker-rules/1</dd>
+        <dt>发布快照</dt><dd class="hash">pub 5d2e…9f01</dd>
+      </dl>
+      <div class="tiny">片段不公开时不显示“片段”区。</div>
+    </div>
+  </aside>
+  <div style="display: flex; flex-direction: column; gap: 20px">
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+      <div class="lbl-state">标题标注 Title labels</div>
+      <div class="h3">Margin resilience through the cycle</div>
+      <div class="row"><span class="tag">改写</span><span class="tiny">title_public：改写后的公开标题</span></div>
+      <hr class="hr">
+      <div class="h3">储能出货与海外产能</div>
+      <div class="row"><span class="tag">译 · claude-opus-5-5</span><span class="tiny">机器翻译的标题，注明模型 id</span></div>
+    </section>
+    <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+      <div class="lbl-state">评级映射 Rating mapping</div>
+      <table class="t dense"><tbody>
+        <tr><td>Goldman Sachs “Buy”</td><td>→</td><td><span class="chip sq">买入 buy</span></td></tr>
+        <tr><td>Morgan Stanley “Overweight”</td><td>→</td><td><span class="chip sq">买入 buy</span></td></tr>
+        <tr><td>UBS “Neutral”</td><td>→</td><td><span class="chip sq">持有 hold</span></td></tr>
+      </tbody></table>
+      <div class="tiny">rating-map/2 · 每行可看出处；映射更新后已发布报告在管理员总览出现“有更新映射可用”。</div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1200}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
