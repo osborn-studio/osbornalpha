@@ -175,7 +175,6 @@ export interface JudgmentsDb{
  calibrationValidity(methodology:string,version:string):Promise<{revision:number}>;
  insertCalibration(row:CalibrationRow,expectedRevision:number):Promise<'inserted'|'duplicate'|'stale_revision'>;
  syncMethodology(row:Omit<MethodologyRow,'created_at'|'synced_at'>,actor:string,reason:string|null):Promise<{changed:boolean;seq:number}>;
- retireMethodology(id:string,version:string,actor:string,reason:string):Promise<{changed:boolean;seq?:number}>;
  listMethodologies(status?:MethodologyStatus):Promise<MethodologyRow[]>;
  methodologyStateAt(id:string,version:string,cutoff:string):Promise<MethodologyEvent|null>;
  jobState(job:string):Promise<{state:Record<string,unknown>;updated_at:string}|null>;

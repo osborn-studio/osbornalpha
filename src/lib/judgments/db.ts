@@ -237,7 +237,6 @@ export function supabaseJudgmentsDb(clients:{anon:SupabaseClient;admin:SupabaseC
   },
   async insertCalibration(row,expectedRevision){return await call<'inserted'|'duplicate'|'stale_revision'>(admin,'insert_calibration',{p_row:row,p_expected_revision:expectedRevision});},
   async syncMethodology(row,actor,reason){const r=await call<{changed:boolean;seq:number}>(admin,'sync_methodology',{p_row:row,p_actor:actor,p_reason:reason});return {changed:r.changed===true,seq:Number(r.seq)};},
-  async retireMethodology(id,version,actor,reason){return await call<{changed:boolean;seq?:number}>(admin,'retire_methodology',{p_methodology_id:id,p_version:version,p_actor:actor,p_reason:reason});},
   async listMethodologies(status){
    return (await pageAll(()=>{let q=anon.from('judgment_methodologies').select('*');if(status!==undefined)q=q.eq('status',status);return q.order('methodology_id').order('version');})).map(methodologyFromTable);
   },

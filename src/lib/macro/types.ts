@@ -4,7 +4,7 @@
 export type Region='US'|'CN';
 export type SeriesType='policy_rate'|'bond_yield'|'fx'|'inflation_yoy'|'pmi'|'labor_rate'|'growth_yoy'|'liquidity_yoy'|'risk_index'|'asset_price';
 export type SeriesStatus='active'|'missing'|'restricted';
-export type Adapter='fred_csv'|'akshare'|'bis_sdmx_csv';
+export type Adapter='fred_csv'|'akshare';
 export type Rights='public_domain'|'official_open'|'third_party';
 export type ChangeKind='bp'|'pp'|'pct'|'points';
 export type NativeFrequency='daily'|'monthly'|'quarterly'|'event';

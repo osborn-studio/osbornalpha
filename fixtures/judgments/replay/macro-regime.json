@@ -1,14 +1,14 @@
 {
  "fixture_version": "judgment-replay/1",
- "description": "macro_regime@v3 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
+ "description": "macro_regime@v2 · US · 2026-09-11 · snapshot s1 (acceptance example 2: tamper a macro_observation → input_hash_mismatch naming its series_id)",
  "expect": "exact",
  "judgment": {
-  "judgment_id": "ffb4c417-da37-8e2c-bea3-3ffae03eff9a",
+  "judgment_id": "24edb657-7d36-89e6-b334-82c5989e6813",
   "subject_type": "macro_region",
   "subject_key": "US",
   "judgment_type": "macro_regime",
   "methodology_id": "macro_regime",
-  "methodology_version": "v3",
+  "methodology_version": "v2",
   "kind": "categorical",
   "producer_kind": "rule",
   "producer_ref": {},
@@ -278,7 +278,7 @@
      "region": "US",
      "as_of": "2026-09-11",
      "methodology_version": "v1.0",
-     "catalog_version": "macro-catalog/b91aad6b17f3",
+     "catalog_version": "macro-catalog/30bcaa2a33c5",
      "observation_ids": [
       "US_DFF:2026-08-31:fred-2026-09-01",
       "US_DGS10:2026-05-31:fred-2026-06-01",
@@ -311,7 +311,7 @@
      "growth_axis": null,
      "inflation_axis": null
     },
-    "hash": "062e4ca84dea7881d7c674c6c5828a8d37b6ea5d31dc278494658c1e1b2168b8",
+    "hash": "7fd7bd104d4d35dac96bf0a3ec80415de2e85ecd17590cd4ba083a921236da7f",
     "available_at": "2026-09-11T12:30:00.000Z",
     "origin": {
      "publisher": "OsbornAlpha 宏观工作台（由已发布观测派生的快照）",
@@ -320,7 +320,7 @@
     }
    }
   ],
-  "inputs_hash": "8e51537074b67df1c1fc42737290d1256171c7141b448b50b7ff312da5c4942d",
+  "inputs_hash": "a3db9c77c95c7a7c9c3c1b19a840a60e5d43af946d25ee877480759a3aa6ae3a",
   "abstained": false,
   "claim": {
    "selected": "recovery",
@@ -338,7 +338,7 @@
    },
    "scores_are_not_probabilities": true,
    "margin_pp": 9.090909,
-   "catalog_version": "macro-catalog/b91aad6b17f3"
+   "catalog_version": "macro-catalog/30bcaa2a33c5"
   },
   "condition": {
    "resolver": "macro_regime_replay",
@@ -346,7 +346,7 @@
     "region": "US",
     "reference_period": "2026-09",
     "macro_methodology_version": "v1.0",
-    "catalog_version": "macro-catalog/b91aad6b17f3"
+    "catalog_version": "macro-catalog/30bcaa2a33c5"
    },
    "predicate": {
     "op": "eq",

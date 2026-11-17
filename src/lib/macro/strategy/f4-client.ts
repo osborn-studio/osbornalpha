@@ -1,6 +1,5 @@
-import {MACRO_METHOD} from '../../judgments/macro-method';
 // src/lib/macro/strategy/f4-client.ts
-// F4 read client (spec 2026-11-07 §9.1 last paragraph, §5.2, §6.2, §6.4). Only the pure method selector is shared; reads use
+// F4 read client (spec 2026-11-07 §9.1 last paragraph, §5.2, §6.2, §6.4). P3/P4 never import src/lib/judgments: they read
 // F4's public HTTP routes on this site (NEXT_PUBLIC_SITE_URL) with a 3-second timeout. Any failure (no base URL, network,
 // timeout, non-2xx, a 404 that is not JSON i.e. the route does not exist, malformed body) throws F4Unavailable; a JSON 404
 // from the detail route means "no such judgment" → null. Only number-free fields are projected (spec §5.2 N12).
@@ -75,7 +74,7 @@ export function createF4Client(o:{baseUrl?:string|null;fetch?:typeof fetch;timeo
    const body=await get('/api/judgments',p,false);
    if(!isObj(body)||!Array.isArray(body.cards))throw new F4Unavailable('f4_malformed:list');
    const candidates=body.cards.filter(c=>isObj(c)&&c.judgment_type==='macro_regime');
-   const card=candidates.find(c=>isObj(c.methodology)&&c.methodology.id===MACRO_METHOD.id&&c.methodology.version===MACRO_METHOD.version)??null;
+   const card=candidates.find(c=>isObj(c.methodology)&&c.methodology.id==='macro_regime'&&c.methodology.version==='v2')??null;
    return card?cardLite(card):null;
   },
   async judgmentDetail(id){

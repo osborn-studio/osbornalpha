@@ -822,7 +822,7 @@ export interface MacroSeriesRow {
   release_lag_days: number | null; definition_version: number; catalog_version: string; updated_at: string;
 }
 export interface MacroCatalogVersionRow { catalog_version: string; catalog: unknown[]; rules_version: string; created_at: string }
-export interface MacroEvidenceObjectRow { sha256: string; object_path: string; adapter: 'fred_csv' | 'akshare' | 'bis_sdmx_csv'; content_type: string; byte_length: number; created_at: string }
+export interface MacroEvidenceObjectRow { sha256: string; object_path: string; adapter: 'fred_csv' | 'akshare'; content_type: string; byte_length: number; created_at: string }
 export interface MacroRetrievalRow {
   retrieval_id: string; sha256: string; fetch_url: string; fetch_host: string; http_status: number; fetched_at: string;
   batch_id: string; tool_versions: Record<string, string>;
