@@ -39,7 +39,7 @@ export function WatchlistSidebar({ selectedTicker, onSelect, variant = 'sidebar'
   }
 
   return (
-    <div className={variant === 'sidebar' ? 'sticky top-[57px]' : ''}>
+    <div className={variant === 'sidebar' ? 'sticky top-[var(--app-topbar-height,48px)]' : ''}>
       <div className="card-base !p-2">
         <div className="mb-2 flex items-center justify-between px-1">
           <span className="text-xs font-bold uppercase tracking-wider text-text-dim">

@@ -9,7 +9,14 @@
       "topic": "Topic research"
     },
     "notServed": "Not served",
-    "notServedHint": "This section is not open yet"
+    "notServedHint": "This section is not open yet",
+    "short": {
+      "macro": "Macro",
+      "industry": "Industry",
+      "company": "Company",
+      "foreign": "Foreign",
+      "topic": "Topic"
+    }
   },
   "legend": {
     "label": "Legend"

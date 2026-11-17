@@ -3,8 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 
+import {applyTheme, readTheme, saveTheme, type Theme} from './nav/theme-preference';
+
 type Scheme = 'cn' | 'us';
-type Theme = 'dark' | 'light';
 
 export function ThemeToggle() {
   const t = useTranslations('components.themeToggle');
@@ -14,7 +15,7 @@ export function ThemeToggle() {
 
   useEffect(() => {
     const s = (localStorage.getItem('color-scheme') as Scheme) || 'cn';
-    const t = (localStorage.getItem('theme') as Theme) || 'dark';
+    const t = readTheme();
     setScheme(s);
     setTheme(t);
     applyScheme(s);
@@ -24,11 +25,6 @@ export function ThemeToggle() {
   function applyScheme(s: Scheme) {
     document.documentElement.setAttribute('data-color-scheme', s);
   }
-  function applyTheme(t: Theme) {
-    const root = document.documentElement;
-    root.classList.remove('theme-dark', 'theme-light');
-    root.classList.add(`theme-${t}`);
-  }
 
   function setS(s: Scheme) {
     setScheme(s);
@@ -37,14 +33,13 @@ export function ThemeToggle() {
   }
   function setT(t: Theme) {
     setTheme(t);
-    localStorage.setItem('theme', t);
-    applyTheme(t);
+    saveTheme(t);
   }
 
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={() => {setTheme(readTheme()); setOpen(!open);}}
         className="rounded p-2 text-text-dim hover:bg-bg-card hover:text-text"
         title={t('appearanceSettings')}
         aria-label={t('themeToggleAria')}

@@ -38,3 +38,5 @@ it.each(['zh','en'] as const)('renders available links and disabled steps in %s'
  route.pathname='/watchlist';expect(render()).toBe('');
 });
 it('mounts after TopBar',()=>expect(readFileSync('src/app/(app)/layout.tsx','utf8')).toMatch(/<TopBar \/>\s*<ResearchChain/));
+
+it.each(['zh','en'] as const)('renders short and full labels in %s',locale=>{route.pathname='/macro';const catalog=locale==='zh'?zh:en;const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale,timeZone:'UTC',messages:{research:catalog},children:createElement(ResearchChain)}));const short=locale==='zh'?['宏观','行业','公司','外资研报','专题']:['Macro','Industry','Company','Foreign','Topic'];for(const label of short) expect(html).toContain(`class="sm:hidden">${label}</span>`);for(const label of Object.values(catalog.chain.steps)) expect(html).toContain(`class="hidden sm:inline">${label}</span>`);});

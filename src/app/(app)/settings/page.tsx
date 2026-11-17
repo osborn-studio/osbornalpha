@@ -12,6 +12,8 @@ import { UpgradeCard } from '@/components/UpgradeCard';
 import { getBrowserSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import type { AppLocale } from '@/lib/i18n/locale';
 
+import {selectLanguage as persistLanguage} from '@/components/nav/language-preference';
+
 // Fixed timezone choices (IANA ids are shown untranslated; '' = auto).
 const TIMEZONE_OPTIONS = [
   'Asia/Shanghai',
@@ -46,18 +48,7 @@ export default function SettingsPage() {
 
   async function selectLanguage(l: AppLocale) {
     setLanguage(l);
-    document.cookie = `NEXT_LOCALE=${l};path=/;max-age=31536000`;
-    if (isSupabaseConfigured()) {
-      const sb = getBrowserSupabase();
-      const { data: { user } } = await sb.auth.getUser();
-      if (user) {
-        await (sb as any).from('user_preferences').upsert(
-          { user_id: user.id, language: l },
-          { onConflict: 'user_id' }
-        );
-      }
-    }
-    router.refresh();
+    await persistLanguage(l, () => router.refresh());
   }
 
   async function selectTimezone(v: string) {

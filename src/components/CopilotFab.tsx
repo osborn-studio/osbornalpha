@@ -43,7 +43,7 @@ export function CopilotFab() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label={t('openAria')}
-        className="fixed bottom-20 right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full border border-accent-dim bg-bg-elevated text-2xl shadow-lg transition-transform hover:scale-105"
+        className="fixed bottom-20 lg:bottom-6 right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full border border-accent-dim bg-bg-elevated text-2xl shadow-lg transition-transform hover:scale-105"
       >
         🎩
       </button>

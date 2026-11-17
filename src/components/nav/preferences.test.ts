@@ -1,0 +1,25 @@
+import {afterEach,expect,it,vi} from 'vitest';
+import {createElement} from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {LanguageSwitch} from './LanguageSwitch';
+import {ThemeSwitch} from './ThemeSwitch';
+import {selectLanguage} from './language-preference';
+import {applyTheme,readTheme,saveTheme} from './theme-preference';
+const db=vi.hoisted(()=>({configured:false,upsert:vi.fn(),getUser:vi.fn()}));
+vi.mock('next-intl',()=>({useLocale:()=> 'zh',useTranslations:()=> (key:string)=>key}));
+vi.mock('next/navigation',()=>({useRouter:()=>({refresh:vi.fn()})}));
+vi.mock('@/lib/supabase/client',()=>({isSupabaseConfigured:()=>db.configured,getBrowserSupabase:()=>({auth:{getUser:db.getUser},from:()=>({upsert:db.upsert})})}));
+afterEach(()=>vi.unstubAllGlobals());
+it.each([{name:'LanguageSwitch',Switch:LanguageSwitch},{name:'ThemeSwitch',Switch:ThemeSwitch}])('$name uses the canvas segmented switch styles',({Switch})=>{
+ const html=renderToStaticMarkup(createElement(Switch));
+ const pressed=html.match(/<button[^>]*aria-pressed="true"[^>]*class="([^"]*)"/)![1].split(/\s+/);
+ const unpressed=html.match(/<button[^>]*aria-pressed="false"[^>]*class="([^"]*)"/)![1].split(/\s+/);
+ expect(pressed).toContain('bg-[var(--accent-wash)]');
+ expect(pressed).toEqual(expect.arrayContaining(['text-accent','font-semibold']));
+ expect(html).not.toContain('bg-accent ');
+ expect(pressed).not.toContain('bg-accent');
+ expect(unpressed).toContain('text-text-dim');
+ expect(html).toContain('class="inline-flex rounded-[4px] border border-border overflow-hidden"');
+});
+it.each([false,true])('keeps locale cookie, preference and refresh (configured=%s)',async configured=>{db.configured=configured;db.getUser.mockResolvedValue({data:{user:{id:'user-1'}}});const doc={cookie:''};vi.stubGlobal('document',doc);const refresh=vi.fn();await selectLanguage('en',refresh);expect(doc.cookie).toBe('NEXT_LOCALE=en;path=/;max-age=31536000');if(configured)expect(db.upsert).toHaveBeenCalledWith({user_id:'user-1',language:'en'},{onConflict:'user_id'});expect(refresh).toHaveBeenCalledOnce();});
+it('shares theme storage and replaces only theme classes',()=>{vi.stubGlobal('window',new EventTarget());const classes=new Set(['other','theme-dark']);vi.stubGlobal('document',{documentElement:{classList:{remove:(...s:string[])=>s.forEach(c=>classes.delete(c)),add:(s:string)=>classes.add(s)}}});const storage=new Map();vi.stubGlobal('localStorage',{getItem:(k:string)=>storage.get(k),setItem:(k:string,v:string)=>storage.set(k,v)});expect(readTheme()).toBe('dark');saveTheme('light');expect(readTheme()).toBe('light');expect([...classes]).toEqual(['other','theme-light']);applyTheme('dark');expect([...classes]).toEqual(['other','theme-dark']);});

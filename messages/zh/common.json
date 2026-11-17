@@ -10,7 +10,18 @@
     "portfolio": "我的投资",
     "analyst": "分析",
     "tools": "工具",
-    "settings": "设置"
+    "settings": "设置",
+    "label": "主导航",
+    "more": "更多",
+    "close": "关闭",
+    "search": "搜索",
+    "language": "语言",
+    "theme": "主题",
+    "themeDark": "深色",
+    "themeLight": "浅色",
+    "about": "关于",
+    "langZh": "中",
+    "langEn": "EN"
   },
   "actions": {
     "save": "保存",
@@ -38,5 +49,14 @@
   "footer": {
     "copyright": "© 2026 osbornalpha",
     "about": "关于"
+  },
+  "navAlt": {
+    "analyst": "Analyst",
+    "tools": "Tools",
+    "settings": "Settings",
+    "about": "About",
+    "language": "Language",
+    "theme": "Theme",
+    "more": "More"
   }
 }

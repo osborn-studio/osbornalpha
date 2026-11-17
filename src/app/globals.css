@@ -166,3 +166,9 @@ table { font-variant-numeric: tabular-nums; }
   font-family: var(--num-font);
   font-variant-numeric: tabular-nums;
 }
+
+@media (min-width: 1024px) {
+  body {
+    padding-bottom: 0;
+  }
+}

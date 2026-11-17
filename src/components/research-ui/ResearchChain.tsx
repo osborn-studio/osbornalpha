@@ -18,11 +18,11 @@ export function ResearchChain({availability=DEFAULT_CHAIN_AVAILABILITY}:{availab
       {index>0 && <span aria-hidden="true" className="text-text-muted text-[11px]">→</span>}
       {item.href===null
         ? <span aria-disabled="true" data-chain-state="notServed" title={t('chain.notServedHint')} className={stepClass+' border-border text-text-dim'}>
-          <span className="font-mono tabular-nums text-[10px] text-text-muted">{item.no}</span>{t(`chain.steps.${item.id}`)}
+          <span className="font-mono tabular-nums text-[10px] text-text-muted">{item.no}</span><span className="sm:hidden">{t(`chain.short.${item.id}`)}</span><span className="hidden sm:inline">{t(`chain.steps.${item.id}`)}</span>
           <span className="rounded border border-dashed border-border px-1 text-[10px]">{t('chain.notServed')}</span>
         </span>
         : <Link href={item.href as Route} aria-current={item.state==='current'?'page':undefined} className={stepClass+(item.state==='current'?' border-[var(--border-active)] bg-[var(--accent-wash)] text-text font-semibold':' border-border text-text-dim')}>
-          <span className="font-mono tabular-nums text-[10px] text-text-muted">{item.no}</span>{t(`chain.steps.${item.id}`)}
+          <span className="font-mono tabular-nums text-[10px] text-text-muted">{item.no}</span><span className="sm:hidden">{t(`chain.short.${item.id}`)}</span><span className="hidden sm:inline">{t(`chain.steps.${item.id}`)}</span>
         </Link>}
     </Fragment>)}
   </nav>;

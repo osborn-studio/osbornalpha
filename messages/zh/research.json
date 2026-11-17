@@ -9,7 +9,14 @@
       "topic": "专题研究"
     },
     "notServed": "未服务",
-    "notServedHint": "该板块尚未开放"
+    "notServedHint": "该板块尚未开放",
+    "short": {
+      "macro": "宏观",
+      "industry": "行业",
+      "company": "公司",
+      "foreign": "外资研报",
+      "topic": "专题"
+    }
   },
   "legend": {
     "label": "图例"
