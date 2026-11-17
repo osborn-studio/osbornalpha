@@ -1,3 +1,4 @@
+import {lineSegments} from '@/components/research-ui/chart-gaps';
 // src/components/industries/series-model.ts
 // SVG geometry of a series chart (spec §8.3, canvas "Detail" §3): one brass line over the displayed cells,
 // broken at missing or suppressed cells (a gap is a gap, never a 0), a dot per ok cell (each a source-drawer
@@ -27,15 +28,9 @@ export function seriesGeometry(points:SeriesPoint[],metric:AggMetric,locale:Loca
  const span=hi-lo;lo-=span*0.05;hi+=span*0.05;
  const x=(i:number)=>r1(pad.l+(points.length<=1?w/2:i*w/(points.length-1)));
  const y=(v:number)=>r1(pad.t+h-(v-lo)/(hi-lo)*h);
- const segments:string[]=[];let cur:string[]=[];
- const dots:SeriesGeometry['dots']=[];
- points.forEach((p,i)=>{
-  if(!plotted(p.cell)){if(cur.length)segments.push(cur.join(' '));cur=[];return;}
-  const px=x(i),py=y(Number(p.cell.value));
-  cur.push(`${cur.length?'L':'M'}${px} ${py}`);
-  dots.push({x:px,y:py,periodEnd:p.periodEnd,cell:p.cell});
- });
- if(cur.length)segments.push(cur.join(' '));
+ const projected=points.map((p,i)=>({...p,x:x(i),y:plotted(p.cell)?y(Number(p.cell.value)):null}));
+ const segments=lineSegments(projected).map(segment=>segment.map((p,i)=>`${i?'L':'M'}${p.x} ${p.y}`).join(' '));
+ const dots:SeriesGeometry['dots']=projected.flatMap(p=>p.y!==null&&p.cell?[{x:p.x,y:p.y,periodEnd:p.periodEnd,cell:p.cell}]:[]);
  const yTicks=[0,1,2,3].map(k=>{const v=lo+(hi-lo)*k/3;return {y:y(v),label:formatMetricValue(metric,v.toFixed(10),locale,points.find(p=>p.cell)?.cell?.unit)};});
  const step=Math.max(1,Math.ceil(points.length/10));
  const allYearEnds=points.every(p=>p.periodEnd.endsWith('-12-31'));

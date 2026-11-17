@@ -7,11 +7,13 @@ const src=(f:string)=>readFileSync(new URL(`./${f}`,import.meta.url),'utf8');
 
 describe('source drawer accessibility',()=>{
  const drawer=src('SourceDrawer.tsx');
- it('is a native modal dialog that handles cancel (Escape) and restores focus through presentModal',()=>{
+ it('keeps membership in a native modal dialog that handles cancel (Escape) and restores focus through presentModal',()=>{
   expect(drawer).toContain('<dialog');
   expect(drawer).toContain('presentModal(');
   expect(drawer).toMatch(/onCancel=\{e=>\{e\.preventDefault\(\);onClose\(\);\}\}/);
-  expect(drawer).not.toContain('role="dialog"');
+  expect(drawer).toContain("payload.kind==='membership'");
+  expect(drawer).toContain('<SharedSourceDrawer');
+  expect(drawer).toContain('slots={{transform:proof}}');
  });
  it('chart dots are removed from the tab order and the accessibility tree',()=>{
   expect(drawer).toMatch(/<circle[^>]*tabIndex=\{-1\}[^>]*aria-hidden="true"/);

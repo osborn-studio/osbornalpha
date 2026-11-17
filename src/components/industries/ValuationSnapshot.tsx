@@ -23,8 +23,8 @@ export function ValuationSnapshot({scheme,nodes,block,preview,title}:{scheme:Sch
         <h2 className="text-lg font-semibold">{t(title)}</h2>
         <span className="rounded-[4px] border border-border px-2 py-0.5 text-xs text-text-dim">{t('publishedOnly')}</span>
       </div>
-      {block.state==='not_enabled'&&<StateNotice kind="notEnabled" />}
-      {block.state==='unpublished'&&<StateNotice kind="partialUnpublished" />}
+      {block.state==='not_enabled'&&<StateNotice kind={scheme==='sic'?'notPublished':'notEnabled'} />}
+      {block.state==='unpublished'&&<StateNotice kind={scheme==='sic'?'notPublished':'partialUnpublished'} />}
       {block.state==='published'&&(
         <table className="w-full text-sm">
           <thead><tr className="text-left text-xs text-text-dim"><th className="py-1.5 font-normal">{t('industry')}</th><th className="py-1.5 text-right font-normal">{t('pe')}</th><th className="py-1.5 text-right font-normal">{t('pb')}</th><th className="hidden py-1.5 font-normal sm:table-cell">{t('percentile')}</th><th className="py-1.5 text-right font-normal">{t('mcapCoverage')}</th><th className="hidden py-1.5 font-normal sm:table-cell">{t('date')}</th></tr></thead>
@@ -42,7 +42,7 @@ export function ValuationSnapshot({scheme,nodes,block,preview,title}:{scheme:Sch
               const cellBtn=(c:typeof pe)=>{
                 if(!c)return <span className="font-mono text-text-dim">{t('unpublished')}</span>;
                 if(!compatible(c))return <span className="text-xs text-text-dim">— {tc('drawer.factsAsOf')}: {c.factsAsOf} ≠ {date}</span>;
-                return <SourceButton payload={{kind:'valuation',scheme,code:n.code,nodeName:name,runId:block.runId,cell:c,preview}} label={tc('heatmap.cellTitle',{industry:name,period:c.tradeDate,metric:c.metric==='pb'?t('pb'):t('pe'),value:formatValuation(c.metric,c.value,locale)})}>{formatValuation(c.metric,c.value,locale)}</SourceButton>;
+                return <SourceButton payload={{kind:'valuation',scheme,code:n.code,nodeName:name,runId:block.runId,methodVersion:block.methodVersion,cell:c,preview}} label={tc('heatmap.cellTitle',{industry:name,period:c.tradeDate,metric:c.metric==='pb'?t('pb'):t('pe'),value:formatValuation(c.metric,c.value,locale)})}>{formatValuation(c.metric,c.value,locale)}</SourceButton>;
               };
               const coverage=(c:typeof pe)=>c&&compatible(c)&&c.mcapCoverage!==null?`${percentText(c.mcapCoverage)}%`:'—';
               return (

@@ -18,12 +18,13 @@ import {industryPath,nodeName} from './hrefs';
 export function ListTable({scheme,nodes,periodEnds,cells,companion,metric,header,preview}:{scheme:Scheme;nodes:NodeView[];periodEnds:string[];cells:PublicCell[];companion:PublicCell[];metric:AggMetric;header:RunHeader;preview:boolean}){
   nodes=scheme==='sic'?orderSicRows(nodes,cells):nodes;
   const t=useTranslations('industries');
+  const research=useTranslations('research');
   const locale=useLocale()==='en'?'en':'zh';
   const latest=periodEnds[periodEnds.length-1];
   const tr=t as unknown as Translate;
-  const label=(name:string,c:PublicCell)=>t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${c.metric}`),value:cellText(c,c.metric,locale,tr)});
+  const label=(name:string,c:PublicCell)=>t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${c.metric}`),value:cellText(c,c.metric,locale,tr,research as Translate)});
   return (
-    <section aria-label={t('table.label')} className="card-base" style={{padding:'4px 0'}}>
+    <section aria-label={t('table.label')} className="card-base overflow-x-auto" style={{padding:'4px 0'}}>
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-text-dim">

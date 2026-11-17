@@ -12,15 +12,15 @@ test.use({ locale: 'zh-CN' });
 test('list: heatmap with reconstruction badge, a cell opens the drawer and replays, table view', async ({ page }) => {
   await page.goto('/intel/industries');
   await expect(page.getByRole('heading', { level: 1, name: '行业研究' })).toBeVisible();
-  await expect(page.locator('[data-history-class="reconstruction"]').first()).toBeVisible();
+  await expect(page.locator('[data-research-state="reconstructed"]').first()).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: '历史重建' })).toBeVisible();
   const heatmap = page.getByRole('region', { name: '热力图' });
   await expect(heatmap).toBeVisible();
   await expect(heatmap.getByText('47.8%')).toBeVisible();
-  await expect(heatmap.getByText('—').first()).toBeVisible();          // 银行 gross margin: financial_excluded, never 0
+  await expect(heatmap.locator('[data-research-state="missing"]').filter({ visible: true }).first()).toBeVisible();          // 银行 gross margin: financial_excluded, never 0
 
   await heatmap.getByRole('button', { name: /^食品饮料 · 2025-12-31/ }).click();
-  const drawer = page.getByRole('dialog', { name: '来源抽屉' });
+  const drawer = page.getByRole('dialog', { name: /^来源 ·/ });
   await expect(drawer).toBeVisible();
   await expect(drawer.getByText('原样回放')).toBeVisible();
   await expect(drawer.locator('[data-reproduced="true"]')).toBeVisible({ timeout: 30_000 });   // the happy path must REPRODUCE (first dev compile of the replay route is slow)
@@ -41,7 +41,7 @@ test('a tampered cell (stored value ≠ its manifest) shows the not-reproduced s
   await page.goto('/intel/industries');
   const heatmap = page.getByRole('region', { name: '热力图' });
   await heatmap.getByRole('button', { name: /^电子 · 2025-12-31/ }).click();   // E2E_TAMPERED in src/lib/industry/e2e-fixture.ts
-  const drawer = page.getByRole('dialog', { name: '来源抽屉' });
+  const drawer = page.getByRole('dialog', { name: /^来源 ·/ });
   await expect(drawer.locator('[data-reproduced="false"]')).toBeVisible({ timeout: 30_000 });
   await expect(drawer.locator('[data-reproduced="true"]')).toHaveCount(0);
 });
@@ -50,9 +50,9 @@ test('detail: series with its table equivalent, member summary, valuation not en
   await page.goto('/intel/industries/sw2021/801120.SI');
   await expect(page.getByRole('heading', { level: 1 })).toContainText('食品饮料');
   await expect(page.getByRole('heading', { level: 1 })).toContainText('801120.SI');
-  await expect(page.getByText('表格等价视图')).toBeVisible();
-  await expect(page.locator('[data-history-class="reconstruction"]').first()).toBeVisible();
-  await expect(page.getByText('估值未启用')).toBeVisible();
+  await expect(page.getByText('表格等价视图').filter({ visible: true })).toBeVisible();
+  await expect(page.locator('[data-research-state="reconstructed"]').first()).toBeVisible();
+  await expect(page.getByText('尚未发布')).toBeVisible();
   await expect(page.locator('[data-judgments="disabled"]')).toBeVisible();
   await page.getByRole('link', { name: /查看成分/ }).click();
   await page.waitForURL('**/intel/industries/sw2021/801120.SI/constituents');
@@ -82,7 +82,7 @@ test('mobile 390px: no horizontal page scroll, drawer is a bottom sheet', async 
   await page.goto('/intel/industries');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole('region', { name: '热力图' }).getByRole('button', { name: /^食品饮料 · 2025-12-31/ }).click();
-  const box = await page.getByRole('dialog', { name: '来源抽屉' }).boundingBox();
+  const box = await page.getByRole('dialog', { name: /^来源 ·/ }).boundingBox();
   expect(box?.width).toBeGreaterThan(360);                           // full width (minus a scrollbar), not the 440px side panel
   expect(Math.round((box?.y ?? 0) + (box?.height ?? 0))).toBeGreaterThanOrEqual(840);   // anchored to the bottom edge
   await page.goto('/intel/industries/sw2021/801120.SI');
@@ -91,21 +91,25 @@ test('mobile 390px: no horizontal page scroll, drawer is a bottom sheet', async 
 
 test('SIC snapshot: fiscal heatmap → reproduced drawer → table → detail', async ({ page }) => {
   await page.goto('/intel/industries?scheme=sic');
-  await expect(page.locator('[data-state="snapshotConstituents"]')).toContainText('2026-11-03');
+  await expect(page.locator('[data-state="reconstruction"]')).toContainText('2026-11-03');
   const heatmap = page.getByRole('region', { name: '热力图' });
   await expect(heatmap.getByText('FY2025')).toHaveAttribute('title', '财年结束于 2025 年');
-  await expect(heatmap.getByText('成分不足 2<5').first()).toBeVisible();
+  await expect(heatmap.getByText('成分不足 2<5').filter({ visible: true }).first()).toBeVisible();
   await heatmap.getByRole('button', { name: /^Semiconductors & Related Devices · 2025-12-31/ }).click();
-  const drawer = page.getByRole('dialog', { name: '来源抽屉' });
+  const drawer = page.getByRole('dialog', { name: /^来源 ·/ });
   await expect(drawer.locator('[data-reproduced="true"]')).toBeVisible({ timeout: 30_000 });
+  await expect(drawer.getByText('6.00 十亿美元', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('6/6', { exact: true })).toBeVisible();
+  await expect(drawer.getByText(/industry-agg-us/)).toBeVisible();
   await expect(drawer.getByRole('button', { name: '按当前证据重算' })).toHaveCount(0);
   await page.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
   await page.getByRole('link', { name: '表格', exact: true }).click();
   const table = page.getByRole('region', { name: '表格视图' });
   await expect(table).toBeVisible();
   await table.getByRole('link', { name: 'Semiconductors & Related Devices' }).click();
   await expect(page).toHaveURL(/\/intel\/industries\/sic\/3674$/);
-  await expect(page.getByText('表格等价视图')).toBeVisible();
-  await expect(page.locator('[data-state="snapshotConstituents"]')).toBeVisible();
+  await expect(page.getByText('表格等价视图').filter({ visible: true })).toBeVisible();
+  await expect(page.locator('[data-state="reconstruction"]')).toBeVisible();
   await expect(page.getByRole('link', { name: /查看成分/ })).toBeVisible();
 });

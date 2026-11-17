@@ -8,12 +8,13 @@
 import {createContext,useCallback,useContext,useEffect,useMemo,useRef,useState} from 'react';
 import type {CSSProperties,ReactNode} from 'react';
 import {useLocale,useTranslations} from 'next-intl';
-import {formatMetricValue,formatMoney,formatValuation} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
-import {StateNotice} from './StateNotice';
-import {HistoryClassBadge} from './HistoryClassBadge';
+import {SourceDrawer as SharedSourceDrawer} from '@/components/research-ui';
+import {adaptSourceDrawer} from './source-drawer-adapter';
+import type {Translate} from './cell-text';
+import {CoverageCell} from './CoverageCell';
 import {nodeName} from './hrefs';
-import {coverageOf,diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,presentModal,replayUrl,roleSummary,short,valuationReplayUrl} from './drawer-model';
+import {diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,presentModal,replayUrl,roleSummary,short,valuationReplayUrl} from './drawer-model';
 import type {AggregatePayload,DrawerPayload,RecomputePayload,ReplayPayload} from './drawer-model';
 
 const DrawerContext=createContext<{open:(p:DrawerPayload)=>void}|null>(null);
@@ -22,7 +23,7 @@ export function SourceDrawerProvider({children}:{children:ReactNode}){
   const [payload,setPayload]=useState<DrawerPayload|null>(null);
   const open=useCallback((p:DrawerPayload)=>setPayload(p),[]);
   const value=useMemo(()=>({open}),[open]);
-  return (<DrawerContext.Provider value={value}>{children}{payload&&<DrawerPanel payload={payload} onClose={()=>setPayload(null)} />}</DrawerContext.Provider>);
+  return (<DrawerContext.Provider value={value}>{children}{payload&&<DrawerHost key={payload.kind==='aggregate'?`${payload.header.runId}:${payload.code}:${payload.cell.metric}:${payload.cell.periodEnd}:${payload.cell.duration}`:JSON.stringify(payload)} payload={payload} onClose={()=>setPayload(null)} />}</DrawerContext.Provider>);
 }
 
 export function SourceButton({payload,children,className,label,style}:{payload:DrawerPayload;children:ReactNode;className?:string;label?:string;style?:CSSProperties}){
@@ -70,7 +71,16 @@ function useJson<T>(url:string|null,parse:(j:unknown)=>T|null){
   return state;
 }
 
-function DrawerPanel({payload,onClose}:{payload:DrawerPayload;onClose:()=>void}){
+function DrawerHost({payload,onClose}:{payload:DrawerPayload;onClose:()=>void}){
+ const t=useTranslations('industries');
+ const locale=useLocale()==='en'?'en':'zh';
+ if(payload.kind==='membership')return <DrawerPanel payload={payload} onClose={onClose}/>;
+ if(payload.kind==='aggregate')return <AggregateDrawer p={payload} onClose={onClose}/>;
+ if(payload.kind==='valuation')return <ValuationDrawer p={payload} onClose={onClose}/>;
+ return <SharedSourceDrawer input={adaptSourceDrawer(payload,locale,t as Translate)} onClose={onClose} text={key=>t(key)} slots={{source:<FactBody p={payload}/>}}/>;
+}
+
+function DrawerPanel({payload,onClose}:{payload:Extract<DrawerPayload,{kind:'membership'}>;onClose:()=>void}){
   const t=useTranslations('industries.drawer');
   const dialogRef=useRef<HTMLDialogElement>(null);
   const closeRef=useRef<HTMLButtonElement>(null);
@@ -95,9 +105,6 @@ function DrawerPanel({payload,onClose}:{payload:DrawerPayload;onClose:()=>void})
           </button>
         </div>
         <div className="flex flex-col gap-5 p-4">
-          {payload.kind==='aggregate'&&<AggregateBody p={payload} />}
-          {payload.kind==='valuation'&&<ValuationBody p={payload} />}
-          {payload.kind==='fact'&&<FactBody p={payload} />}
           {payload.kind==='membership'&&<MembershipBody p={payload} />}
         </div>
       </div>
@@ -105,57 +112,27 @@ function DrawerPanel({payload,onClose}:{payload:DrawerPayload;onClose:()=>void})
   );
 }
 
-function Heading({payload}:{payload:DrawerPayload}){
-  const t=useTranslations('industries');
-  const locale:Locale=useLocale()==='en'?'en':'zh';
-  let title='',big='';
-  if(payload.kind==='aggregate'){title=`${payload.nodeName} · ${t(`metrics.${payload.cell.metric}`)} · ${payload.cell.periodEnd}`;big=payload.cell.value!==null?formatMetricValue(payload.cell.metric,payload.cell.value,locale,payload.cell.unit):'—';}
-  if(payload.kind==='valuation'){title=`${payload.nodeName} · ${payload.cell.metric==='pe_ttm'?t('valuation.pe'):payload.cell.metric==='pb'?t('valuation.pb'):payload.cell.metric} · ${payload.cell.tradeDate}`;big=formatValuation(payload.cell.metric,payload.cell.value,locale);}
-  if(payload.kind==='fact'){title=`${payload.issuerName} · ${payload.fact.concept} · ${payload.fact.periodEnd}`;big=formatMoney(payload.fact.value,payload.fact.unit,locale);}
-  if(payload.kind==='membership'){title=`${payload.ticker??''} ${payload.issuerName} ∈ ${payload.nodeName}`;big='';}
-  return (
-    <>
-      <div className="text-[10px] uppercase tracking-wide text-text-dim">{t(`drawer.kind.${payload.kind}`)}</div>
-      <div className="mt-1 text-sm font-semibold">{title}</div>
-      {big&&<div className="mt-1 font-mono text-[26px] font-medium tabular-nums">{big}</div>}
-    </>
-  );
+function Heading({payload}:{payload:Extract<DrawerPayload,{kind:'membership'}>}){
+ const t=useTranslations('industries');
+ return <><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('drawer.kind.membership')}</div><div className="mt-1 text-sm font-semibold">{payload.ticker??''} {payload.issuerName} ∈ {payload.nodeName}</div></>;
 }
 
-function AggregateBody({p}:{p:AggregatePayload}){
+function AggregateDrawer({p,onClose}:{p:AggregatePayload;onClose:()=>void}){
   const t=useTranslations('industries');
-  const c=p.cell;const cov=coverageOf(c);
+  const locale=useLocale()==='en'?'en':'zh';
+  const c=p.cell;
+  const visible=c.display==='value'&&c.value!==null;
   const [recomputeOn,setRecomputeOn]=useState(false);
-  const replay=useJson<ReplayPayload>(c.status==='ok'?replayUrl(p,'original'):null,normalizeReplay);
+  const replay=useJson<ReplayPayload>(visible&&c.status==='ok'?replayUrl(p,'original'):null,normalizeReplay);
   const recUrl=recomputeOn?replayUrl(p,'recompute'):null;
   const recompute=useJson<RecomputePayload>(recUrl,normalizeRecompute);
   const roles=replay.data?roleSummary(replay.data.manifest):null;
   const inputs=replay.data?inputRows(replay.data.manifest,5):null;
-  return (
+  const proof=(
     <>
-      {p.header.membershipOn&&<StateNotice kind="snapshotConstituents" values={{date:p.header.membershipOn}} />}
-      <Section title={`1 · ${t('drawer.sections.value')}`}>
-        <dl className={dl}>
-          <Row label={t('drawer.formula')}>{t(`formulas.${c.metric}`)}</Row>
-          <Row label={t('drawer.period')} mono>{c.periodStart} → {c.periodEnd} · {c.duration}</Row>
-          <Row label={t('drawer.method')} mono>{p.header.methodVersion} · {p.header.formulaVersion}</Row>
-          <Row label={t('drawer.factsAsOf')} mono>{p.header.factsAsOf}</Row>
-          <Row label={t('drawer.availableAt')} mono>{c.updatedAt??'—'} <span className="font-sans text-text-dim">{t('drawer.availableAtNote')}</span></Row>
-          <Row label={t('drawer.historyClass')}><HistoryClassBadge historyClass={p.header.historyClass} /></Row>
-          <Row label={t('drawer.codeVersion')} mono>{p.header.codeVersion.slice(0,7)}</Row>
-          <Row label={t('drawer.manifest')} mono>{short(c.manifestHash)}</Row>
-        </dl>
-      </Section>
-      <Section title={`2 · ${t('drawer.sections.coverage')}`}>
-        <div className="flex items-baseline gap-2"><span className="font-mono text-base tabular-nums">{cov.n} / {cov.d}</span><span className="text-xs text-text-dim">{t('drawer.coverageRatio')}</span></div>
-        <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-xs text-text-dim">
-          {roles?.excluded.map(e=><li key={e.reason}>{t('drawer.excludedBy',{reason:t(`roles.${e.reason}`),n:e.n})}</li>)}
-          <li>{t('drawer.unresolvedCount',{n:c.nUnresolved})}</li>
-        </ul>
-      </Section>
-      {c.status!=='ok'?(
+      {!visible||c.status!=='ok'?(
         <Section title={`3 · ${t('drawer.sections.replay')}`}>
-          <p className="text-sm text-text-dim">{t('drawer.missingCell',{reason:t(`missing.${c.missingReason??'empty_set'}`)})}</p>
+          <CoverageCell cell={c} metric={c.metric}/>
           <p className="mt-1 font-mono text-xs tabular-nums text-text-dim">{t('drawer.counts',{members:c.nMembers,withData:c.nWithData,unresolved:c.nUnresolved})}</p>
         </Section>
       ):(
@@ -213,36 +190,31 @@ function AggregateBody({p}:{p:AggregatePayload}){
           </table>
         </Section>
       )}
-      <Section title={`4 · ${t('drawer.sections.membership')}`}>
-        <dl className={dl}>
-          <Row label={t('drawer.upstream')}>{p.scheme==='sw2021'?t('drawer.membershipUpstreamSw'):t('drawer.membershipUpstreamSic')}</Row>
-          <Row label={t('drawer.availableDateLabel')}>{p.scheme==='sw2021'?t('drawer.availabilityAssumed'):t('drawer.availabilityObserved')}</Row>
-          <Row label={t('drawer.historyClass')}><HistoryClassBadge historyClass={p.header.historyClass} /></Row>
-        </dl>
-      </Section>
     </>
   );
+  return <SharedSourceDrawer input={adaptSourceDrawer(p,locale,t as Translate)} onClose={onClose} text={key=>t(key)}
+    pending={replay.status==='loading'?['transform']:[]}
+    failed={replay.status==='error'?['transform']:[]}
+    failedText={t('drawer.replayFailed',{code:replay.code??''})}
+    slots={{transform:proof}} />;
 }
 
-function ValuationBody({p}:{p:Extract<DrawerPayload,{kind:'valuation'}>}){
+function ValuationDrawer({p,onClose}:{p:Extract<DrawerPayload,{kind:'valuation'}>;onClose:()=>void}){
   const t=useTranslations('industries');
+  const locale=useLocale()==='en'?'en':'zh';
   const parse=useCallback((j:unknown)=>(typeof j==='object'&&j!==null&&'cell' in j?j as {officialValue?:string}:null),[]);
   const r=useJson(valuationReplayUrl(p),parse);
-  return (
+  const proof=(
     <Section title={t('drawer.sections.value')}>
       <dl className={dl}>
-        <Row label={t('drawer.formula')}>{t(`formulas.${p.cell.metric}`)}</Row>
-        <Row label={t('drawer.tradeDate')} mono>{p.cell.tradeDate}</Row>
-        <Row label={t('drawer.availableAt')} mono>{p.cell.updatedAt??'—'}</Row>
-        <Row label={t('drawer.factsAsOf')} mono>{p.cell.factsAsOf}</Row>
         <Row label={t('drawer.mcapCoverage')} mono>{p.cell.mcapCoverage??'—'}</Row>
         <Row label={t('drawer.pairStatus')}><span className="rounded border border-border px-1.5 text-xs">{t('valuation.within')}</span></Row>
         <Row label={t('drawer.officialValue')}>{r.data?.officialValue?<span className="font-mono tabular-nums">{r.data.officialValue}</span>:<span className="text-text-dim">{t('drawer.officialUnavailable')}</span>}</Row>
-        <Row label={t('drawer.manifest')} mono>{short(p.cell.manifestHash)}</Row>
       </dl>
       <p className="mt-2 text-xs text-text-dim">{t('drawer.valuationReplayDeferred')}</p>
     </Section>
   );
+  return <SharedSourceDrawer input={adaptSourceDrawer(p,locale,t as Translate)} onClose={onClose} text={key=>t(key)} pending={r.status==='loading'?['transform']:[]} failed={r.status==='error'?['transform']:[]} slots={{transform:proof}}/>;
 }
 
 function FactBody({p}:{p:Extract<DrawerPayload,{kind:'fact'}>}){

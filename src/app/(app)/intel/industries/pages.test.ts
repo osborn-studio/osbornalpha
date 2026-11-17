@@ -16,3 +16,30 @@ describe('industry pages are dynamic server components',()=>{
   expect(src).toContain('SourceDrawerProvider');
  });
 });
+
+
+describe('industry research foundation integration',()=>{
+ it.each(PAGES.slice(0,2))('%s selects the reconstruction basis and snapshot date once',rel=>{
+  const src=readFileSync(join(ROOT,rel),'utf8');
+  expect(src).toContain('bodySic');
+  expect(src).toContain('bodySw');
+  expect(src).toMatch(/scheme\s*===\s*['"]sic['"]/);
+  expect(src).toMatch(/membershipOn\s*\?\?\s*v\.header\.factsAsOf/);
+  expect(src.match(/<StateNotice\s+kind="reconstruction"/g)).toHaveLength(1);
+  expect(src).not.toContain('kind="snapshotConstituents"');
+ });
+ it.each(PAGES.slice(0,2))('%s uses the shared header and provenance footer',rel=>{
+  const src=readFileSync(join(ROOT,rel),'utf8');
+  expect(src).toContain('<PageHeader');
+  expect(src).toContain('freshness=');
+  expect(src).toContain('factsAsOf');
+  expect(src).toContain('<ResearchFooter');
+  expect(src).not.toContain('SourcesFooter');
+  expect(src).not.toContain('@/components/industries/FreshnessChip');
+ });
+});
+
+it('keeps level navigation reachable when there is no aggregate header',()=>{
+ const src=readFileSync(join(ROOT,'page.tsx'),'utf8');
+ expect(src).toContain('!header&&<SchemeLevelSwitch');
+});

@@ -1,8 +1,9 @@
+import {StateBadge} from '@/components/research-ui';
 // src/components/industries/Heatmap.tsx
 // List heatmap (spec §8.2; canvas "Main", "M-List"): rows = industries (name → detail page), columns
 // = period ends, every cell a button that opens the source drawer. Single brass hue at alpha
 // 0.12–0.6 with the value overprinted; counts instead of values below the display thresholds; '—'
-// with the reason for missing cells. Below 640px only the last 5 columns render (no horizontal page
+// with the reason for missing cells. Below 640px only the last 3 columns render (no horizontal page
 // scroll). The table view of the same series is one click away (`tableHref`).
 import type {CSSProperties} from 'react';
 import Link from 'next/link';
@@ -20,21 +21,21 @@ import {industryPath,nodeName} from './hrefs';
 export function Heatmap({scheme,nodes,periodEnds,cells,metric,header,preview,tableHref}:{scheme:Scheme;nodes:NodeView[];periodEnds:string[];cells:PublicCell[];metric:AggMetric;header:RunHeader;preview:boolean;tableHref:string}){
   nodes=scheme==='sic'?orderSicRows(nodes,cells):nodes;
   const t=useTranslations('industries');
+  const research=useTranslations('research');
   const locale=useLocale()==='en'?'en':'zh';
   const rows=heatmapModel(nodes,periodEnds,cells,metric,locale);
-  const cols=periodEnds.length,mcols=Math.min(5,cols);
+  const cols=periodEnds.length,mcols=Math.min(3,cols);
   const grid='grid items-center gap-[3px] grid-cols-[112px_repeat(var(--mcols),minmax(0,1fr))] sm:grid-cols-[196px_repeat(var(--cols),minmax(0,1fr))]';
   const style={'--cols':String(cols),'--mcols':String(mcols)} as CSSProperties;
   const steps=[0,1,2,3,4].map(i=>ALPHA_MIN+(ALPHA_MAX-ALPHA_MIN)*i/4);
   return (
     <section aria-label={t('heatmap.label')} className="card-base" style={{padding:'16px 16px 12px'}}>
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-text-dim">
+<h2 className="text-sm font-semibold text-text">{t('heatmap.label')} · {t(`metrics.${metric}`)}</h2>
         <span className="inline-flex items-center gap-1.5">{t('coverage.legendLow')}
           <span className="inline-flex gap-0.5">{steps.map(a=><i key={a} className="inline-block h-3 w-[18px] rounded-[2px]" style={{background:brassBackground(a)}} />)}</span>
           {t('coverage.legendHigh')}</span>
-        <span className="inline-flex items-center gap-1.5"><span className="rounded-[3px] border border-dashed border-text-dim px-1 font-mono">6/9</span>{t('coverage.legendInsufficient')}</span>
-        <span className="inline-flex items-center gap-1.5"><span className="rounded-[3px] border border-dashed border-warn px-1 font-mono text-warn">{t('coverage.unresolved',{n:3})}</span>{t('coverage.legendUnresolved')}</span>
-        <span className="inline-flex items-center gap-1.5"><span className="font-mono">—</span>{t('coverage.legendMissing')}</span>
+        <StateBadge state="lowCoverage" /><StateBadge state="missing" />
         <Link href={tableHref} className="ml-auto">{t('table.label')} →</Link>
       </div>
       <div className={grid} style={style}>
@@ -52,14 +53,14 @@ export function Heatmap({scheme,nodes,periodEnds,cells,metric,header,preview,tab
                 <span className="truncate">{name}</span><span className="hidden font-mono text-[11px] text-text-dim sm:inline">{r.node.code}</span>
               </Link>
               {r.cells.map(c=>{
-                const title=t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${metric}`),value:cellText(c.cell,metric,locale,t as unknown as Translate)});
-                const base=`min-h-[28px] w-full rounded-[3px] px-0.5 text-center font-mono text-[12px] tabular-nums ${c.mobileHidden?'hidden sm:flex':'flex'} items-center justify-center`;
-                if(!c.cell)return <span key={c.periodEnd} title={title} className={`${base} border border-border text-text-dim`}><CoverageCell cell={null} metric={metric} /></span>;
+                const title=t('heatmap.cellTitle',{industry:name,period:c.periodEnd,metric:t(`metrics.${metric}`),value:cellText(c.cell,metric,locale,t as unknown as Translate,research as Translate)});
+                const base=`min-h-[44px] sm:min-h-[28px] w-full rounded-[3px] px-0.5 text-center font-mono text-[12px] tabular-nums ${c.mobileHidden?'hidden sm:flex':'flex'} items-center justify-center`;
+                if(!c.cell)return <span key={c.periodEnd} title={title} className={`${base} border border-border text-text-dim`}><CoverageCell compactOnMobile cell={null} metric={metric} /></span>;
                 return (
                   <SourceButton key={c.periodEnd} label={title} className={`${base} ${c.text.kind==='value'?'text-text':'border border-border'}`}
                     style={c.alpha!==null?{background:brassBackground(c.alpha)}:undefined}
                     payload={{kind:'aggregate',scheme,code:r.node.code,nodeName:name,cell:c.cell,header,preview}}>
-                    <CoverageCell cell={c.cell} metric={metric} />
+                    <CoverageCell compactOnMobile cell={c.cell} metric={metric} />
                   </SourceButton>
                 );
               })}

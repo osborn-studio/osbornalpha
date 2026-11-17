@@ -4,12 +4,14 @@
     "subtitle": "Industry facts are aggregated from members' primary filings (aggregate method); every number opens its source drawer and replays from its manifest.",
     "breadcrumbResearch": "Research",
     "breadcrumbIndustries": "Industry research",
-    "constituents": "Constituents"
+    "constituents": "Constituents",
+    "scopeSic": "Disclosed company facts aggregated to industries by SEC SIC code. Aggregates and coverage only; no industry judgments.",
+    "scopeSw": "Disclosed company facts aggregated to industries by SW 2021 classification. Aggregates and coverage only; no industry judgments."
   },
   "schemes": {
     "sw2021": "SW 2021",
     "sic": "SIC (SEC)",
-    "sw2021Market": "SW 2021 · China A-shares",
+    "sw2021Market": "SW 2021 · A-shares",
     "sicMarket": "SIC · US (SEC)"
   },
   "levels": {
@@ -60,7 +62,8 @@
     "run": "Run",
     "generation": "gen {n}",
     "method": "Method",
-    "grid": "{codes} industries · {periods} period ends"
+    "grid": "{codes} industries · {periods} period ends",
+    "methods": "Methods & sources"
   },
   "freshness": {
     "fresh": "fresh",
@@ -103,7 +106,8 @@
     },
     "reconstruction": {
       "title": "Reconstruction: these cells are not what was visible at the time",
-      "body": "Historical periods are rebuilt from membership evidence obtained later: SW membership availability is assumed at the inclusion date (the source has no announcement time) and issuers are resolved by today's ownership. Compare trends, but do not read them as what investors saw then. Each cell becomes available at the run's activation, never back-dated to its period."
+      "bodySw": "Historical periods are rebuilt from membership evidence obtained later: SW membership availability is assumed at the inclusion date (the source has no announcement time) and issuers are resolved by today's ownership. Compare trends, but do not read them as what investors saw then. Each cell becomes available at the run's activation, never back-dated to its period.",
+      "bodySic": "SEC publishes only each company's current SIC code, with no history. Past periods are back-filled using today's SIC assignment, valid from the first observed date. Compare trends, but do not read them as what investors saw then. Each cell becomes available at the run's activation, never back-dated to its period. Constituent snapshot date: {date}."
     },
     "partialUnpublished": {
       "title": "Some dates not published",
@@ -127,15 +131,16 @@
     },
     "currentOnly": {
       "title": "Current value only (current_only)",
-      "body": "SEC publishes only the current SIC, with no inclusion or exclusion history: the in-date column is the first observation date and dates before it have no members. SIC is not aggregated or valued."
+      "body": "SEC publishes only the current SIC, with no inclusion or exclusion history: the in-date column is the first observation date and dates before it have no members."
     },
     "noMembers": {
       "title": "No known members on this date",
       "body": "No member is valid on {on} by the evidence known today."
     },
-    "snapshotConstituents": {
-      "title": "Snapshot constituents",
-      "body": "Rebuilt from the SIC constituents as of {date}: sums of these companies' reported fiscal years, not historical membership."
+    "more": "Read more",
+    "notPublished": {
+      "title": "Not published yet",
+      "body": "Self-computed valuations are calculated and published only after the basis reconciliation is complete. Until then no self-computed valuation is shown and no other source is substituted. Percentiles are not enabled."
     }
   },
   "missing": {
@@ -167,7 +172,7 @@
     "legendInsufficient": "coverage below 0.8",
     "legendUnresolved": "unresolved above 5%",
     "legendMissing": "missing (hover for the reason)",
-    "tooFewMembers": "Too few members {n}<5",
+    "tooFewMembers": "too few members {n}<{min}",
     "lowCoverage": "Low coverage {n}/{d}"
   },
   "heatmap": {
@@ -175,7 +180,7 @@
     "industry": "Industry",
     "cellTitle": "{industry} · {period} · {metric}: {value} (open the source drawer)",
     "caption": "Click a cell for its source drawer; click a name for the industry detail. One brass hue: shade means level, not up or down.",
-    "mobileNote": "Narrow screens show the last 5 periods; see the table for the full series."
+    "mobileNote": "Narrow screens show the last 3 periods; see the table for the full series."
   },
   "table": {
     "label": "Table view",
@@ -359,7 +364,11 @@
     "officialUnavailable": "Official value unavailable (dataset not public)",
     "valuationReplayDeferred": "Valuation manifest replay arrives with the valuation pipeline (I-3).",
     "filingId": "filing_id",
-    "factEvidence": "View the raw fact by fact_id"
+    "factEvidence": "View the raw fact by fact_id",
+    "licenceNote": "Access is controlled by the dataset licence.",
+    "attribution": "Company disclosures and industry classification sources.",
+    "runId": "Run ID",
+    "dataset": "Dataset"
   },
   "entry": {
     "title": "Industry research",
@@ -394,5 +403,14 @@
   },
   "periods": {
     "fiscalTitle": "fiscal years ending in {year}"
+  },
+  "formulasSic": {
+    "revenue_sum": "Σ revenue",
+    "net_income_parent_sum": "Σ net income attributable to parent",
+    "gross_margin": "Σ gross profit / Σ revenue",
+    "net_margin": "Σ net income attributable to parent / Σ revenue",
+    "revenue_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y| over one comparable set",
+    "net_income_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y| over one comparable set",
+    "member_count": "n_members (with n_unresolved)"
   }
 }

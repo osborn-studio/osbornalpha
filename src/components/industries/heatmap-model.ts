@@ -39,7 +39,7 @@ export function heatText(c:PublicCell|null,metric:AggMetric,locale:Locale):HeatT
 }
 
 /** Rows in node order; the last `mobileColumns` period ends stay visible below 640px (canvas M-List). */
-export function heatmapModel(nodes:NodeView[],periodEnds:string[],cells:PublicCell[],metric:AggMetric,locale:Locale,mobileColumns=5):HeatRow[]{
+export function heatmapModel(nodes:NodeView[],periodEnds:string[],cells:PublicCell[],metric:AggMetric,locale:Locale,mobileColumns=3):HeatRow[]{
  const byKey=new Map(cells.filter(c=>c.metric===metric).map(c=>[`${c.code}|${c.periodEnd}`,c]));
  const shown=cells.filter(c=>c.metric===metric&&c.display==='value'&&c.value!==null).map(c=>Number(c.value)).filter(Number.isFinite);
  const min=shown.length?Math.min(...shown):0,max=shown.length?Math.max(...shown):0;

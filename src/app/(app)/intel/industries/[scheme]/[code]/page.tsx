@@ -7,12 +7,14 @@
 import Link from 'next/link';
 import {notFound} from 'next/navigation';
 import {getLocale,getTranslations} from 'next-intl/server';
+import {LatestValues} from '@/components/industries/LatestValues';
 import {JudgmentArea} from '@/components/industries/JudgmentArea';
 import {RunHeaderBar} from '@/components/industries/RunHeaderBar';
-import {LinkSegment} from '@/components/industries/SchemeLevelSwitch';
+import {LinkSegment,SchemeSwitch} from '@/components/industries/SchemeLevelSwitch';
 import {SeriesChart} from '@/components/industries/SeriesChart';
 import {SourceDrawerProvider} from '@/components/industries/SourceDrawer';
-import {SourcesFooter} from '@/components/industries/SourcesFooter';
+import {PageHeader,ResearchFooter,StateBadge} from '@/components/research-ui';
+import {publicReadDeps} from '@/lib/industry/public-deps';
 import {StateNotice} from '@/components/industries/StateNotice';
 import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
@@ -33,37 +35,30 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
   const t=await getTranslations('industries');
   const locale=(await getLocale())==='en'?'en':'zh';
   const v=load.view;
+  const swPublic=await Promise.resolve().then(()=>publicReadDeps(new Date()).db.isDatasetPublic('scheme:sw2021:2021')).catch(()=>false);
   if(v?.state==='unknown_industry')notFound();
   const path=industryPath(scheme,code);
   return (
     <SourceDrawerProvider>
       <div className="mx-auto flex max-w-[1400px] flex-col gap-5" data-page="industries-detail">
-        <div className="text-xs text-text-dim"><Link href="/intel">{t('page.breadcrumbResearch')}</Link> / <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:scheme==='sw2021'?undefined:scheme})}>{t('page.breadcrumbIndustries')}</Link>{v?.state==='ok'&&<> / {t(`schemes.${scheme}`)} · {t(`levels.${v.node.level}`)} · {nodeName(v.node,locale)}</>}</div>
+        <div className="text-xs text-text-dim"><Link href={hrefWith(INDUSTRIES_PATH,{},{scheme})}>{t('page.title')}</Link> / {t(`schemes.${scheme}Market`)} / {code}</div>
         {load.error&&<StateNotice kind="error" body={load.staleAt?t('states.error.body',{at:load.staleAt.replace('T',' ').slice(0,16)}):t('states.error.bodyNoCache')}><Link href={hrefWith(path,search,{})}>{t('states.error.retry')}</Link></StateNotice>}
         {v?.state==='unlicensed'&&<StateNotice kind="unlicensed" values={{scheme:t(`schemes.${scheme}`)}}><Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:'sic'})}>{t('states.unlicensed.switchToSic')}</Link></StateNotice>}
         {v?.state==='ok'&&(
           <>
             {load.preview&&<StateNotice kind="adminPreview" values={{dataset:v.datasetKey}} />}
-            <section className="flex flex-wrap items-end gap-4">
-              <div className="flex flex-col gap-2">
-                <h1 className="text-[clamp(1.5rem,3vw,2rem)] font-semibold tracking-tight">{nodeName(v.node,locale)} <span className="font-mono text-xl font-medium text-text-dim">{v.node.code}</span></h1>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-text-dim">
-                  <span className="rounded-[4px] border border-border px-2 py-0.5">{t(`schemes.${scheme}`)}</span>
-                  <span className="rounded-[4px] border border-border px-2 py-0.5">{t(`levels.${v.node.level}`)}</span>
-                  {scheme==='sw2021'&&locale==='en'&&<span>{t('detail.namesNote')}</span>}
-                  {scheme==='sic'&&!v.aggregated&&<span className="rounded-[4px] border border-warn px-2 py-0.5 text-warn">{t('stock.currentOnly')}</span>}
-                </div>
-              </div>
-            </section>
-            {v.header?.membershipOn&&<StateNotice kind="snapshotConstituents" values={{date:v.header.membershipOn}} />}
-            <RunHeaderBar header={v.header} freshness={v.freshness} />
-            {v.header?.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" />}
+            <PageHeader title={`${v.node.code} ${nodeName(v.node,locale)}`} scope={t(scheme==='sic'?'page.scopeSic':'page.scopeSw')} legend={false}
+              freshness={{asOf:v.header?.factsAsOf,status:v.freshness}}
+              scopeSwitch={<div className="flex flex-wrap items-center gap-2"><SchemeSwitch path={INDUSTRIES_PATH} search={{}} scheme={scheme} swPublic={swPublic}/>{v.header?.historyClass==='reconstruction'&&<StateBadge state="reconstructed"/>}</div>} />
+            <RunHeaderBar methodsHref="#industry-methods" header={v.header} freshness={v.freshness} />
+            {v.header?.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" body={t(scheme==='sic'?'states.reconstruction.bodySic':'states.reconstruction.bodySw',{date:v.header.membershipOn??v.header.factsAsOf})} />}
             {v.freshness==='stale'&&v.header&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
-            <section className="card-base flex flex-wrap items-center gap-8" aria-label={t('detail.summary')}>
+            <section className="card-base grid grid-cols-1 items-start gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label={t('detail.summary')}>
               <div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.members')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.members.count}</div></div>
-              {scheme==='sw2021'&&<div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.unresolved')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.members.unresolved}</div></div>}
+              <div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.unresolved')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.members.unresolved}</div></div>
               <div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.lastAddition')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.members.lastAddition??'—'}</div></div>
               {v.children.length>0&&<div><div className="text-[10px] uppercase tracking-wide text-text-dim">{t('detail.children')}</div><div className="font-mono text-[22px] font-medium tabular-nums">{v.children.length}</div></div>}
+              {v.header&&<LatestValues scheme={scheme} node={v.node} metric={metric} duration={duration} cells={v.series} header={v.header} preview={v.preview}/>}
               <Link href={constituentsPath(scheme,code)} className="ml-auto rounded-md border border-border px-3 py-2 text-sm text-text hover:border-[var(--border-active)] hover:no-underline">{t('detail.viewConstituents')} →</Link>
             </section>
             <section className="card-base flex flex-col gap-4" aria-label={t('detail.series')}>
@@ -74,16 +69,16 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
                     <LinkSegment label={t('controls.metric')} current={metric} options={metricsForScheme(scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(path,search,{metric:m,duration:undefined})}))} />
                     <LinkSegment label={t('controls.basis')} current={duration} options={durationsForScheme(scheme,metric).map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(path,search,{duration:d})}))} />
                     <LinkSegment label={t('controls.window')} current={q.window} options={(['5y','10y','all'] as const).map(w=>({value:w,label:t(`windows.${w}`),href:hrefWith(path,search,{window:w==='10y'?undefined:w})}))} />
-                    <LinkSegment label={t('controls.view')} current={tableOnly?'table':'chart'} options={[{value:'chart',label:t('controls.chartAndTable'),href:hrefWith(path,search,{view:undefined})},{value:'table',label:t('controls.tableOnly'),href:hrefWith(path,search,{view:'table'})}]} />
+                    <div className="ml-auto"><LinkSegment label={t('controls.view')} current={tableOnly?'table':'chart'} options={[{value:'chart',label:t('controls.chartAndTable'),href:hrefWith(path,search,{view:undefined})},{value:'table',label:t('controls.tableOnly'),href:hrefWith(path,search,{view:'table'})}]} /></div>
                   </div>
                   <SeriesChart scheme={scheme} node={v.node} metric={metric} header={v.header} preview={v.preview} tableOnly={tableOnly}
                     points={v.periodEnds.filter(pe=>duration!=='12M'||pe.endsWith('-12-31')).map(pe=>({periodEnd:pe,cell:v.series.find(c=>c.periodEnd===pe&&c.metric===metric&&c.duration===duration)??null}))} />
                 </>
               )}
             </section>
-            {scheme==='sw2021'&&<ValuationSnapshot scheme={scheme} nodes={[v.node]} block={v.valuation} preview={v.preview} title="titleDetail" />}
+            {v.valuation.state==='published'?<ValuationSnapshot scheme={scheme} nodes={[v.node]} block={v.valuation} preview={v.preview} title="titleDetail" />:<section className="card-base"><h2 className="mb-3 text-lg font-semibold">{t('valuation.titleDetail')}</h2><StateNotice kind="notPublished" /></section>}
             <JudgmentArea enabled={judgmentsEnabled()} subjectKey={scheme==='sw2021'?industrySubjectKey(scheme,'2021',code):null} scope={{scheme:t(`schemes.${scheme}`),level:t(`levels.${v.node.level}`)}} />
-            <details className="card-base">
+            <details id="industry-methods" className="card-base">
               <summary className="cursor-pointer text-lg font-semibold">{t('detail.methods')}</summary>
               <dl className="mt-3 grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-y-2">
                 <dt className="text-text-dim">{t('drawer.method')}</dt><dd className="m-0 font-mono text-xs">{v.method.methodVersion} · {t('detail.configHash')} {v.method.configHash.slice(0,8)} · {t('detail.formulaVersion')} {v.method.formulaVersion??'—'}</dd>
@@ -94,7 +89,7 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
                 <dt className="text-text-dim">{t('detail.codeVersion')}</dt><dd className="m-0 font-mono text-xs">{v.method.codeVersion?.slice(0,7)??'—'}</dd>
               </dl>
             </details>
-            <SourcesFooter sources={v.sources} />
+            <ResearchFooter sources={v.sources.map(s=>({publisher:t(`sources.${s}`)}))} methodsHref="#industry-methods" />
           </>
         )}
       </div>

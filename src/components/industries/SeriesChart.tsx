@@ -1,6 +1,7 @@
+import {ChartTableSwitch,StateBadge} from '@/components/research-ui';
 // src/components/industries/SeriesChart.tsx
 // One aggregate series as an SVG line + its table equivalent (spec §8.3; canvas "Detail" §3 and
-// "M-Detail": below 640px only the table renders). Every dot and every table value opens the source
+// "M-Detail": chart/table switch below 1024px). Every dot and every table value opens the source
 // drawer; missing points break the line and appear in the table as '—' with the reason.
 import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
@@ -15,32 +16,33 @@ import type {SeriesPoint} from './series-model';
 
 export function SeriesChart({scheme,node,metric,points,header,preview,tableOnly}:{scheme:Scheme;node:NodeView;metric:AggMetric;points:SeriesPoint[];header:RunHeader;preview:boolean;tableOnly:boolean}){
   const t=useTranslations('industries');
+  const research=useTranslations('research');
   const locale=useLocale()==='en'?'en':'zh';
   const g=seriesGeometry(points,metric,locale,undefined,scheme);
   const name=nodeName(node,locale);
-  const label=(periodEnd:string,cell:PublicCell|null)=>t('heatmap.cellTitle',{industry:name,period:periodEnd,metric:t(`metrics.${metric}`),value:cellText(cell,metric,locale,t as unknown as Translate)});
+  const label=(periodEnd:string,cell:PublicCell|null)=>t('heatmap.cellTitle',{industry:name,period:periodEnd,metric:t(`metrics.${metric}`),value:cellText(cell,metric,locale,t as unknown as Translate,research as Translate)});
   const payload=(cell:PublicCell)=>({kind:'aggregate' as const,scheme,code:node.code,nodeName:name,cell,header,preview});
   const table=(
-    <div>
+    <div className="overflow-x-auto">
       <div className="mb-1.5 text-[10px] uppercase tracking-wide text-text-dim">{t('detail.tableEquivalent')}</div>
       <table className="w-full text-sm">
-        <thead><tr className="text-left text-xs text-text-dim"><th className="py-1 font-normal">{t('detail.periodEnd')}</th><th className="py-1 text-right font-normal">{t(`metrics.${metric}`)}</th><th className="py-1 text-right font-normal">{t('table.coverage')}</th></tr></thead>
+        <thead><tr className="text-left text-xs text-text-dim"><th className="py-1 font-normal">{t('detail.periodEnd')}</th><th className="py-1 text-right font-normal">{t(`metrics.${metric}`)}</th><th className="py-1 text-right font-normal">{t('table.coverage')}</th><th className="py-1 font-normal">{t('controls.basis')}</th><th className="py-1 font-normal">{t('drawer.availableAt')}</th></tr></thead>
         <tbody>
           {[...points].reverse().map(p=>(
             <tr key={p.periodEnd} className="border-t border-border">
               <td className="py-1 font-mono text-xs tabular-nums text-text-dim">{scheme==='sic'?<span title={t('periods.fiscalTitle',{year:p.periodEnd.slice(0,4)})}>FY{p.periodEnd.slice(0,4)}</span>:p.periodEnd}</td>
               <td className="py-1 text-right">{p.cell?<SourceButton payload={payload(p.cell)} label={label(p.periodEnd,p.cell)}><CoverageCell cell={p.cell} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
               <td className="py-1 text-right font-mono text-xs tabular-nums text-text-dim">{p.cell?`${p.cell.nWithData}/${p.cell.nMembers+p.cell.nUnresolved}`:'—'}</td>
+              <td className="py-1">{header.historyClass==='reconstruction'&&<StateBadge state="reconstructed"/>}</td>
+              <td className="py-1 font-mono text-xs tabular-nums">{p.cell?.updatedAt??'—'}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
-  if(tableOnly)return table;
-  return (
-    <div className="grid gap-5 sm:grid-cols-[minmax(0,8fr)_minmax(0,4fr)]">
-      <figure className="m-0 hidden sm:block">
+  const chart=(
+      <figure className="m-0">
         <svg viewBox={`0 0 ${g.width} ${g.height}`} width="100%" role="img" aria-label={t('detail.chartLabel',{industry:name,metric:t(`metrics.${metric}`)})}>
           <g className="stroke-[var(--border)]" strokeWidth={1}>
             {g.yTicks.map(tk=><line key={tk.y} x1={g.pad.l} x2={g.width-g.pad.r} y1={tk.y} y2={tk.y} />)}
@@ -54,7 +56,7 @@ export function SeriesChart({scheme,node,metric,points,header,preview,tableOnly}
         </svg>
         <figcaption className="text-xs text-text-dim">{t('detail.chartCaption')}</figcaption>
       </figure>
-      {table}
-    </div>
   );
+  if(tableOnly)return table;
+  return <><div className="hidden gap-5 lg:grid lg:grid-cols-2">{chart}{table}</div><div className="lg:hidden"><ChartTableSwitch chart={chart} table={table} narrowTable /></div></>;
 }

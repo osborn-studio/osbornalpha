@@ -10,9 +10,10 @@ import {getLocale,getTranslations} from 'next-intl/server';
 import {Heatmap} from '@/components/industries/Heatmap';
 import {ListTable} from '@/components/industries/ListTable';
 import {RunHeaderBar} from '@/components/industries/RunHeaderBar';
-import {LinkMenu,LinkSegment,SchemeLevelSwitch} from '@/components/industries/SchemeLevelSwitch';
+import {LinkMenu,LinkSegment,SchemeLevelSwitch,SchemeSwitch} from '@/components/industries/SchemeLevelSwitch';
 import {SourceDrawerProvider} from '@/components/industries/SourceDrawer';
-import {SourcesFooter} from '@/components/industries/SourcesFooter';
+import {PageHeader,ResearchFooter} from '@/components/research-ui';
+import {publicReadDeps} from '@/lib/industry/public-deps';
 import {StateNotice} from '@/components/industries/StateNotice';
 import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
@@ -29,19 +30,18 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
   const t=await getTranslations('industries');
   const locale=(await getLocale())==='en'?'en':'zh';
   const v=load.view;
+  const swPublic=await Promise.resolve().then(()=>publicReadDeps(new Date()).db.isDatasetPublic('scheme:sw2021:2021')).catch(()=>false);
+  const header=v?.state==='ok'&&v.kind==='aggregate'?v.header:null;
   const navigationNodes=v?.state==='empty'||v?.state==='ok'&&v.kind==='navigation'?v.nodes:v?.state==='ok'&&v.kind==='aggregate'?v.navigationNodes??[]:[];
   const aggregateNodes=v?.state==='ok'&&v.kind==='aggregate'?v.nodes.filter(n=>!v.navigationNodes?.some(x=>x.code===n.code)):[];
   return (
     <SourceDrawerProvider>
       <div className="mx-auto flex max-w-[1400px] flex-col gap-5" data-page="industries-list">
         <div className="text-xs text-text-dim"><Link href="/intel">{t('page.breadcrumbResearch')}</Link> / {t('page.breadcrumbIndustries')}</div>
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="flex flex-col gap-1.5">
-            <h1 className="text-[clamp(1.5rem,3vw,2rem)] font-semibold tracking-tight">{t('page.title')}</h1>
-            <p className="m-0 max-w-[65ch] text-xs text-text-dim">{t('page.subtitle')}</p>
-          </div>
-          <div className="ml-auto"><SchemeLevelSwitch path={INDUSTRIES_PATH} search={search} scheme={q.scheme} level={q.level} /></div>
-        </div>
+        <PageHeader title={t('page.title')} scope={t(q.scheme==='sic'?'page.scopeSic':'page.scopeSw')} legend={false}
+          freshness={{asOf:header?.factsAsOf,status:v&&'freshness' in v?v.freshness:'missing'}}
+          scopeSwitch={<SchemeSwitch path={INDUSTRIES_PATH} search={search} scheme={q.scheme} swPublic={swPublic} />} />
+        {!header&&<SchemeLevelSwitch path={INDUSTRIES_PATH} search={search} scheme={q.scheme} level={q.level}/>}
         {load.error&&(
           <StateNotice kind="error" body={load.staleAt?t('states.error.body',{at:load.staleAt.replace('T',' ').slice(0,16)}):t('states.error.bodyNoCache')}>
             <Link href={hrefWith(INDUSTRIES_PATH,search,{})}>{t('states.error.retry')}</Link>
@@ -75,17 +75,17 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
         )}
         {v?.state==='ok'&&v.kind==='aggregate'&&(
           <>
-            {v.header.membershipOn&&<StateNotice kind="snapshotConstituents" values={{date:v.header.membershipOn}} />}
-            <RunHeaderBar header={v.header} freshness={v.freshness} extra={t('header.grid',{codes:v.nodes.length,periods:v.periodEnds.length})} />
+            <RunHeaderBar methodsHref="#industry-methods" header={v.header} freshness={v.freshness} extra={t('header.grid',{codes:v.nodes.length,periods:v.periodEnds.length})} />
             {v.freshness==='stale'&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
-            {v.header.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" />}
+            {v.header.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" body={t(q.scheme==='sic'?'states.reconstruction.bodySic':'states.reconstruction.bodySw',{date:v.header.membershipOn??v.header.factsAsOf})} />}
             <div className="flex flex-wrap items-center gap-2">
+              <SchemeLevelSwitch path={INDUSTRIES_PATH} search={search} scheme={q.scheme} level={q.level} />
               <LinkMenu label={t('controls.metric')} current={q.metric} options={metricsForScheme(q.scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(INDUSTRIES_PATH,search,{metric:m,duration:undefined})}))} />
               <LinkMenu label={t('controls.basis')} current={q.duration} options={durationsForScheme(q.scheme,q.metric).map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(INDUSTRIES_PATH,search,{duration:d})}))} />
-              <LinkSegment label={t('controls.view')} current={mode} options={[
+              <div className="ml-auto"><LinkSegment label={t('controls.view')} current={mode} options={[
                 {value:'heatmap',label:t('controls.heatmap'),href:hrefWith(INDUSTRIES_PATH,search,{view:undefined})},
                 {value:'table',label:t('controls.table'),href:hrefWith(INDUSTRIES_PATH,search,{view:'table'})},
-              ]} />
+              ]} /></div>
             </div>
             {mode==='heatmap'
               ?<Heatmap scheme={q.scheme} nodes={aggregateNodes} periodEnds={v.periodEnds} cells={v.cells} metric={v.metric} header={v.header} preview={v.preview} tableHref={hrefWith(INDUSTRIES_PATH,search,{view:'table'})} />
@@ -97,7 +97,17 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
             </section>
           </>
         )}
-        <div id="industry-sources"><SourcesFooter sources={SOURCES[q.scheme]} /></div>
+        <details id="industry-methods" className="card-base">
+          <summary className="cursor-pointer text-sm font-semibold">{t('detail.methods')}</summary>
+          <p className="mt-2 text-sm text-text-dim">{t(q.scheme==='sic'?'detail.schemeSourceSic':'detail.schemeSourceSw')}</p>
+          {header&&<dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+            <dt>{t('drawer.method')}</dt><dd className="break-all font-mono">{header.methodVersion}</dd>
+            <dt>{t('detail.configHash')}</dt><dd className="break-all font-mono">{header.configHash}</dd>
+            <dt>{t('detail.formulaVersion')}</dt><dd className="break-all font-mono">{header.formulaVersion}</dd>
+            <dt>{t('detail.codeVersion')}</dt><dd className="break-all font-mono">{header.codeVersion}</dd>
+          </dl>}
+        </details>
+        <div id="industry-sources"><ResearchFooter sources={SOURCES[q.scheme].map(s=>({publisher:t(`sources.${s}`)}))} methodsHref="#industry-methods" /></div>
       </div>
     </SourceDrawerProvider>
   );

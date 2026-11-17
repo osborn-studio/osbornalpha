@@ -3,6 +3,8 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import en from '../../../messages/en/industries.json';
 import zh from '../../../messages/zh/industries.json';
+import researchEn from '../../../messages/en/research.json';
+import researchZh from '../../../messages/zh/research.json';
 
 const h=vi.hoisted(()=>({locale:'en' as 'en'|'zh',state:undefined as unknown,effect:undefined as undefined|(()=>void|(()=>void))}));
 vi.mock('react',async importOriginal=>({
@@ -11,8 +13,8 @@ vi.mock('react',async importOriginal=>({
  useEffect:(effect:()=>void|(()=>void))=>{h.effect=effect;},
 }));
 vi.mock('next-intl',()=>({useTranslations:(namespace:string)=>(key:string,values?:Record<string,string>)=>{
- const messages=h.locale==='en'?en:zh;
- const template=[...namespace.split('.').slice(1),key].reduce<unknown>((v,k)=>(v as Record<string,unknown>)[k],messages) as string;
+ const messages=namespace.startsWith('research')?(h.locale==='en'?researchEn:researchZh):(h.locale==='en'?en:zh);
+ const template=[...namespace.split('.').slice(1),...key.split('.')].reduce<unknown>((v,k)=>(v as Record<string,unknown>)[k],messages) as string;
  return template.replace(/\{(\w+)\}/g,(_,k:string)=>values?.[k]??'');
 }}));
 import {IndustryEntryCard} from './IndustryEntryCard';

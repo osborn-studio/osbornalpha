@@ -14,8 +14,9 @@ vi.mock('@/lib/industry/page-data',async original=>({
 vi.mock('@/components/industries/SourceDrawer',()=>({SourceDrawerProvider:({children}:{children:ReactNode})=>children}));
 vi.mock('@/components/industries/StateNotice',()=>({StateNotice:({kind,children}:{kind:string;children:ReactNode})=>createElement('div',{'data-state':kind},children)}));
 vi.mock('@/components/industries/RunHeaderBar',()=>({RunHeaderBar:()=>null}));
-vi.mock('@/components/industries/SchemeLevelSwitch',()=>({SchemeLevelSwitch:()=>null,LinkMenu:()=>null,LinkSegment:()=>null}));
-vi.mock('@/components/industries/SourcesFooter',()=>({SourcesFooter:()=>null}));
+vi.mock('@/components/industries/SchemeLevelSwitch',()=>({SchemeSwitch:()=>null,SchemeLevelSwitch:()=>null,LinkMenu:()=>null,LinkSegment:()=>null}));
+vi.mock('@/lib/industry/public-deps',()=>({adminReadDeps:()=>null,publicReadDeps:()=>({db:{isDatasetPublic:async()=>false}})}));
+vi.mock('@/components/research-ui',()=>({PageHeader:()=>null,ResearchFooter:()=>null}));
 import IndustriesPage from './page';
 
 const node={code:'801120.SI',nameZh:'食品饮料',nameEn:null,parentCode:null,level:1};

@@ -7,7 +7,7 @@ import type {AggregateManifest,ManifestCell,Scheme} from '@/lib/industry/types-u
 
 export type DrawerPayload=
  |{kind:'aggregate';scheme:Scheme;code:string;nodeName:string;cell:PublicCell;header:RunHeader;preview:boolean}
- |{kind:'valuation';scheme:Scheme;code:string;nodeName:string;runId:string;cell:PublicValuation;preview:boolean}
+ |{kind:'valuation';scheme:Scheme;code:string;nodeName:string;runId:string;methodVersion?:string;cell:PublicValuation;preview:boolean}
  |{kind:'fact';issuerName:string;ticker:string|null;fact:FactCellView}
  |{kind:'membership';scheme:Scheme;nodeName:string;issuerName:string;ticker:string|null;membership:MembershipView;path:NodeView[]};
 export type AggregatePayload=Extract<DrawerPayload,{kind:'aggregate'}>;
