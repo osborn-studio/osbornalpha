@@ -8,7 +8,7 @@
 // pgRpcClient gives readSnapshot a Supabase-shaped rpc over a pool and a role.
 import type {Pool,PoolClient} from 'pg';
 import {typeParsers} from '../db/pg-table-client';
-import {EVIDENCE_IDS_PER_CALL,checkEventIds,checkEventsQuery,chunkOf,coverageFromRow,coveragePageFromJson,decodeInboxCursor,decodeIssuerCursor,digestStateFromRow,dueFromJson,
+import {EVIDENCE_CHUNK_ROWS,backlogFromJson,checkEvidenceDuplicates,EVIDENCE_IDS_PER_CALL,checkEventIds,checkEventsQuery,chunkOf,coverageFromRow,coveragePageFromJson,decodeInboxCursor,decodeIssuerCursor,digestStateFromRow,dueFromJson,
  eventFromRow,evidenceFromJson,inboxPage,issuerPage,replaceResultFromJson,sortCoverage,toCompanyDbError,watchFromRow,watchPatch} from './db';
 import type {PgErrorLike,RawEvent} from './db';
 import type {RpcClient} from './snapshot-read';
@@ -48,11 +48,16 @@ export function pgCompanyDb(pool:Pool):CompanyDb{
    return replaceResultFromJson(await fn('service_role','public.replace_company_digest($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)',[issuer,market,batch,attemptId,rebuildId,basedOnRev,sweep,JSON.stringify(events),JSON.stringify(coverage)]));
   },
   async markDigestFailed(issuer,market,attemptId,now){return (await fn('service_role','public.mark_company_digest_failed($1,$2,$3,$4::timestamptz)',[issuer,market,attemptId,now.toISOString()]))===true;},
-  async backlog(){return {failedStreams:Number(await fn('service_role','public.company_digest_backlog()',[]))};},
+  async backlog(){return backlogFromJson(await fn('service_role','public.company_digest_backlog_detail()',[]));},
   async digestState(issuer,market){const [r]=await svc(c=>q(c,`select * from public.company_digest_state where issuer_id = $1 and market = $2`,[issuer,market]));return r?digestStateFromRow(r):null;},
   async replaceEvidence(issuer,market,attemptId,basedOnRev,rows){
-   const x=await fn<{upserted:unknown;deleted:unknown}>('service_role','public.replace_company_fact_evidence($1,$2,$3,$4,$5::jsonb)',[issuer,market,attemptId,basedOnRev,JSON.stringify(rows)]);
-   return {upserted:Number(x.upserted),deleted:Number(x.deleted)};
+   checkEvidenceDuplicates(rows);let upserted=0;
+   for(const part of chunkOf(rows,EVIDENCE_CHUNK_ROWS)){
+    const x=await fn<{upserted:unknown}>('service_role','public.upsert_company_fact_evidence($1,$2,$3,$4,$5::jsonb)',[issuer,market,attemptId,basedOnRev,JSON.stringify(part)]);
+    upserted+=Number(x.upserted);
+   }
+   const x=await fn<{deleted:unknown}>('service_role','public.prune_company_fact_evidence($1,$2,$3,$4,$5::uuid[])',[issuer,market,attemptId,basedOnRev,rows.map(r=>r.fact_id)]);
+   return {upserted,deleted:Number(x.deleted)};
   },
   async eventsOfIssuer(issuer,market,o){
    checkEventsQuery(o);

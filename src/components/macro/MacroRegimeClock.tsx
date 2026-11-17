@@ -3,7 +3,8 @@ import { useState } from "react";
 import type { ClockMetadata, JudgmentCard } from "./judgment-view";
 import type { Regime } from "@/lib/macro/judgment-contract";
 import type { MacroT } from "./use-macro-t";
-import { CLOCK_ORDER, type ClockRow } from "./clock-model";
+import { CLOCK_ORDER } from "./clock-model";
+import type { WeightedRow, WeightedClock } from "./clock-weighted";
 import { ClockFramework } from "./ClockFramework";
 import { ClockPhasePanel } from "./ClockPhasePanel";
 import "./investment-clock.css";
@@ -17,11 +18,13 @@ export interface MacroRegimeClockProps {
   region?: "US" | "CN";
   locale?: "zh" | "en";
   date?: string;
-  rows?: ClockRow[];
+  rows?: WeightedRow[];
+  weightedStatus?: WeightedClock["status"];
+  insufficientCoverage?: boolean;
   card?: JudgmentCard | null;
   loading?: boolean;
   onRefresh?: () => void;
-  onEvidence?: (row: ClockRow) => void;
+  onEvidence?: (row: WeightedRow) => void;
 }
 /** Current classification is supplied by clockFrom. Inspection is independent local UI state. */
 export function MacroRegimeClock({
@@ -34,6 +37,8 @@ export function MacroRegimeClock({
   locale = "zh",
   date,
   rows = [],
+  weightedStatus,
+  insufficientCoverage = false,
   card,
   loading = false,
   onRefresh,
@@ -90,7 +95,7 @@ export function MacroRegimeClock({
           )}
         </div>
       </header>
-      <div className="clock-context">
+      {weightedStatus !== "reconcile_failed" && <div className="clock-context">
         <details className="clock-coverage">
           <summary>
             {metadata
@@ -113,6 +118,7 @@ export function MacroRegimeClock({
         </details>
         <div className="clock-limitations" role="status">
           {reason && <span>{reason}</span>}
+          {insufficientCoverage && <span>{w("insufficientCoverage")}</span>}
           {metadata &&
             (metadata.growth_axis === null ||
               metadata.inflation_axis === null) && (
@@ -142,7 +148,10 @@ export function MacroRegimeClock({
             </span>
           )}
         </div>
-      </div>
+      </div>}
+      {weightedStatus === "reconcile_failed" ? (
+        <p className="clock-reconcile-warning" role="alert">{w("reconcileFailed")}</p>
+      ) : (
       <div className="clock-grid-wrap">
         <div className="clock-grid">
           {CLOCK_ORDER.map((regime, index) => (
@@ -175,7 +184,8 @@ export function MacroRegimeClock({
           <span>{w("cycle")}</span>
         </div>
       </div>
-      <ClockFramework t={t} card={card} />
+      )}
+      <ClockFramework t={t} card={card} auditOnly={weightedStatus === "reconcile_failed"} />
     </section>
   );
 }

@@ -248,7 +248,47 @@ const journeys = {
   },
 };
 
-const ORDER = ['landing', 'watchlist', 'stock', 'quote-api', 'auth-gate'];
+
+// Guest /macro without judgments (#231): the static allocation template card replaces the judgment slot.
+journeys.macro = async function macro() {
+  const REGIMES = { zh: ['复苏', '过热', '滞胀', '衰退'], en: ['Recovery', 'Overheat', 'Stagflation', 'Recession'] };
+  const cases = [
+    { locale: 'zh-CN', lang: 'zh', path: '/macro', heading: '宏观工作台', title: '资产配置假设模板', staticRef: '静态参考', shotName: 'macro-zh' },
+    { locale: 'zh-CN', lang: 'zh', path: '/macro?region=CN', heading: '宏观工作台', title: '资产配置假设模板', staticRef: '静态参考', shotName: 'macro-cn' },
+    { locale: 'en-US', lang: 'en', path: '/macro', heading: 'Macro workbench', title: 'Asset allocation assumption templates', staticRef: 'Static reference', shotName: 'macro-en' },
+  ];
+  for (const c of cases) {
+    const ctx = await newCtx(c.locale); const page = await ctx.newPage();
+    const tag = `${c.lang} ${c.path}`;
+    const r = await page.goto(BASE + c.path, { waitUntil: 'networkidle' });
+    check(`${tag} → 200 with heading "${c.heading}"`, r?.status() === 200 && new URL(page.url()).pathname === '/macro'
+      && await page.getByRole('heading', { name: c.heading, exact: true }).isVisible(), `${r?.status()} ${page.url()}`);
+    const card = page.getByRole('region', { name: c.title, exact: true });
+    await card.waitFor({ timeout: 20_000 }).catch(() => {});
+    check(`${tag}: allocation template card visible, marked "${c.staticRef}"`, await card.isVisible()
+      && await card.getByText(c.staticRef, { exact: true }).isVisible());
+    const rows = card.locator('ul > li');
+    const names = await rows.locator('h3').allInnerTexts();
+    check(`${tag}: four regimes in clock order`, JSON.stringify(names) === JSON.stringify(REGIMES[c.lang]), JSON.stringify(names));
+    const sums = [];
+    for (let i = 0; i < await rows.count(); i++) {
+      const pct = (await rows.nth(i).locator('dd').allInnerTexts()).map((t) => Number.parseFloat(t));
+      sums.push(pct.length === 4 && pct.every(Number.isFinite) ? pct.reduce((a, b) => a + b, 0) : NaN);
+    }
+    check(`${tag}: each regime lists 4 asset weights summing to 100%`, sums.length === 4 && sums.every((x) => x === 100), JSON.stringify(sums));
+    check(`${tag}: no regime marked current (no published judgment in guest)`, await card.locator('[aria-current]').count() === 0);
+    check(`${tag}: template version macro_allocation_template@v1 + Merrill Lynch source note`,
+      await card.getByText('macro_allocation_template@v1', { exact: true }).isVisible()
+      && await card.getByText(/Merrill Lynch/).isVisible());
+    if (c.shotName === 'macro-zh') {
+      check('zh /macro overview fails closed with a read-failure notice (no DB)', await page.getByText(/读取失败/).first().isVisible());
+    }
+    await shot(page, c.shotName);
+    await ctx.close();
+  }
+};
+
+const ORDER = ['landing', 'watchlist', 'stock', 'quote-api', 'auth-gate', 'macro'];
 let wanted = process.argv.slice(2);
 if (!wanted.length || wanted.includes('all')) wanted = MODE === 'gate' ? ['landing', 'quote-api', 'auth-gate'] : ORDER;
 const unknown = wanted.filter((w) => !journeys[w]);

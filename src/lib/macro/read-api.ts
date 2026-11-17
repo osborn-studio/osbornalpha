@@ -6,7 +6,9 @@
 // snapshot inputs through this API, never with anon table reads.
 // Historical reads select only batches finalized by the cutoff, then verify their receipts.
 // No migration currently freezes ingest_batches.finished_at after terminal status; a service-role edit could rewrite history.
-import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from './catalog';
+import {CATALOG_VERSION} from './catalog';
+import {DISPLAY_CATALOG_VERSION} from './display-catalog';
+import {ALL_SERIES,isDisplayOnly,seriesById} from './series-registry';
 import type {MacroDb} from './db';
 import {monthEnd} from './freshness';
 import type {MacroObservationRef,MacroReadApi,MacroSnapshotRow} from './judgment-contract';
@@ -29,7 +31,7 @@ export class MacroUnavailable extends Error{
 }
 
 function toRef(r:ObservationRow):MacroObservationRef{
- const unit=catalogById(r.series_id)?.unit;
+ const unit=seriesById(r.series_id)?.unit;
  if(unit===undefined)throw new Error(`catalog_unit_missing:${r.series_id}`);
  return {series_id:r.series_id,period_end:r.period_end,vintage_id:String(r.version),value:Number(r.value_text),unit,available_at:r.available_at};
 }
@@ -83,12 +85,12 @@ export function macroReadApi(db:MacroDb,opts:{judgments?:boolean}={}):MacroReadA
    return out;
   },
   async seriesCatalog(region){
-   return MACRO_CATALOG.filter(d=>d.region===region).map(d=>({
+   return ALL_SERIES.filter(d=>d.region===region).map(d=>({
     series_id:d.id,region:d.region,role:d.role,type:d.type,name_zh:d.name.zh,name_en:d.name.en,unit:d.unit,
     native_frequency:d.nativeFrequency,period:d.period,adjustment:d.adjustment,status:d.status,reason:d.reason??null,
     weight:WEIGHTS_V1[d.id]??0,change_kind:d.changeKind,revision_policy:d.revisionPolicy,definition_version:d.definitionVersion,
     derive:d.derive??null,alias_of:d.aliasOf??null,publisher:d.source?.publisher??null,via:d.source?.via??null,
-    fetch_host:d.source?.fetchHost??null,rights:d.source?.rights??null,catalog_version:CATALOG_VERSION,
+    fetch_host:d.source?.fetchHost??null,rights:d.source?.rights??null,catalog_version:isDisplayOnly(d.id)?DISPLAY_CATALOG_VERSION:CATALOG_VERSION,
    }));
   },
   async classifyAsOf(region,referencePeriod,cutoff,macroMethodologyVersion){

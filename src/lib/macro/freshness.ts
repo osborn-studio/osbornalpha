@@ -6,7 +6,7 @@
 import {freshnessOf} from '../dq/freshness';
 import type {FreshnessStatus} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
-import type {MacroSeriesDef,Region,Timeliness} from './types';
+import type {Region,Timeliness} from './types';
 import {nextPeriodEnd} from './regime-selection';
 export {monthEnd,shiftMonthEnd,nextPeriodEnd} from './regime-selection';
 
@@ -20,10 +20,10 @@ function parseDate(d:string):number{
  return t;
 }
 /** current | late | missing | n/a. Repeated fetches of an old value never make it current: only period_end counts. */
-export function releaseTimeliness(def:Pick<MacroSeriesDef,'nativeFrequency'|'period'|'releaseLagDays'>,latestPeriodEnd:string|null,today:string):Timeliness{
+export function releaseTimeliness(def:Pick<import('./display-catalog').AnySeriesDef,'nativeFrequency'|'period'|'releaseLagDays'>,latestPeriodEnd:string|null,today:string):Timeliness{
  if(def.nativeFrequency==='event'||def.releaseLagDays===undefined)return 'n/a';
  if(latestPeriodEnd===null)return 'missing';
- const deadline=parseDate(nextPeriodEnd(def.period,latestPeriodEnd))+(def.releaseLagDays+GRACE_DAYS)*DAY;
+ const deadline=(def.nativeFrequency==='weekly'?parseDate(latestPeriodEnd)+7*DAY:parseDate(nextPeriodEnd(def.period,latestPeriodEnd)))+(def.releaseLagDays+GRACE_DAYS)*DAY;
  return parseDate(today)>deadline?'late':'current';
 }
 export const MACRO_DATASETS=['macro.fred','macro.akshare'] as const;

@@ -25,7 +25,7 @@ export function previousDay(d:string):string{return new Date(Date.UTC(Number(d.s
 export const lastCompleteMonthEnd=(d:string):string=>monthEndOf(d)===d?d:monthEndAt(monthIndex(d)-1);
 
 /** Policy cycles from derived events: same-sign runs merge, a flip opens a new cycle, ≥ 12 quiet months → plateau. */
-export function policyCycles(events:readonly PolicyEvent[],lastDate:string):Cycle[]{
+export function policyCycles(events:readonly Pick<PolicyEvent,'effective_date'|'change_bp'>[],lastDate:string):Cycle[]{
  if(!DATE.test(lastDate))throw new Error(`cycles_bad_date:${lastDate}`);
  const evs=events.filter(e=>decimalSign(e.change_bp)!==0);
  for(let i=1;i<evs.length;i++)if(evs[i].effective_date<=evs[i-1].effective_date)throw new Error('cycles_unsorted_events');

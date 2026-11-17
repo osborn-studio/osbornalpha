@@ -1,10 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
-import { clockRowsFrom, type ClockRow } from "./clock-model";
+import { weightedClockFrom, type WeightedClock, type WeightedRow } from "./clock-weighted";
 import { catalogById } from "@/lib/macro/catalog";
 import { SourceDrawer, type DrawerTarget } from "./SourceDrawer";
 import {
-  basisFrom,
   clockFrom,
   clockMetadataFrom,
   parseJudgments,
@@ -13,6 +12,7 @@ import {
   type JudgmentCard,
 } from "./judgment-view";
 import { MacroRegimeClock } from "./MacroRegimeClock";
+import { AllocationTemplateCard } from "./AllocationTemplateCard";
 import { useMacroT, type MacroT } from "./use-macro-t";
 import { type Locale } from "./view-model";
 
@@ -23,7 +23,7 @@ type SlotState =
   | { status: "ok"; cards: JudgmentCard[] };
 
 type BasisState =
-  | { rows: ClockRow[]; metadata: ClockMetadata | null; date?: string }
+  | { weighted: WeightedClock; metadata: ClockMetadata | null; date?: string }
   | null
   | "error";
 
@@ -57,13 +57,13 @@ function BoundClock({
         return r.json();
       })
       .then((j) => {
-        const basis = basisFrom(j, snapshotId);
+        const weighted = weightedClockFrom(j, snapshotId, locale);
         if (!cancelled)
           setRows(
-            basis === null
+            weighted.status === "unavailable"
               ? "error"
               : {
-                  rows: clockRowsFrom(j, snapshotId, locale),
+                  weighted,
                   metadata: clockMetadataFrom(j, snapshotId),
                   date:
                     typeof j.snapshot?.as_of === "string"
@@ -79,14 +79,14 @@ function BoundClock({
       cancelled = true;
     };
   }, [snapshotId, locale]);
-  const evidence = (row: ClockRow) => {
-    if (row.period && row.value)
+  const evidence = (row: WeightedRow) => {
+    if (row.latest)
       setDrawer({
         seriesId: row.seriesId,
-        observationId: row.observationId,
+        observationId: row.latest.observationId,
         name: row.name,
-        periodEnd: row.period,
-        display: row.value,
+        periodEnd: row.latest.period,
+        display: row.latest.value,
         unit: catalogById(row.seriesId)?.unit ?? "",
         source: (() => {
           const source = catalogById(row.seriesId)?.source;
@@ -105,18 +105,21 @@ function BoundClock({
       <MacroRegimeClock
         selected={clock.selected}
         reason={reason}
-        metadata={rows && rows !== "error" ? rows.metadata : null}
+        metadata={rows && rows !== "error" && rows.weighted.status === "ok" ? rows.metadata : null}
         metadataLoading={!!snapshotId && rows === null}
         t={t}
         region={region}
         locale={locale}
         date={rows && rows !== "error" ? rows.date : undefined}
-        rows={rows && rows !== "error" ? rows.rows : []}
+        rows={rows && rows !== "error" ? rows.weighted.rows : []}
+        weightedStatus={rows && rows !== "error" ? rows.weighted.status : "unavailable"}
+        insufficientCoverage={!!(rows && rows !== "error" && rows.weighted.insufficientCoverage)}
         card={clock.card}
         loading={loading}
         onRefresh={onRefresh}
         onEvidence={evidence}
       />
+      <AllocationTemplateCard current={clock.selected} />
       <SourceDrawer
         target={drawer}
         onClose={() => setDrawer(null)}
@@ -185,7 +188,7 @@ export function MacroJudgmentSlot({
     state.status === "loading" || state.status === "idle"
       ? t("judgment.loading")
       : state.status === "unavailable"
-        ? t("judgment.unavailable")
+        ? t("judgment.clock.reasons.unavailable")
         : clock.reason
           ? t(`judgment.clock.reasons.${clock.reason}`) +
             (clock.card?.abstain_reason ? `: ${clock.card.abstain_reason}` : "")

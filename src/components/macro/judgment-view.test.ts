@@ -50,6 +50,26 @@ describe('live clock selection',()=>{
  it('selects a current quadrant only when the active overview snapshot matches',()=>{
   expect(select([live],'exact-input')).toMatchObject({selected:'overheat',reason:null});
  });
+ it.each(['v1','v3'])('selects a single %s method card',version=>{
+  expect(select([{...live,methodology:{...live.methodology,version}}])).toMatchObject({selected:'overheat',reason:null,card:{methodology:{version}}});
+ });
+ it.each([['v2','v3'],['v9','v10'],['v9007199254740992','v9007199254740993']])('uses %s only when no %s card is present',(older,version)=>{
+  const latest={...live,judgment_id:'latest',methodology:{...live.methodology,version,href:`/intel/methods/macro_regime/${version}`},display:{...live.display,value:'recovery'}};
+  const previous={...live,methodology:{...live.methodology,version:older}};
+  for(const cards of [[previous,previous,latest],[latest,previous]])expect(select(cards)).toMatchObject({selected:'recovery',reason:null,card:{judgment_id:'latest',methodology:{version,href:latest.methodology.href}}});
+ });
+ it('rejects duplicate cards of the highest version as ambiguous',()=>{
+  const latest={...live,methodology:{...live.methodology,version:'v3'}};
+  expect(select([live,latest,{...latest,judgment_id:'duplicate'}])).toEqual({selected:null,card:null,reason:'ambiguous'});
+ });
+ it.each(['draft','v0','v01','v-1','v1.0','V3','v3 ','v3\n',''])('ignores invalid method version %j',version=>{
+  const invalid={...live,methodology:{...live.methodology,version}};
+  expect(select([invalid])).toEqual({selected:null,card:null,reason:'missing'});
+  expect(select([invalid,live])).toMatchObject({selected:'overheat',reason:null,card:{methodology:{version:'v2'}}});
+ });
+ it('does not fall back to v2 when the v3 card fails existing checks',()=>{
+  expect(select([live,{...live,lifecycle:'withdrawn',methodology:{...live.methodology,version:'v3'}}])).toMatchObject({selected:null,reason:'withdrawn',card:{methodology:{version:'v3'}}});
+ });
  it('clears the current quadrant after the active snapshot changes but retains the historical card and exact basis',()=>{
   expect(select([live],'new-active')).toMatchObject({selected:null,reason:'stale_snapshot',card:{judgment_id:'j1',input_snapshot_id:'exact-input'}});
   expect(basisFrom({snapshot:{snapshot_id:'exact-input'},contributions:[]},'exact-input')).toEqual([]);
@@ -65,7 +85,7 @@ describe('live clock selection',()=>{
   expect(select([{...live,lifecycle,abstain_reason:'coverage'}]).selected).toBeNull();
  });
  it('rejects wrong methods, wrong region, retrospective and missing selected values without headline inference',()=>{
-  for(const invalid of [{...live,methodology:{...live.methodology,version:'v1'}},{...live,subject:{type:'macro_region',key:'CN'}},{...live,retrospective:true},{...live,kind:'probability'},{...live,display:{...live.display,value:null}},{...live,inputs:[]}])expect(select([invalid]).selected).toBeNull();
+  for(const invalid of [{...live,methodology:{...live.methodology,id:'other_method'}},{...live,subject:{type:'macro_region',key:'CN'}},{...live,retrospective:true},{...live,kind:'probability'},{...live,display:{...live.display,value:null}},{...live,inputs:[]}])expect(select([invalid]).selected).toBeNull();
   expect(select([])).toMatchObject({selected:null,reason:'missing'});
  });
  it('does not interpret categorical percentages or a headline as a live claim',()=>{
