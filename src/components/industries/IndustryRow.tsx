@@ -5,6 +5,7 @@
 // only). SW path chips link to the L1 detail page with the "since" date; SIC chips carry the
 // current_only badge; an A-share whose SW scheme is not public says "licence pending" instead of
 // showing nothing. Unknown ticker / no data → the row is not rendered.
+import {StateBadge} from '@/components/research-ui';
 import {useEffect,useState} from 'react';
 import Link from 'next/link';
 import {useLocale,useTranslations} from 'next-intl';
@@ -53,7 +54,7 @@ export function IndustryRowView({ticker,data}:{ticker:string;data:Ok}){
             :<span className="ml-auto font-mono text-xs tabular-nums text-text-dim">{t('since',{date:i.since})}</span>}
         </div>
       ))}
-      {swHidden&&<div className="flex items-center gap-2 text-sm"><span className="text-[10px] uppercase tracking-wide text-text-dim">{t('label')}</span><span className="text-xs text-text-dim">{t('unlicensed')}</span></div>}
+      {swHidden&&<div className="flex items-center gap-2 text-sm"><span className="text-[10px] uppercase tracking-wide text-text-dim">{t('label')}</span><StateBadge state="withheld" /></div>}
     </div>
   );
 }

@@ -7,7 +7,7 @@ import {useEffect,useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
 import type {FreshnessStatus} from '@/lib/dq/freshness';
-import {FreshnessChip} from './FreshnessChip';
+import {FreshnessChip} from '@/components/research-ui';
 import {INDUSTRIES_PATH,hrefWith} from './hrefs';
 
 type Status={kind:'ok';factsAsOf:string|null;freshness:FreshnessStatus}|{kind:'unlicensed'}|{kind:'none'};

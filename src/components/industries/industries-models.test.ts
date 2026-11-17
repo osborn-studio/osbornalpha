@@ -31,9 +31,9 @@ describe('heatmap model',()=>{
   expect(rows[1].cells.find(c=>c.periodEnd==='2025-12-31')?.text).toEqual({kind:'missing',reason:'financial_excluded'});
   expect(rows[1].cells.find(c=>c.periodEnd==='2024-12-31')?.text).toEqual({kind:'missing',reason:'absent'});
  });
- it('only the last 5 columns survive on mobile',()=>{
+ it('only the last 3 columns survive on mobile',()=>{
   const rows=heatmapModel([node('801120.SI','食品饮料')],ends,cells,'gross_margin','zh');
-  expect(rows[0].cells.map(c=>c.mobileHidden)).toEqual([true,false,false,false,false,false]);
+  expect(rows[0].cells.map(c=>c.mobileHidden)).toEqual([true,true,true,false,false,false]);
  });
  it('alpha helpers use the brass token, never a hard-coded colour',()=>{
   expect(alphaFor(5,5,5)).toBe(0.36);
@@ -124,7 +124,7 @@ describe('cell text and table model',()=>{
  const t=(k:string,v?:Record<string,string|number>)=>v?`${k}:${JSON.stringify(v)}`:k;
  it('accessible text is the value, the coverage ratio, or the missing reason',()=>{
   expect(cellText(publicCell(cellRow({value:'0.5'})),'gross_margin','zh',t)).toBe('50.0%');
-  expect(cellText(publicCell(cellRow({value:'0.5',n_with_data:2})),'gross_margin','zh',t)).toContain('coverage.ratio');
+  expect(cellText(publicCell(cellRow({value:'0.5',n_with_data:2})),'gross_margin','zh',t)).toBe('2/10');
   expect(cellText(null,'gross_margin','zh',t)).toBe('missing.absent');
   expect(cellText(publicCell(missingCell({})),'gross_margin','zh',t)).toBe('missing.financial_excluded');
  });
@@ -161,8 +161,8 @@ it('SIC heatmap and table preserve source cells while suppressing numbers and co
  const rows=heatmapModel([node('3674','a'),node('7372','b')],['2025-12-31'],cells,'revenue_sum','en');
  expect(rows.map(r=>[r.cells[0].text,r.cells[0].alpha])).toEqual([[{kind:'members',n:2},null],[{kind:'coverageSic',n:4,d:6},null]]);
  const t=(key:string,v?:Record<string,string|number>)=>`${key}:${JSON.stringify(v)}`;
- expect(cellText(cellAt(cells,'3674','2025-12-31'),'revenue_sum','en',t)).toBe('coverage.tooFewMembers:{"n":2}');
- expect(cellText(cellAt(cells,'7372','2025-12-31'),'revenue_sum','en',t)).toBe('coverage.lowCoverage:{"n":4,"d":6}');
+ expect(cellText(cellAt(cells,'3674','2025-12-31'),'revenue_sum','en',t)).toBe('coverage.tooFewMembers:{"n":2,"min":"5"}');
+ expect(cellText(cellAt(cells,'7372','2025-12-31'),'revenue_sum','en',t)).toBe('4/6');
  expect(cellText(publicCell(cellRow({n_members:6,n_with_data:6,n_unresolved:0,metric:'revenue_sum',value:'1200000000',unit:'USD'}),'sic'),'revenue_sum','en',t)).toBe('1.20 bn USD');
 });
 it('SIC drawer supports original replay only',()=>{

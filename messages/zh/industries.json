@@ -4,7 +4,9 @@
     "subtitle": "行业聚合事实来自成分发行人的一手披露，整体法汇总；每个数字都能打开来源抽屉并按清单回放。",
     "breadcrumbResearch": "研究",
     "breadcrumbIndustries": "行业研究",
-    "constituents": "成分"
+    "constituents": "成分",
+    "scopeSic": "按 SEC 的 SIC 码把已披露的公司事实聚合到行业。只陈述聚合值与覆盖，不给行业判断。",
+    "scopeSw": "按申万 2021 分类把已披露的公司事实聚合到行业。只陈述聚合值与覆盖，不给行业判断。"
   },
   "schemes": {
     "sw2021": "申万 2021",
@@ -60,7 +62,8 @@
     "run": "聚合运行",
     "generation": "第 {n} 代",
     "method": "方法",
-    "grid": "{codes} 个行业 · {periods} 个期末"
+    "grid": "{codes} 个行业 · {periods} 个期末",
+    "methods": "方法与来源"
   },
   "freshness": {
     "fresh": "新鲜",
@@ -103,7 +106,8 @@
     },
     "reconstruction": {
       "title": "历史重建：这些格不是当时可见的数字",
-      "body": "历史期间用之后才拿到的成分证据重建：申万成分的可得日按纳入日假设（来源没有公告时刻），发行人按今天的归属解析。可以比较趋势，但不能当作当时投资者看到的值。每格的可得时刻是本次运行的激活时刻，不回溯到期间。"
+      "bodySw": "历史期间用之后才拿到的成分证据重建：申万成分的可得日按纳入日假设（来源没有公告时刻），发行人按今天的归属解析。可以比较趋势，但不能当作当时投资者看到的值。每格的可得时刻是本次运行的激活时刻，不回溯到期间。",
+      "bodySic": "SEC 只提供每家公司当前的 SIC 码，没有历史归属。历史期间按今天的 SIC 归属回填，成分自首次观察日起有效。可以比较趋势，但不能当作当时投资者看到的值。每格的可得时刻是本次运行的激活时刻，不回溯到期间。成分快照日：{date}。"
     },
     "partialUnpublished": {
       "title": "部分日期未发布",
@@ -127,15 +131,16 @@
     },
     "currentOnly": {
       "title": "只有当前值（current_only）",
-      "body": "SEC 只提供当前 SIC，没有纳入/剔除历史：纳入日一列是首次观察日，早于首次观察日的日期没有成分。SIC 不做聚合与估值。"
+      "body": "SEC 只提供当前 SIC，没有纳入/剔除历史：纳入日一列是首次观察日，早于首次观察日的日期没有成分。"
     },
     "noMembers": {
       "title": "该日无已知成分",
       "body": "截至 {on} 没有按今天已知证据有效的成分。"
     },
-    "snapshotConstituents": {
-      "title": "快照成分重建",
-      "body": "按 {date} 的当前 SIC 成分重建：汇总这些公司已披露的财年数据，不是历史成分。"
+    "more": "了解更多",
+    "notPublished": {
+      "title": "尚未发布",
+      "body": "自算估值要等口径核对完成才计算与发布。在此之前不显示任何自算估值，也不用其他来源的值顶替。分位未启用。"
     }
   },
   "missing": {
@@ -167,7 +172,7 @@
     "legendInsufficient": "覆盖不足（低于 0.8）",
     "legendUnresolved": "未解析超过 5%",
     "legendMissing": "缺失（悬停看原因）",
-    "tooFewMembers": "成分不足 {n}<5",
+    "tooFewMembers": "成分不足 {n}<{min}",
     "lowCoverage": "覆盖不足 {n}/{d}"
   },
   "heatmap": {
@@ -175,7 +180,7 @@
     "industry": "行业",
     "cellTitle": "{industry} · {period} · {metric}：{value}（打开来源抽屉）",
     "caption": "点击格 → 来源抽屉；点击行名 → 行业详情。单色黄铜深浅只表示高低，不表示涨跌。",
-    "mobileNote": "窄屏只显示最近 5 期，完整序列见表格。"
+    "mobileNote": "窄屏只显示最近 3 期，完整序列见表格。"
   },
   "table": {
     "label": "表格视图",
@@ -359,7 +364,11 @@
     "officialUnavailable": "官方对照值不可用（数据集未公开）",
     "valuationReplayDeferred": "估值清单回放随估值流水线（I-3）上线。",
     "filingId": "filing_id",
-    "factEvidence": "按 fact_id 查看原始事实"
+    "factEvidence": "按 fact_id 查看原始事实",
+    "licenceNote": "授权状态按数据集控制。",
+    "attribution": "公司披露与行业分类来源。",
+    "runId": "运行 ID",
+    "dataset": "数据集"
   },
   "entry": {
     "title": "行业研究",
@@ -394,5 +403,14 @@
   },
   "periods": {
     "fiscalTitle": "财年结束于 {year} 年"
+  },
+  "formulasSic": {
+    "revenue_sum": "Σ 营收",
+    "net_income_parent_sum": "Σ 归母净利润",
+    "gross_margin": "Σ 毛利 / Σ 营收",
+    "net_margin": "Σ 归母净利 / Σ 营收",
+    "revenue_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y|，同一可比集合",
+    "net_income_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y|，同一可比集合",
+    "member_count": "n_members（另给 n_unresolved）"
   }
 }

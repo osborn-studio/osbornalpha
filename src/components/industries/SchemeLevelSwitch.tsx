@@ -1,3 +1,4 @@
+import {StateBadge} from '@/components/research-ui';
 // src/components/industries/SchemeLevelSwitch.tsx
 // Selectors as links (canvas "Entry" scheme & level switch): every choice is a search-param URL, so
 // pages stay server-rendered and shareable. LinkMenu is a <details> dropdown, LinkSegment a segmented
@@ -31,7 +32,7 @@ export function LinkMenu({label,current,options}:{label:string;current:string;op
 
 export function LinkSegment({label,current,options}:{label:string;current:string;options:LinkOption[]}){
   return (
-    <div role="group" aria-label={label} className="inline-flex rounded-md border border-border p-0.5 text-sm">
+    <div role="group" aria-label={label} className="inline-flex flex-wrap rounded-md border border-border p-0.5 text-sm">
       {options.map(o=>o.disabled
         ?<span key={o.value} className="min-h-[32px] px-3 py-1 text-text-dim">{o.label}</span>
         :<Link key={o.value} href={o.href} aria-current={o.value===current?'true':undefined}
@@ -40,17 +41,15 @@ export function LinkSegment({label,current,options}:{label:string;current:string
   );
 }
 
+export function SchemeSwitch({path,search,scheme,swPublic}:{path:string;search:Search;scheme:'sw2021'|'sic';swPublic:boolean}){
+ const t=useTranslations('industries');
+ return <nav aria-label={t('controls.scheme')} className="flex flex-wrap gap-1 rounded-md border border-border p-1">
+  {(['sic','sw2021'] as const).map(s=><Link key={s} href={hrefWith(path,search,{scheme:s,level:undefined,metric:undefined,duration:undefined,view:undefined})} aria-current={scheme===s?'page':undefined} className={`inline-flex min-h-[44px] items-center gap-2 rounded px-3 text-sm ${scheme===s?'bg-[var(--accent-wash)] text-accent':'text-text-dim'}`}>
+   {t(`schemes.${s}Market`)}{s==='sw2021'&&!swPublic&&<StateBadge state="withheld"/>}
+  </Link>)}
+ </nav>;
+}
 export function SchemeLevelSwitch({path,search,scheme,level}:{path:string;search:Search;scheme:'sw2021'|'sic';level:number}){
-  const t=useTranslations('industries');
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <LinkMenu label={t('controls.scheme')} current={scheme} options={[
-        {value:'sw2021',label:t('schemes.sw2021Market'),href:hrefWith(path,search,{scheme:'sw2021',level:undefined})},
-        {value:'sic',label:t('schemes.sicMarket'),href:hrefWith(path,search,{scheme:'sic',level:undefined,metric:undefined,duration:undefined,view:undefined})},
-      ]} />
-      {scheme==='sw2021'&&(
-        <LinkSegment label={t('controls.level')} current={String(level)} options={['1','2','3'].map(l=>({value:l,label:t(`levels.${l}`),href:hrefWith(path,search,{level:l==='1'?undefined:l})}))} />
-      )}
-    </div>
-  );
+ const t=useTranslations('industries');
+ return scheme==='sw2021'?<LinkSegment label={t('controls.level')} current={String(level)} options={['1','2','3'].map(l=>({value:l,label:t(`levels.${l}`),href:hrefWith(path,search,{level:l==='1'?undefined:l})}))}/>:null;
 }
