@@ -1,15 +1,18 @@
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {NextIntlClientProvider} from 'next-intl';
-import {describe,expect,it} from 'vitest';
+import {afterEach,describe,expect,it,vi} from 'vitest';
 import en from '../../../messages/en/company.json';
 import zh from '../../../messages/zh/company.json';
+import enResearch from '../../../messages/en/research.json';
+import zhResearch from '../../../messages/zh/research.json';
 import enMarket from '../../../messages/en/market.json';
 import zhMarket from '../../../messages/zh/market.json';
 import enTracking from '../../../messages/en/tracking.json';
 import zhTracking from '../../../messages/zh/tracking.json';
 import type {CompanyPageData} from '@/lib/company/page-data';
 import type {CoverageRow} from '@/lib/company/types';
+import * as fetchHook from './useCompanyFetch';
 import {CompanyHeader} from './CompanyHeader';
 
 // Synthetic public coverage inputs, rendered by the real header and translations.
@@ -20,15 +23,15 @@ const coverage=(overrides:Partial<CoverageRow>={}):CoverageRow=>({
  citation_summary:{linked:0,pending:0,edgar:1},scope_last_success_at:'2026-11-02T03:00:00Z',
  scope_last_status:'failed',based_on_rev:1,rebuilt_at:'2026-11-08T00:00:00Z',rebuild_id:'test',rebuild_batch_id:'test',...overrides,
 });
-function render(locale:'en'|'zh',cov:CoverageRow|null){
+function render(locale:'en'|'zh',cov:CoverageRow|null,foreignPublic=false,asOf:string|null=null){
  const data:CompanyPageData={
   ticker:'TEST',publicTicker:'TEST',today:'2026-11-08',market:'US',
   issuer:{issuer_id:'test-issuer',status:'active',names:{en:'Test issuer',zh:null},identifiers:{cik:null,lei:null,usci:null},securities:[]},
   coverage:cov,coverageAll:cov?[cov]:[],streams:[],factState:cov?'ok':'no_facts',errorCode:null,
  };
  return renderToStaticMarkup(createElement(NextIntlClientProvider,{
-  locale,timeZone:'UTC',messages:{company:locale==='en'?en:zh,market:locale==='en'?enMarket:zhMarket,tracking:locale==='en'?enTracking:zhTracking},
-  children:createElement(CompanyHeader,{data,view:'overview',asOf:null,locale}),
+  locale,timeZone:'UTC',messages:{research:locale==='en'?enResearch:zhResearch,company:locale==='en'?en:zh,market:locale==='en'?enMarket:zhMarket,tracking:locale==='en'?enTracking:zhTracking},
+  children:createElement(CompanyHeader,{data,view:'overview',asOf,locale,foreignPublic}),
  }));
 }
 const pair=(html:string,label:string)=>[...html.matchAll(/<div\b[^>]*><span\b[^>]*>([^<]*)<\/span>([\s\S]*?)<\/div>/g)].find(m=>m[1]===label)?.[2];
@@ -66,3 +69,42 @@ for(const locale of ['en','zh'] as const){
   });
  });
 }
+
+for(const locale of ['zh','en'] as const){
+ it(`shared header and chain (${locale})`,()=>{
+  const html=render(locale,coverage());
+  expect(html.match(/<h1\b/g)).toHaveLength(1);
+  expect(html).toContain('data-research-page-header');
+  expect(html).toContain('data-freshness="missing"');
+  expect(html).toContain('href="/intel/companies"');
+  expect(html).toMatch(/<span[^>]*data-testid="chain-chip-foreign"/);
+  expect(html).toContain(locale==='zh'?'未服务':'Not served');
+  expect(html).not.toContain('href="/intel/foreign-research');
+  expect(render(locale,coverage(),true)).toContain('href="/intel/foreign-research?ticker=TEST"');
+ });
+}
+
+afterEach(()=>vi.restoreAllMocks());
+for(const locale of ['zh','en'] as const){
+ it.each(['fresh','stale','error','missing','unknown','loading','request-error'])('header freshness %s ('+locale+')',status=>{
+  const original=fetchHook.useCompanyFetch;
+  vi.spyOn(fetchHook,'useCompanyFetch').mockImplementation((url)=>url==='/api/companies/freshness'?{
+   state:status==='loading'?{status:'loading'}:status==='request-error'?{status:'error',code:'internal'}:{status:'ok',data:{datasets:[{dataset:'facts.us',status}]}},retry:()=>{},
+  } as ReturnType<typeof original>:original(url));
+  const html=render(locale,coverage());
+  expect(html).toContain(`data-freshness="${status==='request-error'?'error':status==='unknown'||status==='loading'?'missing':status}"`);
+  if(status==='request-error') expect(html).toContain((locale==='zh'?zh:en).states.retry);
+ });
+ it('uses the recomputed replay date when loaded',()=>{
+  const original=fetchHook.useCompanyFetch;
+  vi.spyOn(fetchHook,'useCompanyFetch').mockImplementation((url)=>url?.includes('/filings')?{state:{status:'ok',data:{filings:[{availableDate:'2024-10-01'}]}},retry:()=>{}} as ReturnType<typeof original>:original(url));
+  const html=render(locale,coverage(),false,'2024-12-01');
+  expect(html.match(/data-freshness=[\s\S]*?<\/span><\/span>/)?.[0]).toContain('2024-10-01');
+ });
+}
+
+for(const status of ['loading','error'] as const) it(`replay ${status} never leaks coverage freshness`,()=>{
+ const original=fetchHook.useCompanyFetch;
+ vi.spyOn(fetchHook,'useCompanyFetch').mockImplementation(url=>url?.includes('/filings')?{state:status==='loading'?{status}:{status,code:'internal',httpStatus:500},retry:()=>{}} as ReturnType<typeof original>:original(url));
+ expect(render('en',coverage(),false,'2024-12-01')).not.toContain('2025-10-31');
+});

@@ -10,6 +10,8 @@ import type {CompanyPageProps} from './CompanyPage';
 // loader, client shell and error card are real; configured reads use local HTTP below.
 vi.mock('next-intl/server', () => ({getLocale: async () => 'en'}));
 vi.mock('@/lib/admin/auth', () => ({requireAdminUser: async () => {throw new Error('guest');}}));
+vi.mock('@/lib/broker-research/public-flag',()=>({readForeignPublicEnabled:vi.fn(async()=>false)}));
+import {readForeignPublicEnabled} from '@/lib/broker-research/public-flag';
 import StockPage from './page';
 
 let server: Server | undefined;
@@ -86,4 +88,11 @@ describe('company server entry', () => {
     expect((element.props as CompanyPageProps).data).toMatchObject({issuer: null, errorCode: null, factState: 'no_issuer'});
     expect(requests).toContain('/rest/v1/stocks_universe');
   });
+});
+
+it.each([true,false,'throw'] as const)('passes the foreign flag and fails closed: %s',async flag=>{
+ vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','');
+ if(flag==='throw') vi.mocked(readForeignPublicEnabled).mockRejectedValueOnce(new Error('unavailable'));
+ else vi.mocked(readForeignPublicEnabled).mockResolvedValueOnce(flag);
+ expect((await entry()).props.foreignPublic).toBe(flag===true);
 });

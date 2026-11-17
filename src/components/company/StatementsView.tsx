@@ -2,6 +2,8 @@
 'use client';
 // Statements view (plan 2026-11-06 Task 12; spec §5.3, §5.7, §5.9; canvas Main, Replay, M-Company, States).
 // Table is the primary view; values are display strings from value_text; withheld cells never show a value.
+import { StateCell } from '@/components/research-ui';
+import { naturalKey } from './disclosure-drawer-adapter';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useLocale, useTranslations } from 'next-intl';
@@ -74,7 +76,7 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
     } else if (v.kind === 'derived') {
       drawers.open({ kind: 'formula', metric: v.cell.metric, cell: v.cell, periodLabel: `${p.periodEnd} ${durLabel(p.duration)}`, computedAt: null, computedAtKind: 'live', basedOnRev: data?.stateRev ?? null, scaleExp: exp });
     } else if (v.kind === 'withheld') {
-      drawers.open({ kind: 'withheld', reason: v.reason, title });
+      drawers.open({ kind: 'withheld', id: naturalKey({concept: row.concept, periodStart: p.periodStart, periodEnd: p.periodEnd, unit: row.unit}), reason: v.reason, title });
     } else if (v.kind === 'missing' && v.otherUnitOnly && row.unit) {
       // "— U": only other-unit facts exist; the history endpoint lists them in otherUnitSeries (primary unit = the row's).
       drawers.open({ kind: 'history', key: { concept: row.concept, periodStart: p.periodStart, periodEnd: p.periodEnd, unit: row.unit }, duration: p.duration, otherUnits: true, scaleExp: 0 });
@@ -199,9 +201,9 @@ export function StatementsView({ ticker, asOf, isAdmin, adminView, onAdminView, 
                               </>
                             )}
                             {v.kind === 'withheld' && (
-                              <button type="button" onClick={() => openCell(row, p)} className="text-[var(--text-dim)]" data-testid={`cell-${row.concept}-${p.key}`}
+                              <button type="button" onClick={() => openCell(row, p)} className="min-h-11 sm:min-h-0 text-[var(--text-dim)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]" data-testid={`cell-${row.concept}-${p.key}`}
                                 title={v.reason === 'citation_pending' ? t('cellPendingTitle') : t('cellIncompleteTitle')}>
-                                {v.reason === 'citation_pending' ? t('cellPending') : t('cellIncomplete')}
+                                <StateCell state="withheld" detail={v.reason === 'citation_pending' ? t('cellPending') : t('cellIncomplete')} />
                               </button>
                             )}
                             {(v.kind === 'fact' || v.kind === 'derived') && (

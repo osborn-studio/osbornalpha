@@ -107,5 +107,18 @@
     "tracking": "Tracking ✓",
     "live": "Computed for the replay date; no first-seen times",
     "markRead": "Mark read"
+  },
+  "availability": {
+    "title": "Events temporarily unavailable",
+    "companyBody": "The event timeline failed to load ({code}). Disclosure documents remain available in the Filings tab; neither partial events nor a “No events” message are shown here.",
+    "filings": "Go to Filings",
+    "empty": "No events in this period",
+    "withheld": "{n} event values withheld (citation checks pending {pending} · incomplete evidence {incomplete})",
+    "inboxBody": "The inbox failed to load ({code}).",
+    "partial": "Partially unavailable",
+    "company": "Company",
+    "latest": "Latest event",
+    "status": "Status",
+    "degraded": "Degraded display: only the latest 20 events per company are shown, without pagination."
   }
 }

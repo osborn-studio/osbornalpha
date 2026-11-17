@@ -21,6 +21,9 @@ import { InboxEventRow } from './InboxEventRow';
 import { markPageFlow, scopeKey, scopeReady, shouldApply } from './mark-scope';
 import { WatchPanel, useTrackingError } from './WatchPanel';
 
+import { probeInboxPerIssuer, mergeInboxRows, shouldProbeNow, type InboxFailure, type InboxProbe } from './inbox-degrade';
+import { InboxCompanyStatus, InboxDegradedControls, InboxUnavailable } from './inbox-degrade-view';
+
 type KindFilter = 'all' | EventKind;
 const codeOf = (e: unknown) => (e instanceof TrackingApiError ? e.code : 'internal');
 const chip = (on: boolean) => `shrink-0 rounded border px-2 py-1.5 text-xs ${on ? 'border-accent text-accent' : 'border-border text-text-dim'}`;
@@ -36,23 +39,45 @@ export function TrackingInbox() {
   const [rows, setRows] = useState<InboxRowDto[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [degraded, setDegraded] = useState<Extract<InboxProbe<InboxRowDto>, {perIssuer: unknown}> | null>(null);
+  const [watchesError, setWatchesError] = useState<string | null>(null);
+  const watchesRef = useRef<WatchesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const seq = useRef(0);
+  const failure = useRef<InboxFailure | null>(null);
   // "Today" and same-day folds use the viewer's LOCAL calendar day (not UTC), so a first-seen late evening stays with that evening.
   const today = localDayOf(new Date().toISOString());
   const scope = scopeKey({ issuer, kind, unreadOnly });
   const ready = scopeReady(loadedScope, scope);
 
   const loadWatches = useCallback(async () => {
-    try { setWatches(await fetchWatches()); } catch (e) { setError(codeOf(e)); }
+    try { const result = await fetchWatches(); watchesRef.current = result; setWatches(result); setWatchesError(null); } catch (e) { setWatchesError(codeOf(e)); }
   }, []);
+  const runProbe = useCallback(async () => {
+    const failed = failure.current;
+    const activeWatches = watchesRef.current?.watches.filter(w => !w.muted) ?? [];
+    if (!shouldProbeNow({failure: failed, generation: seq.current, scope, activeWatchCount: activeWatches.length}) || !failed) return;
+    failed.probeStarted = true;
+    setLoading(true);
+    const result = await probeInboxPerIssuer({issuerIds: activeWatches.map(w => w.issuerId), fetchOne: async issuerId => {
+      const page = await fetchInbox({issuerId, kinds: kind === 'all' ? undefined : [kind], unreadOnly, limit: 20});
+      return page.rows;
+    }});
+    if (failed.generation !== seq.current) return;
+    if (result.status !== 'unavailable') {
+      setDegraded(result); setRows(mergeInboxRows(result.perIssuer)); setCursor(null); setError(null);
+      setLoadedScope(scope);
+    } else setError(result.code);
+    setLoading(false);
+  }, [scope, kind, unreadOnly]);
   const loadInbox = useCallback(async (from: string | null) => {
     const my = ++seq.current;
+    failure.current = null;
     setLoading(true);
-    if (from === null) { setRows([]); setCursor(null); setLoadedScope(null); }   // rows and cursor belong to exactly one scope; a failed switch leaves them empty
+    if (from === null) { setDegraded(null); setError(null); setRows([]); setCursor(null); setLoadedScope(null); }   // rows and cursor belong to exactly one scope; a failed switch leaves them empty
     try {
       const r = await fetchInbox({ cursor: from, limit: INBOX_DEFAULT_LIMIT, kinds: kind === 'all' ? undefined : [kind], unreadOnly, issuerId: issuer });
       if (my !== seq.current) return;
@@ -61,14 +86,19 @@ export function TrackingInbox() {
       setError(null);
       if (from === null) setLoadedScope(scopeKey({ issuer, kind, unreadOnly }));
     } catch (e) {
-      if (my === seq.current) setError(codeOf(e));
+      if (my !== seq.current) return;
+      failure.current = {generation: my, scope: scopeKey({issuer, kind, unreadOnly}), cursor: from, issuer, probeStarted: false};
+      setError(codeOf(e));
+      await runProbe();
     } finally {
       if (my === seq.current) setLoading(false);
     }
-  }, [kind, unreadOnly, issuer]);
+  }, [kind, unreadOnly, issuer, runProbe]);
 
+  const invalidateInbox = useCallback(() => { ++seq.current; }, []);
   useEffect(() => { void loadWatches(); }, [loadWatches]);
-  useEffect(() => { void loadInbox(null); }, [loadInbox]);
+  useEffect(() => { void loadInbox(null); return invalidateInbox; }, [loadInbox, invalidateInbox]);
+  useEffect(() => { void runProbe(); }, [watches, runProbe]);
   // A removed watch can no longer be the selected issuer filter (the inbox would answer 404 watch_not_found).
   useEffect(() => {
     if (issuer !== null && watches && !watches.watches.some((w) => w.issuerId === issuer)) setIssuer(null);
@@ -77,7 +107,7 @@ export function TrackingInbox() {
   const refreshAll = useCallback(() => { void loadWatches(); void loadInbox(null); }, [loadWatches, loadInbox]);
   const cards = useMemo(() => new Map((watches?.watches ?? []).map((c) => [c.issuerId, c])), [watches]);
   const groups = useMemo(() => foldSameIssuerDay(rows, localDayOf), [rows]);
-  const hasUnread = ready && rows.some((r) => !r.read);
+  const hasUnread = !error && ready && rows.some((r) => !r.read);
 
   // plan audit S3: a delayed response only touches the ids it submitted, and only in the scope that submitted them.
   const markPage = async () => {
@@ -95,11 +125,12 @@ export function TrackingInbox() {
   return (
     <>
       <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+        <div className={degraded ? 'flex flex-wrap items-center gap-2' : undefined}>
           <h1 className="text-xl font-bold">
             {t('page.title')} {watches && <span className="ml-1 font-mono text-[11px] font-normal text-text-dim sm:hidden">{t('page.count', { count: watches.count, limit: watches.limit })}</span>}
           </h1>
-          <p className="text-[11px] text-text-dim">{t('page.subtitle')}</p>
+          {degraded && <InboxDegradedControls partial={degraded.status === 'partial'} retry={() => { void loadInbox(null); }} />}
+          <p className={degraded ? 'w-full text-[11px] text-text-dim' : 'text-[11px] text-text-dim'}>{t('page.subtitle')}</p>
         </div>
         <div className="flex gap-1 rounded-md border border-border p-1 text-sm">
           <Link href="/watchlist" className="inline-flex min-h-11 items-center rounded px-3 py-1 text-text-dim sm:min-h-0">{t('page.kanban')}</Link>
@@ -152,14 +183,16 @@ export function TrackingInbox() {
             </Button>
           </div>
 
-          {error && (
+          {watchesError && (
             <Card className="mb-2 text-[13px]" role="alert">
-              {t('inbox.error', { code: error })}{' '}
+              {t('inbox.error', { code: watchesError })}{' '}
               <Button variant="ghost" size="sm" onClick={refreshAll}>{t('inbox.retry')}</Button>
             </Card>
           )}
 
-          {watches?.count === 0 ? (
+          {error && <InboxUnavailable code={error} retry={() => { void loadInbox(null); }} />}
+          {degraded && <InboxCompanyStatus watches={watches?.watches ?? []} perIssuer={new Map([...degraded.perIssuer].map(([id,result]) => [id,result.state === 'ok' ? {state:'ok' as const,rows:rows.filter(r => r.issuerId === id)} : result]))} />}
+          {!error && (watches?.count === 0 ? (
             <Card className="text-[13px] text-text-dim">{t('watches.empty')}</Card>
           ) : rows.length === 0 && !loading ? (
             <Card className="text-[13px] text-text-dim">
@@ -185,11 +218,12 @@ export function TrackingInbox() {
                 })}
               </ul>
             </Card>
-          )}
+          ))}
 
+          {degraded && <p className="mt-2 text-xs text-text-dim">{t('availability.degraded')}</p>}
           <div className="mt-2 text-center">
             {loading && <span className="text-xs text-text-dim">{t('inbox.loading')}</span>}
-            {!loading && cursor && ready && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => loadInbox(cursor)}>{t('inbox.loadMore')}</Button>}
+            {!error && !degraded && !loading && cursor && ready && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => loadInbox(cursor)}>{t('inbox.loadMore')}</Button>}
           </div>
         </div>
       </div>
