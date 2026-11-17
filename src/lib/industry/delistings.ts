@@ -7,7 +7,7 @@
 import type {BatchError} from '../dq/batches';
 import {quarantine} from '../dq/quarantine';
 import {errorMessage} from '../entities/load-sec';
-import type {DelistingInput,IndustryDeps} from './types';
+import type {DelistingInput,IndustryDeps} from './types-us';
 import type {StockBasicRow,TusharePage} from './providers/tushare-industry';
 import {ymdToIso} from './providers/tushare-industry';
 

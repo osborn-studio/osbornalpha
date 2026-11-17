@@ -2,7 +2,7 @@
 // GET /api/industries (spec §9): the active aggregate run's cells for one metric × duration over the
 // last `periods` period ends (missing cells carry their reason), the stored YoY companion of a sum,
 // the published valuation snapshot, and methodVersion / runId / factsAsOf / historyClass / freshness
-// at the top level. SIC answers its navigation list (no aggregation, spec §1.2). A non-public scheme
+// at the top level. SIC uses its snapshot aggregate when active, otherwise its navigation list (§19). A non-public scheme
 // dataset is 403 unlicensed with no-store (spec §4.8, §11).
 import {NextResponse} from 'next/server';
 import {errorResponse,intParam,paramErrorResponse,readParams,successHeaders} from '@/lib/facts/public-route';
@@ -20,8 +20,8 @@ export async function GET(req:Request){
  try{
   const p=readParams(new URL(req.url),PARAMS);
   const scheme=schemeOf(p.get('scheme')??'sw2021');
-  const metric=metricOf(p);
-  q={scheme,version:versionOf(p,scheme),level:levelOf(p,scheme),metric,duration:durationOf(p,metric),periods:intParam(p,'periods',10,MAX_PERIODS)};
+  const metric=metricOf(p,undefined,scheme);
+  q={scheme,version:versionOf(p,scheme),level:levelOf(p,scheme),metric,duration:durationOf(p,metric,scheme),periods:intParam(p,'periods',10,MAX_PERIODS)};
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const v=await industryListView(publicReadDeps(now),q);

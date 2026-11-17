@@ -38,7 +38,7 @@ import {isCurrentSecurity} from '../entities/resolve';
 import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
 import {resolveOrgId} from '../research/ingest/collectors/cninfo';
 import type {OrgLookup} from '../research/ingest/collectors/cninfo';
-import type {IndustryDeps} from './types';
+import type {IndustryDeps} from './types-us';
 import {validateAShareTickers} from './a-share-selection';
 import {persistDelistings,scanDelistings} from './delistings';
 import type {DelistingScan} from './delistings';

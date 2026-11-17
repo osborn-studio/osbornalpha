@@ -103,7 +103,7 @@ export async function overviewEnvelope(deps:ViewDeps,region:Region,today:string,
   // Unknown publication state must bypass every cache tier; facts can still be read live.
   deps.db.publishState(region).catch(()=>null),
  ]);
- const collection=allCollection.filter(c=>c.dataset===datasetOf(region)||(region==='CN'&&c.dataset==='macro.bis'));
+ const collection=allCollection.filter(c=>c.dataset===datasetOf(region));
  const load=()=>buildOverviewFacts(deps.db,region,today,opts,snap,prevSnap);
  const knownRevision=publishState&&Number.isSafeInteger(publishState.inputRevision)&&publishState.inputRevision>=0&&Number.isSafeInteger(publishState.revision)&&publishState.revision>=0;
  const facts=deps.factsCache&&snap?.status==='active'&&knownRevision

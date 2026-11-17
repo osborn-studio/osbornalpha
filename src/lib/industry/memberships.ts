@@ -14,8 +14,8 @@
 // n_unresolved), using the v1 assumptions available_date = in_date and valid_to_available_date = out_date,
 // and counts distinct ts_code. K4: a ts_code whose delist_date (industry_security_delistings) is <= `on` is not unresolved
 // (it was no longer listed on `on`); callers pass the delist dates as `delist`.
-import {IndustryDbError} from './types';
-import type {IndustryDb,MembersAtQuery,MembershipRow,SourceMembershipRow} from './types';
+import {IndustryDbError} from './types-us';
+import type {IndustryDb,MembersAtQuery,MembershipRow,SourceMembershipRow} from './types-us';
 
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 const assertDate=(v:string,name:string)=>{if(!DATE.test(v))throw new Error(`invalid_date:${name}`);};

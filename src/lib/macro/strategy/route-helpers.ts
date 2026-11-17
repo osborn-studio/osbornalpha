@@ -23,7 +23,7 @@ import {strategyPort,type StrategyReadPort} from './port';
 // Auth and judgments are request-scoped even when the underlying facts are shared.
 export const READ_HEADERS={'Cache-Control':'private, no-store'};
 /** Fact-route response header; only successful responses expose a memo result. */
-export const memoHeaders=(outcome:import('./memo').MemoOutcome)=>({...READ_HEADERS,'X-Macro-Strategy-Memo':outcome});
+export const memoHeaders=(outcome:import('./memo').MemoOutcome,source:import('./memo').ViewSource='built')=>({...READ_HEADERS,'X-Macro-Strategy-Memo':outcome,'X-Macro-Strategy-View':source});
 export const NO_STORE={'Cache-Control':'private, no-store'};
 // ---- response shapes shared with the UI (spec §8)
 export interface ReviewIndexItem{region:Region;month:string;status:ReviewStatus;generation:number;result_id:string;updated_at:string}

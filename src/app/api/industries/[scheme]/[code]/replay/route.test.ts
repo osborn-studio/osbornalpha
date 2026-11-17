@@ -80,3 +80,14 @@ describe('GET /api/industries/[scheme]/[code]/replay',()=>{
   expect((await get(`runId=${RUN_ID}&metric=gross_margin&periodEnd=2025-12-31`,{ip:'7.7.7.8'})).status).toBe(200);
  });
 });
+
+it('SIC original replays; recompute is unavailable and never calls the CN builder',async()=>{
+ vi.clearAllMocks();replayLimiter.reset();
+ const run=runRow({scheme:'sic',version:'sec-current',method_version:'industry-agg-us/1.0'});
+ const db=stubIndustryDb({runs:[run],cells:[cellRow({code:'3674',metric:'member_count',duration:'INSTANT',period_start:'2025-12-31',value:'6',n_members:6,n_with_data:6,n_unresolved:0})]});
+ mocks.get.mockResolvedValue(manifestOf({scheme:'sic',version:'sec-current',code:'3674',method_version:'industry-agg-us/1.0',roles:[],facts:[],derived:[],cells:[{metric:'member_count',duration:'INSTANT',period_start:'2025-12-31',status:'ok',value_text:'6',n_members:6,n_with_data:6,n_unresolved:0,unit:'count'}]}));
+ mocks.replay.mockImplementation((now:Date)=>({db,manifests:{get:mocks.get},recompute:mocks.recompute,now}));
+ const qs=`runId=${RUN_ID}&metric=member_count&periodEnd=2025-12-31`;
+ expect(await (await get(qs,{scheme:'sic',code:'3674'})).json()).toMatchObject({mode:'original',reproduced:true});
+ const r=await get(qs+'&mode=recompute',{scheme:'sic',code:'3674'});expect(r.status).toBe(501);expect((await r.json()).error.code).toBe('not_available');expect(mocks.recompute).not.toHaveBeenCalled();
+});

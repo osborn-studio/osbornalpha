@@ -13,6 +13,7 @@ import {RULES,RULES_VERSION} from '../regime';
 import type {ObservationRow as P1ObservationRow,SeriesType} from '../types';
 import type {ObservationRow,RulesView,SnapshotRecord} from './contract';
 import type {StrategyReadPort} from './port';
+import type {HistoriesReader,HistoryBounds,HistoryResult} from './history-rpc';
 
 /** snapshotsSince page size (P1 read-api MAX_SNAPSHOTS_PAGE is 200; the memory twin and PostgREST both cap at 1000). */
 export const SNAPSHOT_PAGE=200;
@@ -23,7 +24,42 @@ export const SNAPSHOT_MAX_PAGES=200;
 const HISTORY_CAP_MULTIPLIERS=[1,4,16] as const;
 const HISTORY_CAP_CEILING=100_000;
 
-export interface WiringOptions{pageSize?:number;maxPages?:number}
+export interface WiringOptions{pageSize?:number;maxPages?:number;historiesReader?:HistoriesReader}
+// A deployment without this migration stays on the legacy path until the process restarts.
+let historyRpcUnavailable=false;
+function coalescedHistories(reader:HistoriesReader){
+ type Pending={id:string;resolve:(result:HistoryResult|null)=>void;reject:(error:unknown)=>void};
+ const batches=new Map<string,{bounds:HistoryBounds;pending:Pending[]}>();
+ return (id:string,bounds:HistoryBounds):Promise<HistoryResult|null>=>{
+  if(historyRpcUnavailable)return Promise.resolve(null);
+  const key=JSON.stringify([bounds.asOf,bounds.from??null,bounds.to??null]);
+  return new Promise((resolve,reject)=>{
+   const existing=batches.get(key);
+   if(existing){existing.pending.push({id,resolve,reject});return;}
+   const batch={bounds,pending:[{id,resolve,reject}]};batches.set(key,batch);
+   queueMicrotask(()=>{
+    batches.delete(key);
+    const ids=[...new Set(batch.pending.map(p=>p.id))];
+    // Chunk sequentially so a missing function also prevents subsequent chunks from calling it.
+    void (async()=>{
+     for(let i=0;i<ids.length;i+=64){
+      const chunk=ids.slice(i,i+64),pending=batch.pending.filter(p=>chunk.includes(p.id));
+      try{
+       if(historyRpcUnavailable){for(const p of pending)p.resolve(null);continue;}
+       const results=await reader(chunk,batch.bounds),by=new Map(results.map(r=>[r.series_id,r]));
+       if(chunk.some(id=>!by.has(id)))throw new MacroDbError('rpc_failed','incomplete_series_history');
+       for(const p of pending)p.resolve(by.get(p.id)!);
+      }catch(error){
+       const code=(error as {code?:string}|null)?.code;
+       if(code==='PGRST202'||code==='42883'){historyRpcUnavailable=true;for(const p of pending)p.resolve(null);}
+       else for(const p of pending)p.reject(error);
+      }
+     }
+    })();
+   });
+  });
+ };
+}
 
 const ms=(t:string)=>{const v=Date.parse(t);if(!Number.isFinite(v))throw new Error(`invalid_timestamp:${t}`);return v;};
 /** Drops storage-only members (locator, code_version, batch_id): strategy code and manifests read the projection only. */
@@ -46,6 +82,7 @@ export function rulesView():RulesView{
 export function macroDbStrategyPort(db:MacroDb,opts:WiringOptions={}):StrategyReadPort{
  const pageSize=opts.pageSize??SNAPSHOT_PAGE,maxPages=opts.maxPages??SNAPSHOT_MAX_PAGES;
  const rules=rulesView();
+ const history=opts.historiesReader?coalescedHistories(opts.historiesReader):null;
  return {
   async activeSnapshot(region){const s=await db.activeSnapshot(region);return s?toSnapshot(s):null;},
   async publishState(region){try{const s=await db.publishState(region);return {revision:s.revision,input_revision:s.inputRevision};}catch(e){if(e instanceof MacroDbError&&e.code==='not_found')return null;throw e;}},
@@ -75,6 +112,15 @@ export function macroDbStrategyPort(db:MacroDb,opts:WiringOptions={}):StrategyRe
    return [...new Set(seriesIds)].flatMap(id=>{const o=by.get(id);return o?[toObservation(o)]:[];});
   },
   async seriesHistory(seriesId,{from,to,asOf,maxRows}){
+   if(history){
+    if(!Number.isInteger(maxRows)||maxRows<1)throw new MacroDbError('rpc_failed','invalid_max_rows');
+    const result=await history(seriesId,{from,to,asOf});
+    if(result){
+     const complete=HISTORY_CAP_MULTIPLIERS.some(mult=>result.raw_count<=Math.min(maxRows*mult,Math.max(maxRows,HISTORY_CAP_CEILING)));
+     if(!complete||result.rows.length>maxRows)throw new Error('truncated');
+     return result.rows;
+    }
+   }
    // MacroDb counts every visible version against its cap, the port contract counts periods after the highest-version dedup:
    // read with growing internal caps, dedup (MacroDb already returns one row per period) and compare to maxRows ourselves.
    // Still 'truncated' when even the largest cap truncates, since completeness cannot be proven then.

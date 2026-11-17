@@ -88,3 +88,24 @@ test('mobile 390px: no horizontal page scroll, drawer is a bottom sheet', async 
   await page.goto('/intel/industries/sw2021/801120.SI');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test('SIC snapshot: fiscal heatmap → reproduced drawer → table → detail', async ({ page }) => {
+  await page.goto('/intel/industries?scheme=sic');
+  await expect(page.locator('[data-state="snapshotConstituents"]')).toContainText('2026-11-03');
+  const heatmap = page.getByRole('region', { name: '热力图' });
+  await expect(heatmap.getByText('FY2025')).toHaveAttribute('title', '财年结束于 2025 年');
+  await expect(heatmap.getByText('成分不足 2<5').first()).toBeVisible();
+  await heatmap.getByRole('button', { name: /^Semiconductors & Related Devices · 2025-12-31/ }).click();
+  const drawer = page.getByRole('dialog', { name: '来源抽屉' });
+  await expect(drawer.locator('[data-reproduced="true"]')).toBeVisible({ timeout: 30_000 });
+  await expect(drawer.getByRole('button', { name: '按当前证据重算' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await page.getByRole('link', { name: '表格', exact: true }).click();
+  const table = page.getByRole('region', { name: '表格视图' });
+  await expect(table).toBeVisible();
+  await table.getByRole('link', { name: 'Semiconductors & Related Devices' }).click();
+  await expect(page).toHaveURL(/\/intel\/industries\/sic\/3674$/);
+  await expect(page.getByText('表格等价视图')).toBeVisible();
+  await expect(page.locator('[data-state="snapshotConstituents"]')).toBeVisible();
+  await expect(page.getByRole('link', { name: /查看成分/ })).toBeVisible();
+});

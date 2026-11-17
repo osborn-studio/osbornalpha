@@ -1,5 +1,5 @@
-// src/lib/judgments/methodologies/macro-regime.v3.test.ts
-// Task 19 (spec §11.1, §8.1 G28, §6.4, §7.1 step 0, §14.1, §15 #1): macro_regime@v3 on the 2026-09-11 US fixture
+// src/lib/judgments/methodologies/macro-regime.v2.test.ts
+// Task 19 (spec §11.1, §8.1 G28, §6.4, §7.1 step 0, §14.1, §15 #1): macro_regime@v2 on the 2026-09-11 US fixture
 // (macro spec §14 acceptance example 9). Active registration plus an explicit draft override test the status gate.
 import {existsSync,readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
@@ -13,7 +13,7 @@ import {produce} from '@/lib/judgments/produce';
 import {parseReplayFixture} from '@/lib/judgments/replay';
 import {compensateMacro} from '@/lib/judgments/compensate';
 import {macroRegimeReplayResolver} from '@/lib/judgments/resolvers/macro';
-import {MACRO_REGIMES,MACRO_UPSTREAM_VERSION,macroRegimeV3,marginPp} from './macro-regime.v3';
+import {MACRO_REGIMES,MACRO_UPSTREAM_VERSION,macroRegimeV2,marginPp} from './macro-regime.v2';
 import {MACRO_CODE_VERSION,MACRO_S1,MACRO_S2,buildMacroReplayFixture,compensateCtx,loadMacroFixture,macroDb,macroInputsDb,macroWork,mergeMacroFixtures,produceCtx} from '@/lib/judgments/testing/macro-fixture';
 
 const US:Subject={type:'macro_region',key:'US'};
@@ -24,7 +24,7 @@ function patchSnapshots(fx:MacroFixture,patch:(s:MacroFixture['snapshots'][numbe
 
 async function registerS1(fx:MacroFixture=base()){
  const db=await macroDb('active');const inputsDb=macroInputsDb(fx);
- const res=await produce(macroRegimeV3,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
+ const res=await produce(macroRegimeV2,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
  const ids=await db.judgmentsBySnapshot(MACRO_S1);
  const row=ids.length===1?await db.getJudgment(ids[0]):null;
  return {db,inputsDb,res,ids,row:row as JudgmentRow};
@@ -38,27 +38,26 @@ function outcomeOf(row:JudgmentRow,r:ResolverResult):'hit'|'miss'|null{
 function rng(seed:number){let s=seed>>>0;return()=>{s=(s*1664525+1013904223)>>>0;return s/2**32;};}
 function shuffled<T>(xs:T[],next:()=>number):T[]{const a=[...xs];for(let i=a.length-1;i>0;i--){const j=Math.floor(next()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
 
-describe('macro_regime@v3 (Task 19)',()=>{
+describe('macro_regime@v2 (Task 19)',()=>{
  it('is registered once in REGISTRY as an active categorical rule method with the spec §11.1 parameters and a 7-section doc',async()=>{
-  expect(REGISTRY.filter(m=>m.id==='macro_regime')).toEqual([macroRegimeV3]);
+  expect(REGISTRY.filter(m=>m.id==='macro_regime')).toEqual([macroRegimeV2]);
   expect(REGISTRY.some(m=>m.id==='macro_regime'&&m.version==='v1')).toBe(false);
-  const row=methodologyRowOf(macroRegimeV3,formulaHashOf(macroRegimeV3),{publishable:false,code_version:MACRO_CODE_VERSION});
-  expect(row).toMatchObject({methodology_id:'macro_regime',version:'v3',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
-   subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation'],doc_path:'docs/methodologies/macro_regime/v3.md',
-   params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/b91aad6b17f3'},
+  const row=methodologyRowOf(macroRegimeV2,formulaHashOf(macroRegimeV2),{publishable:false,code_version:MACRO_CODE_VERSION});
+  expect(row).toMatchObject({methodology_id:'macro_regime',version:'v2',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
+   subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation'],doc_path:'docs/methodologies/macro_regime/v2.md',
+   params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/30bcaa2a33c5'},
    horizon:{unit:'calendar_months',n:3},upstream:{macro_methodology_version:'v1.0'},status:'active',publishable:false});
   expect(row.formula_hash).toMatch(/^[0-9a-f]{64}$/);
-  expect(methodologyRowOf(macroRegimeV3,formulaHashOf(macroRegimeV3),{publishable:false,code_version:'another-code-version'}).formula_hash).toBe(row.formula_hash);
+  expect(methodologyRowOf(macroRegimeV2,formulaHashOf(macroRegimeV2),{publishable:false,code_version:'another-code-version'}).formula_hash).toBe(row.formula_hash);
   expect(MACRO_UPSTREAM_VERSION).toBe('v1.0');
-  expect(macroRegimeV3.params.catalog_version).toBe('macro-catalog/b91aad6b17f3');
-  expect(macroRegimeV3.params.catalog_version).toBe(CATALOG_VERSION);
+  expect(macroRegimeV2.params.catalog_version).toBe('macro-catalog/30bcaa2a33c5');
   expect(MACRO_REGIMES).toEqual(['recovery','overheat','stagflation','recession']);
-  for(const p of [macroRegimeV3.module,...macroRegimeV3.deps])expect({p,exists:existsSync(p)}).toEqual({p,exists:true});
-  const doc=readFileSync(macroRegimeV3.doc,'utf8');
+  for(const p of [macroRegimeV2.module,...macroRegimeV2.deps])expect({p,exists:existsSync(p)}).toEqual({p,exists:true});
+  const doc=readFileSync(macroRegimeV2.doc,'utf8');
   for(const h of ['## 1 回答什么问题','## 2 主体与输入','## 3 公式与参数','## 4 可证伪条件、目标期与标签政策','## 5 结算 resolver 与实现值定义','## 6 不适用情形（何时 abstain）','## 7 版本历史'])expect({h,found:doc.includes(h)}).toEqual({h,found:true});
  });
 
- it('registers snapshot s1: categorical claim (normalized scores), margin_pp in percentage points, frozen catalog_version, 3-month period target',async()=>{
+ it('registers snapshot s1: categorical claim (norm is not a probability), margin_pp in percentage points, frozen catalog_version, 3-month period target',async()=>{
   const {res,ids,row}=await registerS1();
   expect(res.counts).toMatchObject({inserted:1,duplicates:0,quarantined:0,failed:0});
   expect(ids).toHaveLength(1);
@@ -68,7 +67,7 @@ describe('macro_regime@v3 (Task 19)',()=>{
   const claim=row.claim as CategoricalClaim;
   expect(claim.margin_pp!).toBeCloseTo((claim.distribution!.recovery-claim.distribution!.overheat)*100,5);
   expect(claim.margin_pp!).toBeGreaterThan(1);   // percentage points, not a fraction (G28)
-  expect(row).toMatchObject({subject_type:'macro_region',subject_key:'US',judgment_type:'macro_regime',methodology_id:'macro_regime',methodology_version:'v3',
+  expect(row).toMatchObject({subject_type:'macro_region',subject_key:'US',judgment_type:'macro_regime',methodology_id:'macro_regime',methodology_version:'v2',
    kind:'categorical',producer_kind:'rule',producer_nonce:'',as_of:'2026-09-11',abstained:false,abstain_reason:null,
    horizon:{unit:'calendar_months',n:3},target:{kind:'period',period:'2026-12'},label_policy:'cutoff_vintage',
    settle_after:'2027-01-01T00:00:00.000Z',settle_by:'2027-01-31T00:00:00.000Z',code_version:MACRO_CODE_VERSION});
@@ -97,11 +96,11 @@ describe('macro_regime@v3 (Task 19)',()=>{
  it('gathers snapshot + observations alone without table catalog reads',async()=>{
   const fx=base(),db=macroInputsDb(fx);
   db.tableRows=async()=>{throw new Error('catalog is code, not timestamped rows');};
-  const inputs=await macroRegimeV3.gather(macroWork(fx,MACRO_S1),db);
+  const inputs=await macroRegimeV2.gather(macroWork(fx,MACRO_S1),db);
   expect(Array.isArray(inputs)).toBe(true);
   if(!Array.isArray(inputs))throw new Error(inputs.reason);
   expect(inputs.map(i=>i.kind)).toEqual(['macro_snapshot',...Array(11).fill('macro_observation')]);
-  expect(macroRegimeV3.compute(US,inputs).abstained).toBe(false);
+  expect(macroRegimeV2.compute(US,inputs).abstained).toBe(false);
  });
 
  it('catalog version mismatch abstains with the bound snapshot retained (D1)',async()=>{
@@ -115,9 +114,9 @@ describe('macro_regime@v3 (Task 19)',()=>{
  it('failed snapshots abstain snapshot_not_published',async()=>{
   const fx=patchSnapshots(base(),s=>{s.status='failed';});
   const inputsDb=macroInputsDb(fx);
-  expect(await macroRegimeV3.gather(macroWork(fx,MACRO_S1),inputsDb)).toEqual({abstained:true,reason:'snapshot_not_published'});
+  expect(await macroRegimeV2.gather(macroWork(fx,MACRO_S1),inputsDb)).toEqual({abstained:true,reason:'snapshot_not_published'});
   const db=await macroDb('active');
-  const result=await produce(macroRegimeV3,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
+  const result=await produce(macroRegimeV2,[macroWork(fx,MACRO_S1)],produceCtx(db,inputsDb));
   expect(result.counts.inserted).toBe(1);
   expect(await db.getJudgment(result.items[0].judgment_id!)).toMatchObject({abstained:true,abstain_reason:'snapshot_not_published',inputs:[]});
  });
@@ -139,30 +138,30 @@ describe('macro_regime@v3 (Task 19)',()=>{
   ['equal states',{secondary_state:'recovery'}],['null margin',{margin_pp:null}],
   ['NaN margin',{margin_pp:NaN}],['infinite margin',{margin_pp:Infinity}],
  ])('compute rejects invalid snapshot: %s',async(_name,patch)=>{
-  const fx=base(),inputs=await macroRegimeV3.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+  const fx=base(),inputs=await macroRegimeV2.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
   if(!Array.isArray(inputs))throw new Error(inputs.reason);
   const snapshot=inputs.find(i=>i.kind==='macro_snapshot')!;
   Object.assign(snapshot.snapshot,patch);
-  expect(macroRegimeV3.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
+  expect(macroRegimeV2.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
  });
 
  it('allows norm sum roundoff within 1e-9',async()=>{
-  const fx=base(),inputs=await macroRegimeV3.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+  const fx=base(),inputs=await macroRegimeV2.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
   if(!Array.isArray(inputs))throw new Error(inputs.reason);
   const snapshot=inputs.find(i=>i.kind==='macro_snapshot')!;
   snapshot.snapshot.norm.recession+=5e-10;
-  expect(macroRegimeV3.compute(US,inputs).abstained).toBe(false);
+  expect(macroRegimeV2.compute(US,inputs).abstained).toBe(false);
  });
 
  it('accepts six-decimal classifier norms summing to 1.000002 but rejects 1.00001',async()=>{
-  const fx=base(),inputs=await macroRegimeV3.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
+  const fx=base(),inputs=await macroRegimeV2.gather(macroWork(fx,MACRO_S1),macroInputsDb(fx));
   if(!Array.isArray(inputs))throw new Error(inputs.reason);
   const snapshot=inputs.find(i=>i.kind==='macro_snapshot')!;
   snapshot.snapshot.norm={recovery:0.325758,overheat:0.234849,stagflation:0.219697,recession:0.219698};
   expect(Object.values(snapshot.snapshot.norm).reduce((a,b)=>a+b,0)).toBeCloseTo(1.000002,6);
-  expect(macroRegimeV3.compute(US,inputs).abstained).toBe(false);
+  expect(macroRegimeV2.compute(US,inputs).abstained).toBe(false);
   snapshot.snapshot.norm.recession=0.219706;
-  expect(macroRegimeV3.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
+  expect(macroRegimeV2.compute(US,inputs)).toEqual({abstained:true,reason:'invalid_snapshot'});
  });
 
  it('macro_regime_replay on the same vintage → recovery → hit',async()=>{
@@ -200,7 +199,7 @@ describe('macro_regime@v3 (Task 19)',()=>{
 
  it('acceptance example 1: the same snapshot produced twice → second run duplicates=1 and the row count is unchanged',async()=>{
   const {db,inputsDb,res}=await registerS1();
-  const again=await produce(macroRegimeV3,[macroWork(base(),MACRO_S1)],produceCtx(db,inputsDb));
+  const again=await produce(macroRegimeV2,[macroWork(base(),MACRO_S1)],produceCtx(db,inputsDb));
   expect(again.counts).toMatchObject({inserted:0,duplicates:1,quarantined:0,failed:0});
   expect(again.items[0]).toMatchObject({judgment_id:res.items[0].judgment_id,status:'duplicate'});
   expect(await db.judgmentsBySnapshot(MACRO_S1)).toHaveLength(1);
@@ -209,10 +208,10 @@ describe('macro_regime@v3 (Task 19)',()=>{
  it('draft override: nothing registers; --dry-run yields the same id and writes nothing',async()=>{
   const {ids}=await registerS1();
   const fx=base();const draft=await macroDb('draft');
-  const live=await produce(macroRegimeV3,[macroWork(fx,MACRO_S1)],produceCtx(draft,macroInputsDb(fx)));
+  const live=await produce(macroRegimeV2,[macroWork(fx,MACRO_S1)],produceCtx(draft,macroInputsDb(fx)));
   expect(live.items[0]).toMatchObject({status:'failed',code:'methodology_unavailable'});
   expect(await draft.judgmentsBySnapshot(MACRO_S1)).toEqual([]);
-  const dry=await produce(macroRegimeV3,[macroWork(fx,MACRO_S1)],produceCtx(draft,macroInputsDb(fx),{dryRun:true}));
+  const dry=await produce(macroRegimeV2,[macroWork(fx,MACRO_S1)],produceCtx(draft,macroInputsDb(fx),{dryRun:true}));
   expect(dry.items[0].judgment_id).toBe(ids[0]);
   expect(await draft.judgmentsBySnapshot(MACRO_S1)).toEqual([]);
  });
@@ -223,12 +222,12 @@ describe('macro_regime@v3 (Task 19)',()=>{
   const a=await db.judgmentsBySnapshot(MACRO_S1);const b=await db.judgmentsBySnapshot(MACRO_S2);
   expect(a).toHaveLength(1);expect(b).toHaveLength(1);expect(a[0]).not.toBe(b[0]);
   const s2=fx.snapshots.find(s=>s.snapshot_id===MACRO_S2)!;
-  const marker=await db.jobState('produce:macro_regime@v3');
+  const marker=await db.jobState('produce:macro_regime@v2');
   expect(marker?.state).toEqual({marker_created_at:s2.created_at,marker_snapshot_id:MACRO_S2});
   await compensateMacro(compensateCtx(db,inputsDb));
   expect(await db.judgmentsBySnapshot(MACRO_S1)).toEqual(a);
   expect(await db.judgmentsBySnapshot(MACRO_S2)).toEqual(b);
-  expect((await db.jobState('produce:macro_regime@v3'))?.state).toEqual(marker?.state);
+  expect((await db.jobState('produce:macro_regime@v2'))?.state).toEqual(marker?.state);
   const draft=await macroDb('draft');
   await compensateMacro(compensateCtx(draft,inputsDb));
   expect([...await draft.judgmentsBySnapshot(MACRO_S1),...await draft.judgmentsBySnapshot(MACRO_S2)]).toEqual([]);
@@ -236,9 +235,9 @@ describe('macro_regime@v3 (Task 19)',()=>{
 
  it('binding: a missing snapshot_id or a snapshot of another region / date abstains in gather',async()=>{
   const inputsDb=macroInputsDb(base());
-  expect(await macroRegimeV3.gather({subject:US,asOf:'2026-09-11',observedAt:'2026-09-11T23:00:00.000Z'},inputsDb)).toEqual({abstained:true,reason:'binding_missing',missing:['snapshot_id']});
-  expect(await macroRegimeV3.gather({subject:{type:'macro_region',key:'CN'},asOf:'2026-09-11',observedAt:'2026-09-11T23:00:00.000Z',binding:{snapshot_id:MACRO_S1}},inputsDb)).toEqual({abstained:true,reason:'binding_mismatch'});
-  expect(await macroRegimeV3.gather({subject:US,asOf:'2026-09-12',observedAt:'2026-09-12T23:00:00.000Z',binding:{snapshot_id:MACRO_S1}},inputsDb)).toEqual({abstained:true,reason:'binding_mismatch'});
+  expect(await macroRegimeV2.gather({subject:US,asOf:'2026-09-11',observedAt:'2026-09-11T23:00:00.000Z'},inputsDb)).toEqual({abstained:true,reason:'binding_missing',missing:['snapshot_id']});
+  expect(await macroRegimeV2.gather({subject:{type:'macro_region',key:'CN'},asOf:'2026-09-11',observedAt:'2026-09-11T23:00:00.000Z',binding:{snapshot_id:MACRO_S1}},inputsDb)).toEqual({abstained:true,reason:'binding_mismatch'});
+  expect(await macroRegimeV2.gather({subject:US,asOf:'2026-09-12',observedAt:'2026-09-12T23:00:00.000Z',binding:{snapshot_id:MACRO_S1}},inputsDb)).toEqual({abstained:true,reason:'binding_mismatch'});
  });
 
  it('compute / condition are byte-identical across 200 seeded input shuffles (spec §14.1 property)',async()=>{
@@ -247,10 +246,10 @@ describe('macro_regime@v3 (Task 19)',()=>{
   const claim=digest(row.claim);const cond=digest(row.condition);
   for(let k=0;k<200;k++){
    const inputs=shuffled(row.inputs,next);
-   const c=macroRegimeV3.compute(US,inputs);
+   const c=macroRegimeV2.compute(US,inputs);
    if(c.abstained)throw new Error(`abstained on shuffle ${k}: ${c.reason}`);
    expect(digest(c.claim)).toBe(claim);
-   expect(digest(macroRegimeV3.condition(US,inputs,c.claim))).toBe(cond);
+   expect(digest(macroRegimeV2.condition(US,inputs,c.claim))).toBe(cond);
   }
  });
 
@@ -270,8 +269,8 @@ describe('macro_regime@v3 (Task 19)',()=>{
 });
 
 it('regime selection, classifier and resolver closures are hashed without I/O shells',()=>{
- const hashed=new Set([...formulaHashOf(macroRegimeV3).closure,...macroRegimeV3.deps]);
- expect(macroRegimeV3.deps).not.toContain('src/lib/macro/flags.ts');
+ const hashed=new Set([...formulaHashOf(macroRegimeV2).closure,...macroRegimeV2.deps]);
+ expect(macroRegimeV2.deps).not.toContain('src/lib/macro/flags.ts');
  for(const entry of ['src/lib/macro/regime-selection.ts','src/lib/macro/regime.ts','src/lib/judgments/resolvers/macro.ts'])
   for(const file of importClosure(process.cwd(),entry))expect({file,hashed:hashed.has(file)}).toEqual({file,hashed:true});
  for(const file of ['src/lib/macro/read-api.ts','src/lib/macro/snapshots.ts','src/lib/macro/db.ts'])expect(hashed.has(file),file).toBe(false);
@@ -299,9 +298,9 @@ it('I/O shells import selection functions from regime-selection',()=>{
   expect(readFileSync(`src/lib/macro/${file}`,'utf8')).toMatch(new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*['\"]\\./regime-selection['\"]`));
 });
 
-it('pins the v3 selection-only hashed file list and formula_hash',()=>{
- const hash=formulaHashOf(macroRegimeV3);
- expect([...new Set([...hash.closure,...macroRegimeV3.deps])].sort()).toEqual([
+it('pins the v2 selection-only hashed file list and formula_hash',()=>{
+ const hash=formulaHashOf(macroRegimeV2);
+ expect([...new Set([...hash.closure,...macroRegimeV2.deps])].sort()).toEqual([
   'src/lib/data/kline/types.ts',
   'src/lib/data/sources/datagateway.ts',
   'src/lib/data/sources/eastmoney.ts',
@@ -319,7 +318,7 @@ it('pins the v3 selection-only hashed file list and formula_hash',()=>{
   'src/lib/judgments/inputs.ts',
   'src/lib/judgments/kline.ts',
   'src/lib/judgments/macro-api.ts',
-  'src/lib/judgments/methodologies/macro-regime.v3.ts',
+  'src/lib/judgments/methodologies/macro-regime.v2.ts',
   'src/lib/judgments/origins.ts',
   'src/lib/judgments/resolvers/macro.ts',
   'src/lib/judgments/resolvers/price-capabilities.ts',
@@ -335,7 +334,7 @@ it('pins the v3 selection-only hashed file list and formula_hash',()=>{
   'src/lib/research/ingest/pa-v1/json.js',
   'src/lib/supabase/database.types.ts',
  ]);
- expect(hash.formula_hash).toBe('f5d2d6cb32e21cd024e8189a806507371b8e25dfdc1399007476fb44cc83732c');
+ expect(hash.formula_hash).toBe('dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba');
 });
 
 it('sync dry-run plans a hashed, active, unpublished method with unverified licenses',async()=>{
@@ -346,16 +345,16 @@ it('sync dry-run plans a hashed, active, unpublished method with unverified lice
  const repo=validateLicenseTable(JSON.parse(readFileSync('docs/methodologies/licenses.json','utf8')));
  const licenses=validateLicenseTable(Object.fromEntries(Object.entries(repo).map(([k])=>[k,{status:'unverified',confirmed_by:null,confirmed_at:null,evidence:null}])));
  const db=memoryJudgmentsDb();
- const plan=await planMethodologySync([macroRegimeV3],db,{repoRoot:process.cwd(),codeVersion:MACRO_CODE_VERSION,licenses});
+ const plan=await planMethodologySync([macroRegimeV2],db,{repoRoot:process.cwd(),codeVersion:MACRO_CODE_VERSION,licenses});
  expect(planExitCode(plan)).toBe(0);
- expect(plan[0]).toMatchObject({key:'macro_regime@v3',action:'register',problems:[],row:{status:'active',publishable:false,formula_hash:formulaHashOf(macroRegimeV3).formula_hash}});
- expect(licenseProblems(macroRegimeV3,licenses).length).toBeGreaterThan(0);
+ expect(plan[0]).toMatchObject({key:'macro_regime@v2',action:'register',problems:[],row:{status:'active',publishable:false,formula_hash:formulaHashOf(macroRegimeV2).formula_hash}});
+ expect(licenseProblems(macroRegimeV2,licenses).length).toBeGreaterThan(0);
  expect(await db.methodology('macro_regime','v1')).toBeNull();
 });
 it('binding mismatch abstentions retain a buildable snapshot and stay discoverable',async()=>{
  const fx=base(),db=await macroDb('active'),inputsDb=macroInputsDb(fx);
  const work={...macroWork(fx,MACRO_S1),subject:{type:'macro_region' as const,key:'CN'}};
- const r=await produce(macroRegimeV3,[work],produceCtx(db,inputsDb));
+ const r=await produce(macroRegimeV2,[work],produceCtx(db,inputsDb));
  expect(r.counts.inserted).toBe(1);
  const ids=await db.judgmentsBySnapshot(MACRO_S1);
  expect(ids).toHaveLength(1);

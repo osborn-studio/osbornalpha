@@ -36,3 +36,9 @@ describe('GET /api/industries/[scheme]/[code]',()=>{
   expect((await (await get('sw2021','801120.SI','window=3y')).json()).error.code).toBe('invalid_parameter:window');
  });
 });
+
+it('validates detail metrics and durations for the requested scheme',async()=>{
+ for(const [scheme,query,param] of [['sic','metrics=roe','metrics'],['sw2021','metrics=net_margin','metrics'],['sic','durations=3M','durations']]){
+  const r=await get(scheme,'3674',query);expect(r.status).toBe(400);expect((await r.json()).error.code).toBe(`invalid_parameter:${param}`);
+ }
+});
