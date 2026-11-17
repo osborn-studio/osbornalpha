@@ -322,6 +322,24 @@ describe('LLM_BASE_URL override', () => {
     await chat(result!, { messages: [{ role: 'user', content: 'hello' }] });
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith('http://47.84.11.10/v1/chat/completions', expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer platform-test-key' }) }));
   });
+  it('preserves the relay model id through resolution and the request body', async () => {
+    const M = 'DeepSeek-V4.1-Flash-1017';
+    process.env.LLM_MODEL = M;
+    process.env.LLM_BASE_URL = 'http://47.84.11.10/v1';
+    process.env.LLM_BASE_URL_ALLOW_INSECURE = '1';
+    const result = resolvePlatformLlm();
+    expect(result?.model).toBe(M);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'ok' } }], usage: {} }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await chat(result!, { messages: [{ role: 'user', content: 'hello' }] });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      'http://47.84.11.10/v1/chat/completions', expect.any(Object),
+    );
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).model).toBe(M);
+  });
   it.each(['deepseek', 'unknown'])('rejects invalid overrides even with provider %s', (provider) => {
     process.env.LLM_PROVIDER = provider;
     process.env.LLM_BASE_URL = 'garbage';

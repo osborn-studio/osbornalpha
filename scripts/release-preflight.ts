@@ -1,4 +1,4 @@
-import { maxInputTokensFor, PRICING_VERSION } from '../src/lib/billing/llm-pricing';
+import { maxInputTokensFor, pricedAsModel, PRICING_VERSION } from '../src/lib/billing/llm-pricing';
 import { platformBaseUrl, platformBaseUrlErrorMessage } from '../src/lib/llm/platform-base-url';
 import { resolvePlatformLlm } from '../src/lib/llm/resolve';
 
@@ -25,7 +25,7 @@ if (!llm) {
   throw new Error('release preflight failed: platform LLM provider/key is not configured');
 }
 
-// Throws pricing_unavailable unless this exact production pair was reviewed.
+// Throws pricing_unavailable unless reviewed pricing is available for this pair.
 const maxInputTokens = maxInputTokensFor(llm.provider, llm.model);
 
 // Never print credentials or their fingerprints. This output is safe to retain
@@ -34,6 +34,7 @@ console.log(JSON.stringify({
   ok: true,
   provider: llm.provider,
   model: llm.model,
+  pricedAs: pricedAsModel(llm.provider, llm.model),
   baseUrlHost: override.kind === 'ok' ? override.host : null,
   baseUrlInsecure: override.kind === 'ok' && override.insecure,
   pricingVersion: PRICING_VERSION,

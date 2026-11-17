@@ -1,3 +1,5 @@
+import { platformBaseUrl } from '../llm/platform-base-url';
+
 export interface NormalizedUsage {
   inputTokens: number;
   cacheHitInputTokens: number;
@@ -165,10 +167,26 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
   };
 }
 
+// The relay's real price is not known to this code.
+// The operator states which reviewed entry to use for metering.
+// Audit rows retain the real model id and PRICING_VERSION.
+// Without a valid base URL override, an unknown model is never priced.
+export function pricedAsModel(provider: string, model: string): string {
+  if (PRICE_REGISTRY[`${provider}:${model}`]) return model;
+  const alias = process.env.LLM_PRICING_MODEL?.trim();
+  if (
+    platformBaseUrl().kind === 'ok'
+    && process.env.LLM_PROVIDER?.trim().toLowerCase() === provider
+    && model !== ''
+    && process.env.LLM_MODEL === model
+    && alias
+    && PRICE_REGISTRY[`${provider}:${alias}`]
+  ) return alias;
+  throw new Error('pricing_unavailable');
+}
+
 function pricingFor(provider: string, model: string): ModelPricing {
-  const pricing = PRICE_REGISTRY[`${provider}:${model}`];
-  if (!pricing) throw new Error('pricing_unavailable');
-  return pricing;
+  return PRICE_REGISTRY[`${provider}:${pricedAsModel(provider, model)}`];
 }
 
 export function maxInputTokensFor(provider: string, model: string): number {
