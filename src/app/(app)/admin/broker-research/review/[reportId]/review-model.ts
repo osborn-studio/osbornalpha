@@ -2,7 +2,7 @@
 // Pure model of the review page (spec §6.3, §9.5): payload normalisation, typed editing by field kind
 // (typed/1 shapes: decimals as strings, ISO currency, integer months, fraction pct, ISO date), live-row
 // grouping, open conflict groups, stale_run detection, blocker columns, page-text segmentation (UTF-16).
-import type {CorrectedValue,DocumentRow,FieldName,FieldRow,LicenceRow,ReportRow,ReviewPayload,TypedValue,ValueUnit} from '@/lib/broker-research/types';
+import type {CorrectedValue,DocumentRow,FieldName,FieldRow,LicenceRow,ReportRow,ReviewPayload,TypedValue,ValueUnit} from '@/lib/broker-research/public-types';
 
 const arr=<T>(v:unknown):T[]=>Array.isArray(v)?v as T[]:[];
 /** Guards the ★ GET reports/[reportId] body (contract ReviewPayload, built by C6) before the page uses it. */

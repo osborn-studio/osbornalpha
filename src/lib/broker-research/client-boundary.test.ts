@@ -5,7 +5,7 @@ import {expect,it} from 'vitest';
 
 const root=process.cwd();
 const broker=path.join(root,'src/lib/broker-research');
-const forbidden=new Set(['public-read.ts','db.ts','pg-db.ts','admin-read.ts','admin-document.ts','deps.ts','preview.ts'].map(file=>path.join(broker,file)));
+const forbidden=new Set(['public-read.ts','db.ts','pg-db.ts','admin-read.ts','admin-document.ts','deps.ts','preview.ts','public-flag.ts'].map(file=>path.join(broker,file)));
 const entities=path.join(root,'src/lib/entities');
 const options:ts.CompilerOptions={moduleResolution:ts.ModuleResolutionKind.Bundler,baseUrl:root,paths:{'@/*':['src/*']},allowJs:true};
 const files=(dir:string):string[]=>readdirSync(dir,{withFileTypes:true}).flatMap(entry=>{
@@ -33,6 +33,9 @@ for(const client of clients)it(`${path.relative(root,client)} keeps broker resea
    if(!specifier.startsWith('.')&&!specifier.startsWith('@/'))return;
    const target=ts.resolveModuleName(specifier,file,options,ts.sys).resolvedModule?.resolvedFileName;
    if(!target||!target.startsWith(path.join(root,'src')+path.sep))return;
+   if(!file.startsWith(broker+path.sep)&&target.startsWith(broker+path.sep)&&target!==path.join(broker,'public-types.ts')){
+    violations.push([...chain,file,target].map(part=>path.relative(root,part)).join(' -> '));return;
+   }
    // Other features may reference server DTOs with erased type imports. Broker
    // research types must still come from its explicitly client-safe modules.
    if(typeOnly&&!target.startsWith(broker+path.sep))return;

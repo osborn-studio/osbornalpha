@@ -1,8 +1,9 @@
 'use client';
 // Same-security, currency and institution history with SVG/table views (spec §9.3).
+import {InstitutionMark} from './ResearchShell';
 import {useEffect,useState} from 'react';
 import {useTranslations} from 'next-intl';
-import type {PublicHistoryRowDto} from '@/lib/broker-research/public-dto';
+import type {PublicHistoryRowDto} from '@/lib/broker-research/public-types';
 import {fmtNum,fmtPct,relChange,shortId,stepChart} from './format';
 import {CARD,EN,H2,SEG,TAG,TD,TH,segBtn} from './ui';
 const BOX={width:1000,height:220,left:60,right:20,top:20,bottom:30};
@@ -11,6 +12,6 @@ export function HistoryBlock({rows,institutionName,securityTicker,currency}:{row
  const t=useTranslations('foreign-research.public.history'),narrow=useNarrow(),[view,setView]=useState<'chart'|'table'>('chart');
  const sorted=[...rows].sort((a,b)=>(a.publishedDate??'').localeCompare(b.publishedDate??'')||a.reportId.localeCompare(b.reportId));
  const chart=stepChart(sorted.map(r=>({date:r.publishedDate??'',value:r.targetPrice,label:r.ratingNormalized??'—',reportId:r.reportId})),BOX);
- return <section className={CARD}><div className="flex flex-wrap items-center gap-2"><h2 className={H2}>{t('title')}<span className={EN}>{t('titleEn')}</span></h2><span className={TAG}>{t('judgment')}</span>{chart&&!narrow?<div className={SEG} role="group" aria-label={t('viewToggle')}>{(['chart','table'] as const).map(v=><button key={v} type="button" className={segBtn(view===v)} onClick={()=>setView(v)}>{t(v)}</button>)}</div>:null}</div>
+ return <section className={CARD}><div className="flex flex-wrap items-center gap-2"><h2 className={H2}>{t('title')}<span className={EN}>{t('titleEn')}</span></h2><InstitutionMark institution={institutionName}/><span className={TAG}>{t('judgment')}</span>{chart&&!narrow?<div className={SEG} role="group" aria-label={t('viewToggle')}>{(['chart','table'] as const).map(v=><button key={v} type="button" className={segBtn(view===v)} onClick={()=>setView(v)}>{t(v)}</button>)}</div>:null}</div>
  {!rows.length?<p>{t('none')}</p>:view==='chart'&&chart&&!narrow?<svg viewBox={`0 0 ${BOX.width} ${BOX.height}`} width="100%" role="img" aria-label={t('chartLabel',{institution:institutionName,ticker:securityTicker,n:chart.dots.length})}><path d={chart.path} fill="none" stroke="var(--accent)" strokeWidth="2"/>{chart.dots.map(d=><circle key={d.reportId} cx={d.cx} cy={d.cy} r="5" fill="var(--bg-elevated)" stroke="var(--accent)"><title>{`${d.date} · ${fmtNum(d.value)} ${currency??''}`}</title></circle>)}{chart.yTicks.map(k=><text key={k.y} x="2" y={k.y} fill="var(--text-dim)" fontSize="11">{k.label}</text>)}</svg>:<div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm"><thead><tr>{(['range','rating','target','change','reportIds','availableAt','versions'] as const).map(k=><th scope="col" className={TH} key={k}>{t(`columns.${k}`,{currency:currency??'—'})}</th>)}</tr></thead><tbody>{[...sorted].reverse().map(r=><tr key={r.reportId} className="border-t border-border"><td className={TD}>{r.prevPublishedDate??'—'} → {r.publishedDate??'—'}</td><td className={TD}>{r.prevRatingNormalized??'—'} → {r.ratingNormalized??'—'}</td><td className={TD}>{fmtNum(r.prevTargetPrice)} → {fmtNum(r.targetPrice)}</td><td className={TD}>{fmtPct(relChange(r.prevTargetPrice,r.targetPrice),{signed:true})}</td><td className={TD}>{shortId(r.prevReportId)} → {shortId(r.reportId)}</td><td className={TD}>{r.availableAt??'—'}</td><td className={TD}>{r.upsideFormulaVersion??'—'} · {r.codeVersion??'—'}</td></tr>)}</tbody></table></div>}</section>;
 }

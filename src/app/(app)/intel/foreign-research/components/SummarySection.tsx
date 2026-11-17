@@ -1,9 +1,9 @@
 'use client';
 // Plain-text independent summary and grounded numeric source links (spec §9.3).
 import {useLocale,useTranslations} from 'next-intl';
-import type {FieldName} from '@/lib/broker-research/types';
-import type {PublicReportDetailDto} from '@/lib/broker-research/public-dto';
-import {TARGET_PRICE_FIELDS} from '@/lib/broker-research/public-dto';
+import type {FieldName} from '@/lib/broker-research/public-types';
+import type {PublicReportDetailDto} from '@/lib/broker-research/public-types';
+import {TARGET_PRICE_FIELDS} from '@/lib/broker-research/public-types';
 import {fmtNum,fmtPct} from './format';
 import {CARD,EN,H2,SRC_BTN,TAG,TINY} from './ui';
 export function SummarySection({summaries,targetPricePublic,onOpenFact}:{summaries:PublicReportDetailDto['summaries'];targetPricePublic:boolean;onOpenFact?:(targetKey:string,field:FieldName,label:string,value:string)=>void}){

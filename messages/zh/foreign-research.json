@@ -35,17 +35,18 @@
         "institution": "机构",
         "security": "标的",
         "title": "标题",
-        "published": "日期",
-        "rating": "评级 原文 / 标准化",
+        "published": "发布日期",
+        "rating": "标准化评级",
         "target": "目标价",
         "upside": "空间 · 派生",
-        "summary": "摘要"
+        "summary": "摘要",
+        "original": "原文"
       },
-      "hasSummary": "有 AI 摘要",
+      "hasSummary": "有",
       "summaryShort": "AI 摘要",
       "judgment": "第三方判断（未结算）",
       "upsideDerived": "空间 {value}（派生）",
-      "upsideNote": "空间 = 目标价 / 报告时价格 − 1（派生 · upside/1，同币种）。评级、目标价与空间是第三方判断（未结算）。不显示最新价。",
+      "upsideNote": "发布日期、机构、标的与标题是元数据；评级与目标价为机构观点。",
       "prev": "上一页",
       "next": "下一页 →",
       "loading": "加载中",
@@ -61,7 +62,12 @@
         "title": "没有符合条件的报告",
         "unknownTicker": "没有找到这个标的",
         "clear": "清除筛选"
-      }
+      },
+      "rawRating": "原文：{raw}",
+      "noSummary": "无",
+      "originalRestricted": " · 不公开",
+      "unknownInstitution": "未提供机构",
+      "originalState": "受限"
     },
     "title": {
       "translated": "译",
@@ -71,7 +77,7 @@
     },
     "target": {
       "notPublic": "—（许可不允许公开）",
-      "absent": "—（报告未给出）"
+      "absent": "报告未给出"
     },
     "notFound": {
       "report": {
@@ -97,7 +103,12 @@
       "derived": "派生值",
       "judgment": "第三方判断（未结算）",
       "privateLibrary": "私有馆藏（不对外提供原文）",
-      "snippet": "片段"
+      "snippet": "片段",
+      "publishedAt": "发布快照时间",
+      "extractionModel": "提取 / 模型 ID",
+      "summaryPublic": "摘要许可",
+      "allowed": "允许公开",
+      "notAllowed": "不允许公开"
     },
     "provenance": {
       "llmConfirmed": "LLM 抽取 + 人工确认",
@@ -122,9 +133,9 @@
       "months": "{n} 个月",
       "upsideFormula": "目标价 / 报告时价格 − 1，同币种",
       "kind": {
-        "judgment": "第三方判断（未结算）",
+        "judgment": "未结算",
         "assumption": "第三方假设 · 文件所载",
-        "derivedJudgment": "派生 · {version} · 第三方判断（未结算）"
+        "derivedJudgment": "派生 · {version} · 未结算"
       },
       "columns": {
         "field": "字段",
@@ -160,7 +171,7 @@
       "title": "评级与目标价历史",
       "titleEn": "History",
       "scope": "同机构 · 同证券 · 同币种",
-      "judgment": "第三方判断（未结算）",
+      "judgment": "未结算",
       "viewToggle": "切换图表与表格",
       "chart": "图",
       "table": "表",
@@ -181,7 +192,7 @@
       "title": "跨机构分歧",
       "titleEn": "Cross-institution spread",
       "scope": "{ticker} · {currency} · 各机构最近一篇 · {months} 个月窗口",
-      "judgment": "第三方判断（未结算）",
+      "judgment": "未结算",
       "viewToggle": "切换图表与表格",
       "chart": "图",
       "table": "表",
@@ -247,6 +258,12 @@
       "title": "馆藏研报（{n}）",
       "titleEn": "Library reports",
       "all": "全部 →"
+    },
+    "foundation": {
+      "scope": "私有馆藏的结构化元数据。原文不对外提供；摘要为 OsbornAlpha 独立生成。评级与目标价是机构观点，不是本站事实。",
+      "judgment": "机构观点",
+      "source": "各机构发布的报告（许可登记见管理页）",
+      "ownership": "机构观点归各机构所有，本站只陈列其元数据。"
     }
   },
   "rating": {
@@ -797,7 +814,20 @@
         "add": "新增分析师",
         "public": "公开署名",
         "confirm": "切换公开署名会把相关已批准片段 / 摘要退回草稿，需重新批准。继续？"
-      }
+      },
+      "columns": {
+        "institution": "机构",
+        "scale": "评级量表",
+        "analysts": "分析师",
+        "reports": "报告",
+        "licence": "许可",
+        "edit": "编辑"
+      },
+      "mapped": "{n} 档 · 已映射",
+      "noScale": "无当前映射",
+      "unavailable": "未提供",
+      "readLimit": "现有读取未提供报告数量、机构许可状态或未映射标签清单。编辑映射需先关闭旧行，再新增量表行；不支持原地修改或保存“未映射”。",
+      "saveMapping": "保存映射（新增量表行）"
     }
   }
 }

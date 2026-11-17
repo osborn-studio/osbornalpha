@@ -7,9 +7,9 @@ import {useState} from 'react';
 import Link from 'next/link';
 import {useRouter} from 'next/navigation';
 import {useLocale,useTranslations} from 'next-intl';
-import type {DocumentRow,LicenceRow,ReportRow,RunRow,PurgeStepRow} from '@/lib/broker-research/types';
+import type {DocumentRow,LicenceRow,ReportRow,RunRow,PurgeStepRow} from '@/lib/broker-research/public-types';
 interface DocumentPageData{document:DocumentRow;licence:LicenceRow|null;report:ReportRow|null;runs:RunRow[];purgeSteps:PurgeStepRow[]}
-import type {PurgeStep} from '@/lib/broker-research/types';
+import type {PurgeStep} from '@/lib/broker-research/public-types';
 import {fmtInstant,shortId} from '@/app/(app)/intel/foreign-research/components/format';
 import {BTN,CARD,CARD_FLUSH,CHIP,H1,H2,INPUT,TD,TH,TINY} from '@/app/(app)/intel/foreign-research/components/ui';
 import {BTN_PRIMARY,CHIP_ACCENT,CHIP_DANGER,CHIP_WARN,ERROR_BAR,FIELD_LABEL,H3} from '../../review/[reportId]/review-model';
