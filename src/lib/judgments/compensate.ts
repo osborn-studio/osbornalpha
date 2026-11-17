@@ -1,6 +1,6 @@
 // src/lib/judgments/compensate.ts
 // Settle cron step 0 (spec §7.1, audits F28/G25/N2): the macro producer's compensation scan. The marker
-// judgment_job_state[jobKey('produce','macro_regime','v3')] = {marker_created_at, marker_snapshot_id, ...} names the last
+// judgment_job_state[jobKey('produce','macro_regime','v1')] = {marker_created_at, marker_snapshot_id, ...} names the last
 // macro snapshot handled; MacroReadApi.snapshotsSince(marker, 200) lists the later ones in (created_at, snapshot_id)
 // order. A non-failed snapshot without a judgment (GIN inputs containment, abstentions included) is produced with
 // binding {snapshot_id}; the marker advances after every finished snapshot (produced, duplicate, already present, or
@@ -12,7 +12,7 @@
 // scan goes on, reporting a NON-info compensation_skipped (plan decision T-07). An abort is never a produce failure. Reads are
 // raced against a signal that combines the run's with the scan's OWN budget (T2-03); produce is NOT raced (T2-01): a mutating item is
 // awaited and cancels cooperatively through deps.signal (checked right before its register RPC), a deferred result being a stop, not a failure. The macro module not landed (MacroUnavailable) → skipped with info
-// macro_unavailable; macro_regime@v3 not in REGISTRY yet → skipped silently. produce counts go to the produce batch
+// macro_unavailable; macro_regime@v2 not in REGISTRY yet → skipped silently. produce counts go to the produce batch
 // (dataset judgments.produce.macro_regime); the settle receipt gets the scan's errors. Budget: deadlineAt (default start + 60 s).
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,TriggeredBy} from '../dq/batches';
@@ -27,8 +27,7 @@ import {REGISTRY} from './registry';
 import {resolverFor} from './resolvers';
 import type {JudgmentInputsDb,JudgmentsDb,MacroSnapshotRow,Methodology} from './types';
 
-import {MACRO_METHOD} from './macro-method';
-export {MACRO_METHOD} from './macro-method';
+export const MACRO_METHOD={id:'macro_regime',version:'v2'} as const;
 export const SNAPSHOT_PAGE=200;
 export const COMPENSATION_BUDGET_MS=60_000;
 /** Consecutive failing runs after which a snapshot is skipped with a visible error (plan decision T-07). */
