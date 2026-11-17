@@ -3,7 +3,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 
 const requests=new AsyncLocalStorage<{id?:string}>();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PATH='/rest/v1/rpc/macro_put_manifest_json';
+const PATHS=['/rest/v1/rpc/macro_put_manifest_json','/rest/v1/rpc/macro_put_manifest_gz'];
 export function withManifestRequest<T>(run:()=>Promise<T>):Promise<T>{return requests.run({},run);}
 export function manifestRequestId():string|undefined{return requests.getStore()?.id;}
 
@@ -14,7 +14,7 @@ export function manifestFetch(fetcher:typeof fetch=fetch):typeof fetch{
   try{
    const method=init?.method??(input instanceof Request?input.method:'GET');
    const url=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);
-   if(method==='POST'&&url.pathname===PATH&&!url.search&&!url.hash){scope=requests.getStore();if(scope)scope.id=undefined;}
+   if(method==='POST'&&PATHS.includes(url.pathname)&&!url.search&&!url.hash){scope=requests.getStore();if(scope)scope.id=undefined;}
   }catch{/* Metadata inspection must not affect the request. */}
   // Clear before fetch so network failures cannot inherit a previous response ID.
   const response=await fetcher(input,init);
