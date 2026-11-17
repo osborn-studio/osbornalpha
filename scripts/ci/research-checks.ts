@@ -41,6 +41,9 @@ criticalSuites.push('src/lib/judgments/integration/macro-bridge.integration.test
 // FOREIGN ↓ broker research critical suites
 criticalSuites.push('src/lib/broker-research/broker-research.integration.test.ts', 'src/lib/broker-research/pipeline.integration.test.ts');
 // FOREIGN ↑
+// TOPICS ↓ topic research critical suites
+criticalSuites.push('src/lib/topics/topics.integration.test.ts');
+// TOPICS ↑
 
 export function migrationInventory(root = process.cwd()) {
   const directory = join(root, 'supabase/migrations');
