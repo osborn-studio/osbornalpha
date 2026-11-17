@@ -1,4 +1,4 @@
--- supabase/migrations/20261201092000_broker_research_views.sql
+-- supabase/migrations/20261202092000_broker_research_views.sql
 -- FR-0 (spec §4.11, §4.13): the only public read path. Ten views owned by the migration role,
 -- security_invoker=false + security_barrier=true, so anon/authenticated read through them with
 -- the owner's rights while every base table stays service_role-only. No view calls a function

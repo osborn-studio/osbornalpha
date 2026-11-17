@@ -48,7 +48,7 @@ describe('evaluateRules — happy path',()=>{
   expect(RULES_PARAMS).toEqual({upsideTolerance:'0.005',versionWindowDays:7,versionJaccard:{num:4,den:5}});
  });
  it('BLOCKING_REASONS equals the SQL blocker-10 set and the memory implementation set',()=>{
-  const sql=readFileSync(new URL('../../../supabase/migrations/20261201091000_broker_research_functions.sql',import.meta.url),'utf8');
+  const sql=readFileSync(new URL('../../../supabase/migrations/20261202091000_broker_research_functions.sql',import.meta.url),'utf8');
   const m=/q\.reason_code in \(([^)]*)\)/.exec(sql);
   expect(m).not.toBeNull();
   expect(m![1].split(',').map(x=>x.trim().replace(/^'|'$/g,'')).sort()).toEqual([...BLOCKING_REASONS].sort());
@@ -56,7 +56,7 @@ describe('evaluateRules — happy path',()=>{
  });
  it('rating label key equals SQL lower(btrim(label))',()=>{
   expect(ratingKey('  Overweight ')).toBe('overweight');
-  const sql=readFileSync(new URL('../../../supabase/migrations/20261201091000_broker_research_functions.sql',import.meta.url),'utf8');
+  const sql=readFileSync(new URL('../../../supabase/migrations/20261202091000_broker_research_functions.sql',import.meta.url),'utf8');
   expect(sql).toContain('lower(btrim(s.raw_label)) = lower(btrim(v.rating_raw))');
  });
 });

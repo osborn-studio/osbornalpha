@@ -69,7 +69,7 @@
 | 11. LLM | `resolvePlatformLlm()` 只解析配置；注册表快照 `src/lib/llm/registry/{models,providers}.json`；`ajv@8.20.0`；**没有** PDF 解析依赖 | 原始请求 / 响应由本模块留存（§4.3） |
 | 12. cron | `vercel.json` 七个 cron（含计划二的 `/api/cron/facts-sync?market=US`，新增时保留）；`CRON_SECRET` Bearer + `timingSafeEqual`；`maxDuration=300`；hnd1 | 新增每日核验 cron 与 outbox 投递 cron（§8.3） |
 | 13. 测试门禁 | `criticalSuites` 精确清单；`scripts/ci/research-db.ts` 起隔离 PostgreSQL；`scripts/s4/local-db.ts` 只建 `storage.buckets` 桩表 | SQL 集成套件进 critical；存储 HTTP 套件另设 `test:storage` |
-| 14. 迁移 | 最新已锁 `20261106090000_financial_facts.sql`（计划二）；并行模块已占 `20261107…`–`20261111…`；`database.types.ts` 手工维护 | 本规格迁移 `20261201090000_broker_research.sql`（本模块只用 `20261125HHMMSS_*`；锁文件只追加） |
+| 14. 迁移 | 最新已锁 `20261106090000_financial_facts.sql`（计划二）；并行模块已占 `20261107…`–`20261111…`；`database.types.ts` 手工维护 | 本规格迁移 `20261202090000_broker_research.sql`（本模块只用 `20261125HHMMSS_*`；锁文件只追加） |
 | 15. i18n | `messages/{zh,en}/*.json` + parity 测试 | 新增 `intel.foreignResearch.*`、`admin.brokerResearch.*` |
 | 16. 对方页面 | `REPORT.md` 第 58 行；总纲 §3.1：301 篇一页纸（机构、行业、评级、中英标题、当前价 / 目标价 / 空间、报告定位、核心结论、方法论、风险、代码与日期、分类计数）；交互未验证 | 只作功能参考；§3 逐项分类；不导入任何数据 |
 
@@ -98,7 +98,7 @@
 
 ## 4. 数据模型
 
-迁移 `supabase/migrations/20261201090000_broker_research.sql`（如需拆分，同日 `20261125HHMMSS_*`），可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
+迁移 `supabase/migrations/20261202090000_broker_research.sql`（如需拆分，同日 `20261125HHMMSS_*`），可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
 
 表清单（21 张）：`broker_research_settings`、`broker_report_licences`、`broker_report_upload_intents`、`broker_report_documents`、`broker_report_runs`、`broker_research_reports`、`broker_report_targets`、`broker_report_target_overrides`、`broker_report_fields`、`broker_report_snippets`、`broker_report_summaries`、`broker_report_publications`、`broker_report_rule_receipts`、`broker_purge_steps`、`research_institutions`、`research_rating_scales`、`research_analysts`、`broker_report_analysts`、`broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`。
 
@@ -886,7 +886,7 @@ Codex 两轮 + 处置（本目录）；每日核验（漂移即隐藏）；规�
 | R1-6 | 阻断第 13 条的覆盖要求扩大为"报告一旦含 LLM 生效行，所有生效字段"（含人工行），取代 A 的"只要求 LLM 字段" | §4.4 第 13 条 | 回到规格字面（P-R1-12；替换 A 部分的对应偏差） |
 | R1-7 | 黄金集评测：每篇文档先过与 `claimForProcessing` 相同的处理授权检查再外发，记录授权的许可版本；`--dry-run` 不调用 LLM；类型化值逐分量比较 | §11.3、§4.1 | P-R1-01、P-R1-11（C8） |
 | R4-1 | 撤回立即隐藏；清除先持久化 purge_requested_at/by，再取租约并删除已知路径，步骤完成可写 purged_at。每日对账只处理清除意向文档，pending 永久保持可扫；仅确认完成且 finished_at 后删除成功才 reconciled。持久重试调度与每调用截止保护核验预算。迟到对象落地后的下一次每日运行继续删除（存储故障时退避重试），没有有限时间界或存储生命周期规则；owner 可另行配置 | §1.2、§6.5、§8.3、§17 | Commander 第六轮设计决定；A1/A4/A5/C1/C4/C7/C8/E1 |
-| N1 | 三份迁移最终编号 `20261201090000/091000/092000`（实施中依次用过 `20261113*`、`20261117*`、`20261119*`、`20261125*`），合并前不进 `supabase/migrations.lock.json` | §3、§14 | 排在 main 已锁定的最新迁移之后；合并并在生产应用后由 owner 加锁 |
+| N1 | 三份迁移最终编号 `20261202090000/091000/092000`（实施中依次用过 `20261113*`、`20261117*`、`20261119*`、`20261125*`、`20261201*`；最后一次因与 `20261201090000_facts_read_batch.sql` 撞号改为 `20261202*`），合并前不进 `supabase/migrations.lock.json` | §3、§14 | 排在 main 已锁定的最新迁移之后；合并并在生产应用后由 owner 加锁 |
 | N2 | 本模块的数据库类型放在 `src/lib/broker-research/database-types.ts`（`BrokerDatabase`），不改 `src/lib/supabase/database.types.ts` | §3 | 该文件在 `macro_regime@v2` 公式哈希闭包内，必须与 main 字节一致 |
 | N3 | 客户端组件只能引用 `src/lib/broker-research/public-types.ts`；`client-boundary.test.ts` 覆盖公开页、个股页与管理员页 | §9 | `public-read.ts` 等含 `node:crypto` 与 service_role 读取，不能进客户端包 |
 | N4 | 个股页"馆藏研报"块挂在 main 的新外壳 `CompanyPage.tsx` 概览视图下方（非历史回放时），不在 `page.tsx` | §9.4 | main 重写了个股页外壳；合并规则是共享文件以 main 为准 |
@@ -909,7 +909,7 @@ Codex 两轮 + 处置（本目录）；每日核验（漂移即隐藏）；规�
 
 **门禁结果**（2026-11-17，提交 `2a1825a9`）：`npm run typecheck` ✓；`npm run lint` ✓；`npm test` ✓（827 文件 / 9406 用例通过，55 文件 / 908 用例因未设 `S4_TEST_STATE` 跳过，无 flake）；`npm run build` ✓；`npm run test:migrations` ✓（PG17，全新库与升级库一致）；PG17 上本模块两个套件 ✓（`pipeline.integration.test.ts` 10/10、`broker-research.integration.test.ts` 68/68）；`scripts/ci/research-checks.ts` ✓。未在本机运行：全量 `npm run test:db`（其余模块的套件交给 PR 的 CI；本机 16 GB 内存一次只跑一个重任务）；`npm run check:migration-history`（需要生产库导出）；`test:storage`（FR-6 前人工门禁）。本地走查受限：本机没有 Supabase 栈，只确认了 `/intel/foreign-research` 在读取失败时显示"加载失败，不显示示例数据"、公开 API 返回 500 `internal`、`/admin/broker-research` 未登录跳登录页；有数据的页面流程只由组件测试与 PG17 套件覆盖，未在浏览器里看过。
 
-**合并后 owner 事项**：生产迁移三份（`20261201090000/091000/092000`）与建私有桶，应用后加锁；D1 许可确认；O13 与 F3 作者确认解析产物归属；O14 黄金集批准与 `eval-gold.ts` 回执；本地 Supabase 栈跑 `npm run test:storage` 并把回执提交到审计目录；首篇发布后登记核验 cron，F4 上线后登记 outbox cron（`docs/runbooks/broker-research.md` §3）；FR-6 开关（runbook §2）。
+**合并后 owner 事项**：生产迁移三份（`20261202090000/091000/092000`）与建私有桶，应用后加锁；D1 许可确认；O13 与 F3 作者确认解析产物归属；O14 黄金集批准与 `eval-gold.ts` 回执；本地 Supabase 栈跑 `npm run test:storage` 并把回执提交到审计目录；首篇发布后登记核验 cron，F4 上线后登记 outbox cron（`docs/runbooks/broker-research.md` §3）；FR-6 开关（runbook §2）。
 
 ---
 

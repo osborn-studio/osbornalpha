@@ -1,4 +1,4 @@
--- supabase/migrations/20261201091000_broker_research_functions.sql
+-- supabase/migrations/20261202091000_broker_research_functions.sql
 -- FR-0 (spec §4.4–§4.8, §6.2, §6.3, §6.5, §7.3, §10.2): every SQL function of the broker research
 -- module and the triggers that depend on them. Hashes are computed HERE only (plan 契约补充):
 -- broker_report_live_digests recomputes effective_hash / rules_input_hash / summary_input_digest
