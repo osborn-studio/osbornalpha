@@ -1,0 +1,11 @@
+[
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "path": "node_modules/@parcel/watcher/node_modules/picomatch",
+    "installed": "4.0.5",
+    "maxVulnerable": "4.0.7",
+    "expires": "2026-12-01",
+    "reason": "No patched picomatch exists (latest 4.0.7, advisory range <= 4.0.7). Only production path is next-intl -> @parcel/watcher; absent from the production build output; receives three constant ignore globs and the watcher is not started (no experimental.extract). Owner decision 2026-11-17: 14-day exception. Remove when a fixed picomatch is released."
+  }
+]
