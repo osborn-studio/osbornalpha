@@ -23,6 +23,22 @@ describe('pricing defaults', () => {
 });
 
 describe('normalizeUsage', () => {
+  it('preserves relay completion totals including reasoning tokens and zero cached tokens', () => {
+    expect(normalizeUsage({
+      prompt_tokens: 12,
+      completion_tokens: 40,
+      total_tokens: 52,
+      completion_tokens_details: { reasoning_tokens: 38 },
+      prompt_tokens_details: { cached_tokens: 0 },
+    })).toEqual({
+      inputTokens: 12,
+      outputTokens: 40,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 12,
+      estimated: false,
+    });
+  });
+
   it('normalizes DeepSeek cache-hit and cache-miss detail', () => {
     expect(normalizeUsage({
       prompt_tokens: 1_000,
@@ -325,7 +341,7 @@ describe('DeepSeek pricing', () => {
 });
 
 describe('LLM_PRICING_MODEL alias', () => {
-  const M = 'DeepSeek-V4.1-Flash-1017';
+  const M = 'deepseek-v4.1-flash-1017';
   const reviewed = 'deepseek-v4-flash';
   const usage = normalizeUsage({
     prompt_tokens: 1_000, prompt_cache_hit_tokens: 300,
@@ -392,7 +408,7 @@ describe('LLM_PRICING_MODEL alias', () => {
 
   it('requires the exact model case and matching provider argument', () => {
     enableAlias();
-    expectUnpriced('deepseek', 'deepseek-v4.1-flash-1017');
+    expectUnpriced('deepseek', 'DeepSeek-V4.1-Flash-1017');
     expectUnpriced('openai');
   });
 

@@ -322,8 +322,7 @@ describe('LLM_BASE_URL override', () => {
     await chat(result!, { messages: [{ role: 'user', content: 'hello' }] });
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith('http://47.84.11.10/v1/chat/completions', expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer platform-test-key' }) }));
   });
-  it('preserves the relay model id through resolution and the request body', async () => {
-    const M = 'DeepSeek-V4.1-Flash-1017';
+  it.each(['deepseek-v4.1-flash-1017', 'DeepSeek-V4.1-Flash-1017'])('preserves the relay model id through resolution and the request body: %s', async (M) => {
     process.env.LLM_MODEL = M;
     process.env.LLM_BASE_URL = 'http://47.84.11.10/v1';
     process.env.LLM_BASE_URL_ALLOW_INSECURE = '1';
