@@ -21,7 +21,7 @@ export async function mapBounded<T,R>(xs:readonly T[],fn:(x:T)=>Promise<R>,limit
  if(failed)throw error;return out;
 }
 type SampleValue={value:string|null;n_with_data:number};
-export interface AggregationPreview{industriesMinMembers:number;displayableValueCells:number;sample:{code:string;n_members:number;revenue_sum:SampleValue|null;net_margin:SampleValue|null}[]}
+export interface AggregationPreview{roleReasons?:Record<string,number>;industriesMinMembers:number;displayableValueCells:number;sample:{code:string;n_members:number;revenue_sum:SampleValue|null;net_margin:SampleValue|null}[]}
 export function aggregationPreview(rows:readonly StagedMetricCell[]):AggregationPreview{
  const latest=rows.map(r=>r.period_end).sort().at(-1);
  const codes=[...new Set(rows.map(r=>r.code))];

@@ -135,7 +135,7 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
   case 'aggregate':case 'aggregate-sic':{
    const r=job==='aggregate-sic'?await runIndustryAggregationUs(deps,{factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,dryRun:opts.dryRun}):await runIndustryAggregation(deps,{scheme:'sw2021',version:'2021',level:1,factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,...(opts.dryRun?{dryRun:true}:{})});
    return {job,receipt:{batchId:r.batchId,status:r.status==='dry_run'?'dry_run':r.status==='active'?receiptStatus(r.batchStatus):'failed',...(r.preview?{preview:r.preview}:{}),
-    counts:{groups:r.groups,reused_groups:r.reusedGroups,cells_ok:r.cells.ok,cells_missing:r.cells.missing,manifest_mismatches:r.manifestMismatches,read_truncated:r.truncatedIssuers.length,...(r.preview?{industries_min_members:r.preview.industriesMinMembers,displayable_value_cells:r.preview.displayableValueCells}:{})},
+    counts:{...prefixed(r.timings??{},'ms_'),groups:r.groups,reused_groups:r.reusedGroups,cells_ok:r.cells.ok,cells_missing:r.cells.missing,manifest_mismatches:r.manifestMismatches,read_truncated:r.truncatedIssuers.length,...(r.preview?{industries_min_members:r.preview.industriesMinMembers,displayable_value_cells:r.preview.displayableValueCells}:{})},
     errors:r.code?[{code:r.code,...(r.runId?{key:r.runId}:{})}]:[]}};
   }
  }

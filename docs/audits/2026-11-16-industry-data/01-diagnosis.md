@@ -66,9 +66,13 @@ Not a table but the same symptom: the industry page for `scheme=sic` renders the
    no way to show what a run would publish. Fix: compute everything, write nothing.
 3. **Freshness for the aggregate job.** `recordAttempt('industry.agg.<scheme>', weekly)` exists in the runner; no row
    exists only because no run ever started.
-4. **Observed, outside this module (follow-up, not fixed here):** 237 of 814 US scope issuers never had a successful
-   facts sync and the last `facts.us` batch reported 12 failures out of 25. This caps US coverage at 577 / 811 members;
-   the industry cells show it as coverage, they do not hide it.
+4. **US facts coverage (root cause found 2026-11-17, fixed in a separate PR).** 235 of 814 US scope issuers have
+   `last_status='failed'`; 232 of them fail every sync with `parse_error`. Cause: the SEC `companyfacts` API returns
+   the top-level `cik` as a number for older registrants (`"cik":320193`) and as a zero-padded string for newer ones
+   (`"cik":"0001991792"`); `decodeCompanyFacts` accepts only the number. Until that fix is deployed and the facts
+   worker has re-synced them, US coverage is 577 / 811 members and the largest industries sit below the 0.8 display
+   threshold (7372: 43 of 69 members with data). The cells show this as "low coverage"; they do not hide it and the
+   threshold is not lowered to make numbers appear.
 
 ## 4. Licence terms read on 2026-11-16
 

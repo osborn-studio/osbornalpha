@@ -95,6 +95,20 @@ answering `deferred_i3` until that plan ships.
 **Confirm:** whether any valuation series may be public once H and A2 are settled. Default stays "not published".
 No command until I-3 exists.
 
+## Dry-run evidence (production reads, nothing written)
+
+Run from a clean checkout with the production env on 2026-11-16 / 2026-11-17:
+
+| Job (dry run) | Result |
+|---|---|
+| `load-a-share` | 5,579 candidates; 343 skipped as delisted; 1 rejected `ts_code` |
+| `memberships-sw` | on main: `no_classifications` (no SW tree stored, so no preview). This change set makes the dry run fetch the tree in memory and report node counts per level and the planned source fetches |
+| `facts-scope` | industry universe 3; 5,576 active `a_stock` tickers skipped as `industry_unknown_ticker` (issuers not loaded) |
+| `aggregate-sic` (new) | 1,332 groups (444 codes × FY2023–FY2025); 3,152 cells with a value, 6,172 missing with a reason; 0 manifest mismatches; 0 truncated reads; 37 industries with ≥ 5 members; 110 value cells pass both display thresholds today (coverage is capped by the facts bug in `01-diagnosis.md` §3.4) |
+
+Production Vercel env (names only): `FACTS_CN_ENABLED`, `FACTS_CN_INDUSTRY_UNIVERSE` and
+`INDUSTRY_JUDGMENTS_ENABLED` are not set.
+
 ## US aggregates (this change set) — what you approve by merging
 
 - Spec amendment A1 (§19): US SIC industries are aggregated from EDGAR facts using **the constituents as of the run

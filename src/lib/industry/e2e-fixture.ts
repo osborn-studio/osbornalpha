@@ -97,7 +97,7 @@ const TREE=[
 const MEMBERS=[
  ...([['3674',6],['7372',2]] as const).flatMap(([code,n])=>Array.from({length:n},(_,i)=>membershipRow({
   membership_id:`sic-${code}-${i}`,issuer_id:`sic-${code}-${i}`,scheme:'sic',version:'sec-current',code,
-  source:'sec:submissions',source_membership_id:null,provenance:{availability:'observed_at',raw_hash:null,locator:null},
+  source:'sec:submissions',source_membership_id:null,provenance:{availability:'observed'},
  }))),
  membershipRow(),membershipRow({membership_id:'dddddddd-dddd-4ddd-8ddd-dddddddddd02',level:2,code:'801124.SI'}),membershipRow({membership_id:'dddddddd-dddd-4ddd-8ddd-dddddddddd03',level:3,code:'850111.SI'}),
  membershipRow({membership_id:'dddddddd-dddd-4ddd-8ddd-dddddddddd04',issuer_id:ISSUER_B,valid_from:'2014-02-21',available_date:'2014-02-21',batch_id:BATCH}),

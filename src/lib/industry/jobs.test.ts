@@ -107,8 +107,8 @@ describe('runIndustryJob (adapts each runner of Tasks 5–13 to a RunnerReceipt)
  it('aggregate-sic has no env gate, parses dates, and supports genuine dry runs',async()=>{
   expect(jobGate('aggregate-sic',{},{apply:true})).toBeNull();
   expect(parseSyncArgs(['--job','aggregate-sic','--facts-as-of','2026-04-01'])).toMatchObject({ok:true,args:{job:'aggregate-sic',factsAsOf:'2026-04-01',apply:false}});
-  runners.aggUs.mockResolvedValue({status:'dry_run',batchId:null,batchStatus:null,runId:null,groups:6,reusedGroups:0,cells:{ok:21,missing:21},manifestMismatches:0,truncatedIssuers:[],preview:{industriesMinMembers:1,displayableValueCells:18,sample:[]}});
-  expect(await runIndustryJob('aggregate-sic',deps,{dryRun:true,triggeredBy:'script'})).toMatchObject({receipt:{status:'dry_run',counts:{groups:6,industries_min_members:1,displayable_value_cells:18},preview:{sample:[]}}});
+  runners.aggUs.mockResolvedValue({status:'dry_run',batchId:null,batchStatus:null,runId:null,groups:6,reusedGroups:0,cells:{ok:21,missing:21},manifestMismatches:0,truncatedIssuers:[],timings:{members:1,envelopes:2,filings:3,compute:4,manifests:5,stage:0,activate:0,total:15},preview:{industriesMinMembers:1,displayableValueCells:18,sample:[],roleReasons:{missing_concept:2}}});
+  expect(await runIndustryJob('aggregate-sic',deps,{dryRun:true,triggeredBy:'script'})).toMatchObject({receipt:{status:'dry_run',counts:{groups:6,industries_min_members:1,displayable_value_cells:18,ms_members:1,ms_envelopes:2,ms_filings:3,ms_compute:4,ms_manifests:5,ms_stage:0,ms_activate:0,ms_total:15},preview:{sample:[],roleReasons:{missing_concept:2}}}});
   expect(runners.aggUs).toHaveBeenCalledWith(deps,{factsAsOf:'2026-11-07',triggeredBy:'script',dryRun:true});
  });
  it('aggregate: level 1, factsAsOf defaults to today (UTC); failures carry the run code',async()=>{

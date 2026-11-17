@@ -62,7 +62,9 @@ export interface AggregationOptions{
  codes?:string[];
  triggeredBy?:TriggeredBy;
 }
+export type AggregationTimings=Record<'members'|'envelopes'|'filings'|'compute'|'manifests'|'stage'|'activate'|'total',number>;
 export interface AggregationReceipt{
+ timings?:AggregationTimings;
  status:'active'|'failed'|'rejected'|'dry_run';code?:string;
  batchId:string|null;batchStatus:BatchStatus|null;runId:string|null;generation:number|null;activatedAt:string|null;
  preview?:AggregationPreview;historyClass:HistoryClass|null;groups:number;reusedGroups:number;cells:{ok:number;missing:number};manifestMismatches:number;truncatedIssuers:string[];
