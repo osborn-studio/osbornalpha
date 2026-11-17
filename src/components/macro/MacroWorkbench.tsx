@@ -5,6 +5,7 @@
 // snapshot with its collection status; they never show zeros.
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { MACRO_CATALOG } from '@/lib/macro/catalog';
 import { CORRELATION_VERSION } from '@/lib/macro/correlation';
 import { CYCLES_VERSION } from '@/lib/macro/cycles';
 import { EVENTS_VERSION } from '@/lib/macro/events';
@@ -36,6 +37,14 @@ function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: Overview
       {block(t('methodology.availabilityTitle'), t('methodology.availabilityBody'))}
       {block(t('methodology.sourcesTitle'), t('methodology.sourcesBody'))}
       {block(t('methodology.missingTitle'), t('methodology.missingBody'))}
+      <section id="data-gaps" className="card-base space-y-1">
+        <h3 className="text-sm font-semibold">{t('methodology.dataGapsTitle')}</h3>
+        <ul className="space-y-1 text-xs text-text-dim">
+          {MACRO_CATALOG.filter(d => d.status === 'missing' || d.status === 'restricted').map(d => (
+            <li key={d.id}>{d.name[locale]} · {t(`status.${d.status}`)} · {d.reason?.[locale]}</li>
+          ))}
+        </ul>
+      </section>
       {block(t('methodology.revisionsTitle'), t('methodology.revisionsBody'))}
       {block(t('methodology.eventsTitle'), t('methodology.eventsBody'))}
       <section className="card-base space-y-1">

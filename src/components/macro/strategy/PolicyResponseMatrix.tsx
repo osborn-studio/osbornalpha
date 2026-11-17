@@ -8,8 +8,11 @@ import { useMemo, useState } from 'react';
 import { Button, Panel } from '@/components/ui';
 import type { Cell, PolicyResponseView, ResponseDim } from '@/lib/macro/strategy/contract';
 import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
-import { cellEvents, cellOf, coverageText, dimLabel, eventEvidence, eventRows, matrixCell, matrixGroups, matrixMeta, matrixScale, toneClass, toneLevel, uniformReason } from './strategy-view-model';
+import { cellEvents, cellOf, coverageText, dimLabel, eventEvidence, eventRows, matrixCell, matrixGroups, matrixMeta, matrixScale, toneClass, toneLevel, uniformReason, visibleDims } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
+
+import { ColumnToggle } from './ColumnToggle';
+import { useColumnMode } from './use-column-mode';
 
 const WINDOWS = [1, 3, 6] as const;
 
@@ -18,6 +21,10 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
   const [drill, setDrill] = useState<{ direction: string; dim: ResponseDim; cell: Cell } | null>(null);
   const scale = useMemo(() => matrixScale(view), [view]);
   const meta = matrixMeta(view, t);
+  const [mode, setMode] = useColumnMode();
+  const columnInfo = new Map(visibleDims(view, mode).map(d => [d.id, d]));
+  const visible = new Set(columnInfo.keys());
+  const dims = view.dims.filter(d => visible.has(d.id));
   return (
     <Panel className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -30,27 +37,28 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
           ))}
         </div>
       </div>
+      <ColumnToggle mode={mode} onMode={setMode} hidden={view.dims.length - dims.length} />
       <div className="hidden overflow-x-auto sm:block">
         <table className="w-full text-xs">
           <thead>
             <tr className="text-right text-text-dim">
               <th className="px-1.5 py-1 text-left font-medium">{t('matrix.policy')}</th>
-              {view.dims.map((d) => (
+              {dims.map((d) => (
                 <th key={d.id} className="px-1.5 py-1 font-medium" title={coverageText(d, t)}>
-                  {dimLabel(d, locale)}<div className="text-[10px] font-normal">{coverageText(d, t)}</div>
+                  {dimLabel(d, locale)}{columnInfo.get(d.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(d.id)!.hidden_reason}`)}</span> : null}<div className="text-[10px] font-normal">{coverageText(d, t)}</div>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {view.rows.map((row) => {
-              const uniform = uniformReason(row, view.dims, locale);
+              const uniform = uniformReason(row, dims, locale);
               return (
                 <tr key={row.direction} className="border-t border-border">
                   <th scope="row" className="px-1.5 py-2 text-left font-normal">{t(`matrix.rows.${row.direction}`)}</th>
                   {uniform !== null ? (
-                    <td colSpan={view.dims.length} className="px-1.5 py-2 text-left text-text-dim">{t('state.missing')}：{uniform}</td>
-                  ) : view.dims.map((d) => {
+                    <td colSpan={dims.length} className="px-1.5 py-2 text-left text-text-dim">{t('state.missing')}：{uniform}</td>
+                  ) : dims.map((d) => {
                     const cell = cellOf(row, d.id);
                     const c = matrixCell(cell, locale, t);
                     const body = (
@@ -74,9 +82,9 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
         </table>
       </div>
       <div className="space-y-3 sm:hidden">
-        {matrixGroups(view, locale, t).map((g) => (
+        {matrixGroups(view, locale, t).filter(g => visible.has(g.id)).map((g) => (
           <section key={g.id} className="rounded border border-border p-2">
-            <h3 className="text-xs font-semibold">{g.label}</h3>
+            <h3 className="text-xs font-semibold">{g.label}{columnInfo.get(g.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(g.id)!.hidden_reason}`)}</span> : null}</h3>
             <p className="text-[10px] text-text-dim">{g.coverage}</p>
             <ul className="mt-1 space-y-1 text-xs">
               {g.rows.map((r) => (

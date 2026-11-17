@@ -3,6 +3,9 @@
 import {describe,expect,it} from 'vitest';
 import type {MacroT} from './use-macro-t';
 import {MISSING} from './macro-format';
+import {DISPLAY_CATALOG} from '@/lib/macro/display-catalog';
+import {MACRO_CATALOG} from '@/lib/macro/catalog';
+import {formatPeriod} from './macro-format';
 import {COMPACT_KEYS} from '@/lib/macro/views';
 import {KEY_INDICATORS,keyIndicatorRows,GLANCE_IDS,changeCounts,changeLines,collectionOf,coverageOf,glanceRows,proofRows,revisionRows,selectVersion,sourceLabels,sourceOf,sourceRows,statusKey,toIndicatorView,type IndicatorRowJson,type OverviewEnvelopeJson,type VersionJson} from './view-model';
 const t:MacroT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
@@ -107,5 +110,25 @@ describe('overview key cards',()=>{
   const restricted=row({series_id:'US_UNRATE',status:'R',value_text:null});
   expect(keyIndicatorRows(env({indicators:[restricted,row({series_id:'CN_M2_YOY'}),missing]}),'US')).toEqual([missing,restricted]);
   expect(keyIndicatorRows(env({indicators:[]}),'CN')).toEqual([]);
+ });
+});
+
+describe('registry overview rows',()=>{
+ for(const def of [...DISPLAY_CATALOG,...MACRO_CATALOG])it(`${def.id}: registry period and bilingual source labels`,()=>{
+  const periodEnd='2026-09-30';
+  const r=row({series_id:def.id,name:def.name,unit:def.unit,period_end:periodEnd,status:def.status==='active'?'A':def.status==='missing'?'M':'R'});
+  for(const locale of ['zh','en'] as const){
+   const v=toIndicatorView(r,locale,t);
+   expect(v.period).toBe(formatPeriod(periodEnd,def.period));
+   const s=def.source;
+   expect(sourceOf(def.id)).toEqual(s?{publisher:s.publisher,via:s.via??null,fetch_host:s.fetchHost,adapter:s.adapter,rights:s.rights,attribution:s.attribution}:null);
+   expect(sourceLabels([r],locale)).toEqual(s&&def.status==='active'?[s.via?`${s.publisher[locale]} via ${s.via[locale]}`:s.publisher[locale]]:[]);
+   expect(changeLines(env({indicators:[r],changes:{counts:{new_release:1,revised:0,late:0,missing:0},items:[{series_id:def.id,kind:'new_release',period_end:periodEnd}]}}),locale,t)[0].period).toBe(formatPeriod(periodEnd,def.period));
+  }
+ });
+ it('keeps absent display values and unknown sources missing',()=>{
+  const v=toIndicatorView(row({series_id:'US_WALCL_W',value_text:null,period_end:null,change:null}),'en',t);
+  expect(v).toMatchObject({value:MISSING,period:MISSING,change:null,muted:true});
+  expect(sourceOf('UNKNOWN_SERIES')).toBeNull();
  });
 });

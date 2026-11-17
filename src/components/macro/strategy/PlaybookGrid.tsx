@@ -33,6 +33,7 @@ export function PlaybookGrid({ playbooks, judgment }: { playbooks: PlaybookView[
           </div>
         ))}
       </div>
+      <p className="text-[10px] text-text-dim">{PLAYBOOK_DISCLAIMER_V1[locale]}</p>
       {notice ? <p className="text-[11px] text-text-dim">{notice.key === 'playbook.earlier' ? t(notice.key, { date: notice.date }) : t(notice.key)}</p> : null}
       {f4 ? <F4SummaryPanel summary={f4.summary} /> : null}
     </Panel>
@@ -40,7 +41,7 @@ export function PlaybookGrid({ playbooks, judgment }: { playbooks: PlaybookView[
 }
 
 function CardBody({ card }: { card: PlaybookCard }) {
-  const { t, locale } = useStrategyT();
+  const { t } = useStrategyT();
   return (
     <div className="space-y-2 text-xs">
       <div className="hidden items-center justify-between gap-2 sm:flex">
@@ -53,7 +54,6 @@ function CardBody({ card }: { card: PlaybookCard }) {
       <p className="text-text-dim">{card.mechanism.join(' → ')}</p>
       <div className="text-[11px] text-text-dim">{t('playbook.implications')}</div>
       <p className="text-text-dim">{t('playbook.favored')}：{card.favored.join('、')} · {t('playbook.disfavored')}：{card.disfavored.join('、')}</p>
-      <p className="text-[10px] text-text-dim">{PLAYBOOK_DISCLAIMER_V1[locale]}</p>
       {card.watch.length > 0 ? (
         <p className="text-[11px] text-text-dim">
           {t('playbook.watch')}{' '}

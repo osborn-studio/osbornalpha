@@ -2,6 +2,8 @@
 
 Owner decision (2026-11-16): do not pursue CFETS / PBOC authorization; find official sources whose terms already allow redistribution. All terms below were read on 2026-11-16 (Asia/Shanghai) from the cited pages; quotations are the operative clauses. Mandate unchanged: primary or official publishers only, no aggregator or media relay as source of record, and a definition mismatch keeps a row missing rather than filling it with a proxy.
 
+> **Status, 2026-11-17: researched, not shipped.** The BIS route for `CN_LPR_1Y` below was implemented (PR #236, `macro_regime@v3`) and then reverted by owner decision (PR #238). On main `CN_LPR_1Y`, `CN_AFRE_STOCK_YOY` and `CN_MLF_1Y` are all still `missing`; `CN_LPR_5Y` and the quote-date events were dropped. The verdicts below remain the research finding, not the shipped state. The code is parked on branch `claude/macro-wpd-catalog-v3`. Closing record: `docs/audits/2026-11-07-macro-wpd/FINAL-STATE-2026-11-17.md`.
+
 ## Verdicts
 
 | Catalog row | Verdict | Source of record | Why |
@@ -57,7 +59,7 @@ Net effect on the CN regime: coverage gains weight 10 (LPR 1Y); weights 20 (社�
 2. `docs/methodologies/licenses.json`: the existing keys `macro_observation×macro_workbench` and `macro_snapshot×macro_workbench` name the covered sources in their `evidence` text and currently say "Not covered: … CN_LPR_1Y …". When `CN_LPR_1Y` is activated the owner re-confirms and the evidence text gains "CN_LPR_1Y via BIS WS_CBPOL under https://data.bis.org/help/legal". No new key is needed (origins are per module, not per source). `licenses.json` is outside every formula hash.
 3. Accept that 社融存量同比 and MLF stay missing with the stated reasons (catalog reason texts will say so), unless the owner later decides that reproducing a published statistical figure with attribution is acceptable under the PBOC notice. That is a legal judgment I have not made.
 
-## Implementation consequence (draft PR-3b)
+## Implementation consequence (draft PR-3b) — built as #236, reverted by #238, not on main
 
 - New adapter for BIS SDMX CSV (fetch host `stats.bis.org`, server-side like FRED, no collector on the Mac), parser with the definition guard, recorded fixture of the `M.CN` response.
 - Catalog: `CN_LPR_1Y` becomes `active` with the BIS source, native monthly (no derive, no `_Q` rows), `firstPeriod` 2019-08-31; `CN_AFRE_STOCK_YOY` and `CN_MLF_1Y` stay `missing` with updated reasons; no `CN_LPR_5Y` row. This is the single catalog change → `macro_regime@v3`.

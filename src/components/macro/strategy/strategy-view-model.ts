@@ -106,6 +106,18 @@ export function flowRows(v:TransmissionView,l:Locale):{key:string;stage:string;n
  return v.stages.flatMap(s=>s.nodes.map(n=>{const d=nodeDisplay(n,l);
   return {key:`${s.stage}:${n.id}`,stage:s.label[l],node:d.label,stateKey:d.badgeKey,value:d.value===null?MISSING:`${d.value}${d.unit}`,period:n.period_end??MISSING,reason:d.reason??''};}));
 }
+/** Stage notes retain the data's existing assumption prefix verbatim. */
+export const edgeNotes=(view:TransmissionView,locale:Locale):string[]=>view.stages.flatMap(s=>s.edge?[s.edge.text[locale]]:[]);
+export type ColumnMode='available'|'all';
+export interface VisibleColumn{id:string;label:Bilingual;hidden_reason:'restricted'|'not_in_catalog'|null}
+export function visibleColumns(view:CycleTableView,mode:ColumnMode):VisibleColumn[]{
+ return view.columns.map(c=>({id:c.id,label:c.label,hidden_reason:c.restricted?'restricted' as const:!c.daily_series&&!c.monthly_series?'not_in_catalog' as const:null}))
+  .filter(c=>mode==='all'||c.hidden_reason===null);
+}
+export function visibleDims(view:PolicyResponseView,mode:ColumnMode):VisibleColumn[]{
+ return view.dims.map(d=>({id:d.id,label:d.label,hidden_reason:d.kind==='restricted'||d.kind==='not_in_catalog'?d.kind:null}))
+  .filter(d=>mode==='all'||d.hidden_reason===null);
+}
 // ---- playbooks (spec §5.2): static framework; a card is marked only for an F4 card on the manifest's snapshot
 export interface PlaybookCard{regime:Regime;title:string;triggers:string[];mechanism:string[];favored:string[];disfavored:string[];watch:{id:string;name:string}[];marked:boolean}
 export const supportText=(n:number):string=>Number.isInteger(n)?n.toFixed(1):String(n);

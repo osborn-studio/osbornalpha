@@ -4,7 +4,7 @@
 // assets only) → method → source, evidence and revisions (drawer). `compact` (overview preview) keeps the facts and
 // the chart/table only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { catalogById } from '@/lib/macro/catalog';
+import { seriesById } from '@/lib/macro/series-registry';
 import { DataTableToggle } from './charts/DataTableToggle';
 import { MacroLineChart } from './charts/MacroLineChart';
 import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, recentEvents, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
@@ -32,7 +32,7 @@ function Section({ title, children, className = '' }: { title: string; children:
 
 export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObservationId }: { seriesId: string; compact?: boolean; asOf?: string; snapshotObservationId?: string | null }) {
   const { t, locale } = useMacroT();
-  const def0 = catalogById(seriesId);
+  const def0 = seriesById(seriesId);
   const windows = windowsFor(def0?.period ?? 'month');
   const [win, setWin] = useState<DetailWindow>(defaultWindow(def0?.period ?? 'month'));
   const [layers, setLayers] = useState({ derived: true, calendar: false });
@@ -75,7 +75,7 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
   if (!def0) return <div className="card-base text-xs text-text-dim">{t('detail.notFound')}</div>;
 
   const def = d?.def ?? def0;
-  const readDef = (d && catalogById(d.seriesRead)) || def;
+  const readDef = (d && seriesById(d.seriesRead)) || def;
   const name = pick(def.name, locale);
   const unit = unitSuffix(readDef.unit, t);
   const diffUnit = readDef.unit === 'pct' ? ' pp' : unit;

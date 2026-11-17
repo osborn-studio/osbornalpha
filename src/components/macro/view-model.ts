@@ -3,14 +3,15 @@
 // overview / series / versions JSON field names; components receive plain view objects. Task 13 (views.ts) owns the
 // overview shapes; the *Json interfaces below declare exactly the fields this file reads, and the compile-time checks
 // assert Task 13's IndicatorRow / ChangeItem / Envelope stay assignable to them: a drift fails typecheck instead of
-// rendering blanks. Period kind and full source come from the catalog (catalog.ts is pure TS, safe in client code).
-import {catalogById} from '@/lib/macro/catalog';
+// rendering blanks. Period kind and full source come from the display registry (pure TS, safe in client code).
+import {seriesById} from '@/lib/macro/series-registry';
+import type {AnySeriesDef} from '@/lib/macro/display-catalog';
 import type {AssetByCycle} from '@/lib/macro/series-extras';
 import type {Cycle,InsufficientSegment} from '@/lib/macro/cycles';
 import type {PolicyEvent} from '@/lib/macro/events';
 import type {CalendarEvent} from '@/lib/macro/fomc';
 import type {ChangeItem,Envelope,IndicatorRow} from '@/lib/macro/views';
-import type {Adapter,Bilingual,CatalogCounts,ChangeKind,Locator,MacroSeriesDef,Rights,SeriesStatus,Timeliness} from '@/lib/macro/types';
+import type {Adapter,Bilingual,CatalogCounts,ChangeKind,Locator,Rights,SeriesStatus,Timeliness} from '@/lib/macro/types';
 import {MISSING,formatChange,formatInstant,formatPeriod,formatValueText,unitSuffix,type TypedChange} from './macro-format';
 import type {MacroT} from './use-macro-t';
 export type Locale='zh'|'en';
@@ -32,16 +33,16 @@ export type IndicatorRowContract=Assert<IndicatorRow extends IndicatorRowJson?tr
 export type ChangeItemContract=Assert<ChangeItem extends ChangeItemJson?true:false>;
 export type EnvelopeContract=Assert<Envelope extends OverviewEnvelopeJson?true:false>;
 const STATUS:Record<IndicatorRowJson['status'],SeriesStatus>={A:'active',M:'missing',R:'restricted'};
-/** Drawer source block for a series: the catalog source without the adapter-internal series key. */
+/** Drawer source block for a series: the registry source without the adapter-internal series key. */
 export function sourceOf(seriesId:string):SourceJson|null{
- const s=catalogById(seriesId)?.source;
+ const s=seriesById(seriesId)?.source;
  return s?{publisher:s.publisher,via:s.via??null,fetch_host:s.fetchHost,adapter:s.adapter,rights:s.rights,attribution:s.attribution}:null;
 }
 // ---- series JSON (GET /api/macro/series/[id]) ----
 /** Stored rows carry observation_id/version; server-computed diff rows (transform=diff) have both null and a `computed` block. */
 export interface SeriesObsJson{observation_id:string|null;period_end:string;value_text:string;version:number|null;available_at:string;availability_basis:'first_seen'|null;retrieval_id:string|null;evidence_sha256:string|null;locator:Locator|null;transform:string|null;code_version:string|null;
  computed?:{kind:'diff';version:string;inputs:[string,string]}}
-export interface SeriesJson{def:MacroSeriesDef;seriesRead:string;transform:'raw'|'yoy'|'diff';observations:SeriesObsJson[];cycles:Cycle[];insufficient:InsufficientSegment[];events:PolicyEvent[];calendar:CalendarEvent[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
+export interface SeriesJson{def:AnySeriesDef;seriesRead:string;transform:'raw'|'yoy'|'diff';observations:SeriesObsJson[];cycles:Cycle[];insufficient:InsufficientSegment[];events:PolicyEvent[];calendar:CalendarEvent[];assetsByCycle:AssetByCycle[];eventsVersion:string;cyclesVersion:string}
 // ---- versions JSON (GET /api/macro/series/[id]/versions) ----
 export interface ProvenanceJson{observation_id:string;series_id:string;version:number;value_text:string;available_at:string;availability_basis:'first_seen';
  retrieval:{retrieval_id:string;fetch_url:string;fetch_host:string;http_status:number;fetched_at:string;tool_versions:Record<string,string>}|null;
@@ -53,7 +54,7 @@ export interface VersionsJson{series_id:string;read_series_id:string;period_end:
 export interface IndicatorView{seriesId:string;observationId:string|null;name:string;status:SeriesStatus;reason:string|null;muted:boolean;value:string;valueText:string|null;unit:string;unitKey:string;change:TypedChange|null;
  period:string;periodEnd:string|null;available:string;timeliness:Timeliness;spark:string[];hasEvidence:boolean;source:SourceJson|null}
 export function toIndicatorView(row:IndicatorRowJson,locale:Locale,t:MacroT):IndicatorView{
- const status=STATUS[row.status];const period=catalogById(row.series_id)?.period??'month';const has=row.value_text!==null&&row.period_end!==null;
+ const status=STATUS[row.status];const period=seriesById(row.series_id)?.period??'month';const has=row.value_text!==null&&row.period_end!==null;
  return {seriesId:row.series_id,observationId:row.observation_id,name:pick(row.name,locale),status,reason:row.reason?pick(row.reason,locale):null,muted:status!=='active'||!has,
   value:row.value_text!==null?formatValueText(row.value_text):MISSING,valueText:row.value_text,unit:row.value_text!==null?unitSuffix(row.unit,t):'',unitKey:row.unit,
   change:row.change?formatChange(row.change):null,
@@ -79,7 +80,7 @@ export interface ChangeLine{kind:ChangeKindJson;seriesId:string;name:string;valu
 export function changeLines(env:OverviewEnvelopeJson,locale:Locale,t:MacroT,limit=6):ChangeLine[]{
  const by=new Map(env.indicators.map(r=>[r.series_id,r]));
  return env.changes.items.slice(0,limit).map(c=>{
-  const r=by.get(c.series_id);const u=r?unitSuffix(r.unit,t):'';const period=catalogById(c.series_id)?.period??'month';
+  const r=by.get(c.series_id);const u=r?unitSuffix(r.unit,t):'';const period=seriesById(c.series_id)?.period??'month';
   const shown=c.kind!=='missing'&&r?.value_text!=null&&r.period_end===c.period_end?r.value_text:null;
   return {kind:c.kind,seriesId:c.series_id,name:r?pick(r.name,locale):c.series_id,value:shown?formatValueText(shown)+u:MISSING,previous:null,
    period:c.period_end?formatPeriod(c.period_end,period):MISSING};
