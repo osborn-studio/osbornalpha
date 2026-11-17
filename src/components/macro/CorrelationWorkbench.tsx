@@ -1,11 +1,12 @@
 'use client';
-// CorrelationWorkbench — 关联工作台 form (spec §3.4): indicator × asset × mode × window × lag (or ±N). Presets only fill
-// the form. request_id is generated client-side and reused while a network failure is retried (idempotent run).
+// CorrelationWorkbench — default preset result cards and the indicator × asset analysis form. The preset buttons
+// below the cards fill the form. request_id is generated client-side and reused on network retries (idempotent run).
 // Once the POST returns a runId it is kept: a failed result GET is retried against that run (never a second run) and
 // the saved run stays linked.
 import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { SeriesOption } from '@/lib/macro/workbench-options';
+import { CorrelationPresetResults } from './CorrelationPresetResults';
 import { PRESETS, type PresetForm } from './correlation-presets';
 import { CorrelationResult, type RunJson } from './CorrelationResult';
 import { useMacroT } from './use-macro-t';
@@ -73,6 +74,7 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
         <h2 className="text-base font-semibold">{t('correlation.title')}</h2>
         <p className="text-xs text-text-dim">{t('correlation.subtitle')}</p>
       </div>
+      <CorrelationPresetResults key={region} region={region} />
       <div className="card-base space-y-2">
         <div className="text-[10px] uppercase tracking-wider text-text-dim">{t('correlation.presets')}</div>
         <div className="flex flex-wrap gap-1.5">
@@ -130,7 +132,7 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
           {savedRunId && (
             <>
               <button type="button" disabled={busy} onClick={() => { setBusy(true); void loadRun(savedRunId).finally(() => setBusy(false)); }} className="rounded border border-border px-2 py-0.5">{t('correlation.result.retryLoad')}</button>
-              <Link href={`/intel/macro/analyses/${savedRunId}`} className="text-accent">{t('correlation.result.openRun')}</Link>
+              <Link href={`/macro/analyses/${savedRunId}`} className="text-accent">{t('correlation.result.openRun')}</Link>
             </>
           )}
         </div>
@@ -138,7 +140,7 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
       {run && (
         <>
           <CorrelationResult run={run} />
-          <Link href={`/intel/macro/analyses/${run.run_id}`} className="text-xs text-accent">{t('correlation.result.openRun')}</Link>
+          <Link href={`/macro/analyses/${run.run_id}`} className="text-xs text-accent">{t('correlation.result.openRun')}</Link>
         </>
       )}
     </div>
