@@ -7,6 +7,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui';
 import type { Boundary, CycleTableView, PolicyResponseView, Region, TransmissionResponse } from '@/lib/macro/strategy/contract';
 import type { ReviewDetailResponse, ReviewIndexResponse } from '@/lib/macro/strategy/route-helpers';
+import { CycleNotes } from './CycleNotes';
 import { CycleReturnsTable } from './CycleReturnsTable';
 import { DependencyState } from './DependencyState';
 import { ExplanationPanel } from './ExplanationPanel';
@@ -110,13 +111,13 @@ export function HistoryScreen({ initialBoundary }: { initialBoundary: Boundary }
   const ct = useStrategyFetch<CycleTableView>(strategyApi.cycleTable(boundary));
   function switchBoundary(b: Boundary) {
     setBoundary(b);
-    router.replace(`/intel/macro/history?boundary=${b}`, { scroll: false });
+    router.replace(`/macro/history?boundary=${b}`, { scroll: false });
   }
   return (
     <div className="space-y-4">
       <StrategyTabs active="history" />
       <Gate state={ct.state} reload={ct.reload}>
-        {(v) => <CycleReturnsTable view={v} boundary={boundary} onBoundary={switchBoundary} />}
+        {(v) => <><CycleReturnsTable view={v} boundary={boundary} onBoundary={switchBoundary} /><CycleNotes view={v} /></>}
       </Gate>
     </div>
   );

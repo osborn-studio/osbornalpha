@@ -179,5 +179,17 @@
     "role": {"latest": "最新期", "comparison": "比较期"},
     "kind": {"revised": "已修订", "dropped": "结算时缺失", "unchanged": "未变化", "newly_available": "新增可得"},
     "subkind": {"later_period": "更晚数据期", "backfill": "回补", "new_series": "新序列"}
+  },
+  "cycleNotes": {
+    "title": "关键观察（模板生成，非模型撰写）",
+    "disclaimer": "由表中数值按固定模板生成；不解释原因，不构成投资建议",
+    "episode": "{direction}：{start} → {end}，{n} 次政策事件，累计政策变动 {bp}。",
+    "flags": " 标记：{flags}。",
+    "interval": "{column}：从边界 {from} 到边界 {to}，区间变动 {value}。",
+    "missing": "{column}：缺失（{reason}）",
+    "largestRise": "在有数据的 {unit} 列中，最大上升为 {column}：{value}。",
+    "largestFall": "在有数据的 {unit} 列中，最大下降为 {column}：{value}。",
+    "coverage": "{n} / {total} 列有数据。",
+    "openEvidence": "查看证据：{text}"
   }
 }
