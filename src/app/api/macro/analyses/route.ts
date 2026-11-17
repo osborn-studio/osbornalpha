@@ -13,19 +13,16 @@
 // counts ok runs only); abuse is bounded by request validation and the per-request_id idempotency above.
 import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
-import {canonicalJson,freezeInputs,inputsHash,validateAnalysisRequest} from '@/lib/macro/analysis-spec';
-import {CATALOG_VERSION} from '@/lib/macro/catalog';
-import {AnalysisError,CORRELATION_VERSION,runAnalysis,type AnalysisResult,type FrozenInputs} from '@/lib/macro/correlation';
+import {canonicalJson,validateAnalysisRequest} from '@/lib/macro/analysis-spec';
+import {prepareAnalysis} from '@/lib/macro/analysis-service';
+import {CORRELATION_VERSION} from '@/lib/macro/correlation';
 import {MacroDbError,supabaseMacroDb} from '@/lib/macro/db';
-import {US_TARGET_LOWER_ID,US_TARGET_UPPER_ID,derivePolicyEvents,type PolicyEvent} from '@/lib/macro/events';
-import {explainResult} from '@/lib/macro/explain';
 import {requireSessionUser} from '@/lib/macro/route-helpers';
 import {getAdminSupabase} from '@/lib/supabase/admin';
 import {getAnonSupabase} from '@/lib/supabase/anon';
 import {getServerSupabase} from '@/lib/supabase/server';
 import type {SupabaseClient} from '@supabase/supabase-js';
 export const dynamic='force-dynamic';
-const MONTHLY_MAX_ROWS=5_000,DAILY_MAX_ROWS=20_000;
 const HEADERS={'Cache-Control':'private, no-store'};
 const err=(code:string,message:string,status:number,extra:Record<string,unknown>={})=>NextResponse.json({error:{code,message,...(extra.fields?{fields:extra.fields}:{})},...(extra.runId?{runId:extra.runId}:{})},{status,headers:HEADERS});
 /** create_macro_analysis_run is not in Database['public']['Functions'] (skeleton: narrow typing); one cast, here. */
@@ -58,36 +55,24 @@ export async function POST(req:Request){
  try{body=await req.json();}catch{return err('invalid_parameter','body must be JSON',400,{fields:[{field:'body',code:'json'}]});}
  const v=validateAnalysisRequest(body);
  if(!v.ok)return err('invalid_parameter','invalid analysis request',400,{fields:v.errors});
- const {spec,indicator,asset}=v;
+ const {spec}=v;
  const cv=codeVersion();
  if(!cv)return err('code_version_unavailable','no verifiable code version; analysis not run',503);
  const existing=await findRun(user.id,'request_id',spec.request_id);
  if(existing)return sameSpec(existing.spec,spec)?respondStored(existing):conflict();
  const cutoff=new Date().toISOString();
- let admin:ReturnType<typeof getAdminSupabase>;let inputs:FrozenInputs;
+ let admin:ReturnType<typeof getAdminSupabase>;let prepared:Awaited<ReturnType<typeof prepareAnalysis>>;
  try{
   admin=getAdminSupabase();
   const db=supabaseMacroDb({admin,anon:getAnonSupabase()});
-  const read=(id:string,maxRows:number)=>db.seriesHistory(id,{asOf:cutoff,maxRows});
-  const [indRows,assetRows]=await Promise.all([read(indicator.aliasOf??indicator.id,MONTHLY_MAX_ROWS),read(asset.aliasOf??asset.id,MONTHLY_MAX_ROWS)]);
-  let events:PolicyEvent[]|undefined;
-  if(spec.kind==='event_window'){
-   const [u,l]=await Promise.all([read(US_TARGET_UPPER_ID,DAILY_MAX_ROWS),read(US_TARGET_LOWER_ID,DAILY_MAX_ROWS)]);
-   events=derivePolicyEvents(u,l);
-  }
-  inputs=freezeInputs({indicator,asset,indicatorRows:indRows,assetRows,events,cutoff,catalogVersion:CATALOG_VERSION});
+  prepared=await prepareAnalysis({db},spec,{cutoff,codeVersion:cv,history:'as_of'});
  }catch(e){
   if(e instanceof MacroDbError&&e.code==='truncated')return err('input_truncated','input history exceeds the read limit; nothing computed',422);
   return err('read_failed','macro inputs could not be read',503);
  }
- let results:(AnalysisResult&{explanation:{zh:string;en:string}})|null=null;let failure:AnalysisError|null=null;
- try{const r=runAnalysis(spec,inputs,cv);results={...r,explanation:explainResult(r,{indicator:indicator.name,asset:asset.name})};}
- catch(e){
-  if(e instanceof AnalysisError)failure=e;
-  else{console.error('[macro] analysis input invalid',e instanceof Error?e.message:String(e));failure=new AnalysisError('analysis_input_invalid','analysis inputs could not be computed');}
- }
+ const {inputs,results,failure}=prepared;
  const {data,error}=await (admin.rpc as unknown as RunRpc).call(admin,'create_macro_analysis_run',{
-  p_user_id:user.id,p_request_id:spec.request_id,p_kind:spec.kind,p_spec:spec,p_inputs:inputs,p_inputs_hash:inputsHash(inputs),
+  p_user_id:user.id,p_request_id:spec.request_id,p_kind:spec.kind,p_spec:spec,p_inputs:inputs,p_inputs_hash:prepared.inputs_hash,
   p_results:results,p_code_version:cv,p_method_version:CORRELATION_VERSION,p_status:failure?'failed':'ok',p_error:failure?`${failure.code}: ${failure.message}`:null,
  });
  if(error)return /quota_exceeded/.test(error.message)?err('quota_exceeded','daily analysis quota reached',429):err('write_failed','analysis run could not be stored',503);

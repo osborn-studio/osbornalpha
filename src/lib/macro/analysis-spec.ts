@@ -8,7 +8,7 @@ import {createHash} from 'node:crypto';
 import Ajv from 'ajv';
 import {seriesById} from './series-registry';
 import {EVENT_NS,WINDOWS,type AnalysisSpec,type FrozenInputs} from './correlation';
-import type {PolicyEvent} from './events';
+import {EVENTS_VERSION,type PolicyEvent} from './events';
 import type {ObservationRow} from './types';
 const UUID='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
 const validateShape=new Ajv({strict:true,allErrors:true}).compile({
@@ -64,3 +64,10 @@ export function canonicalJson(v:unknown):string{
  return `{${Object.keys(o).sort().filter(k=>o[k]!==undefined).map(k=>`${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`;
 }
 export const inputsHash=(inputs:FrozenInputs):string=>createHash('sha256').update(canonicalJson(inputs)).digest('hex');
+
+/** Content identity excludes publication metadata, so changing cutoff alone is not a data revision. */
+export function dataHash(inputs:FrozenInputs):string{
+ const series=(s:FrozenInputs['indicator'])=>({series_id:s.series_id,source_series_id:s.source_series_id,change_kind:s.change_kind,
+  observations:s.observations.map(o=>({observation_id:o.observation_id,period_end:o.period_end,value_text:o.value_text}))});
+ return createHash('sha256').update(canonicalJson({indicator:series(inputs.indicator),asset:series(inputs.asset),events:inputs.events,events_version:EVENTS_VERSION})).digest('hex');
+}

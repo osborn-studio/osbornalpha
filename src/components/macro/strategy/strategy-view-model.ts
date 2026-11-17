@@ -224,12 +224,6 @@ export function columnMedians(v:CycleTableView):{id:string;label:Bilingual;kind:
   return {id:c.id,label:c.label,kind:c.change_kind,n:vals.length,median:vals.length?quantile7(vals,0.5):null,scaleMax:vals.reduce((m,x)=>Math.max(m,Math.abs(x)),0)};
  });
 }
-/** Horizontal bar from a centre line at `half`: x is the bar's left edge in [0, 2·half]. */
-export function barGeometry(median:number|null,scaleMax:number,half:number):{x:number;width:number}{
- if(median===null||!(scaleMax>0))return {x:half,width:0};
- const width=Math.min(1,Math.abs(median)/scaleMax)*half;
- return {x:median<0?half-width:half,width};
-}
 /** Empty episode list: an explicit truncation notice when the event history read was truncated, else "no episodes". */
 export function episodesEmptyKey(v:CycleTableView):string|null{
  if(v.episodes.length>0)return null;
