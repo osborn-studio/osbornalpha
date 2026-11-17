@@ -1,5 +1,5 @@
-// src/lib/judgments/methodologies/macro-regime.v2.ts
-// macro_regime@v2 (spec §11.1, §8.1 G28; doc docs/methodologies/macro_regime/v2.md): current-period nowcast of the US/CN
+// src/lib/judgments/methodologies/macro-regime.v3.ts
+// macro_regime@v3 (spec §11.1, §8.1 G28; doc docs/methodologies/macro_regime/v3.md): current-period nowcast of the US/CN
 // growth–inflation regime, bound to one published macro snapshot (binding.snapshot_id, spec §6.4). The claim restates the
 // snapshot's primary state as a categorical claim: distribution = norm flagged scores_are_not_probabilities, margin_pp in
 // percentage points, catalog_version frozen. The label is the same classifier re-run for the same reference month on the
@@ -35,7 +35,7 @@ async function gather(item:WorkItem,db:JudgmentInputsDb):Promise<Input[]|Abstain
  const s=snap.snapshot;
  if(s.region!==item.subject.key||s.as_of!==item.asOf)return abstain('binding_mismatch');
  // A foreign upstream version is not computed on; the snapshot alone is frozen so the abstention stays findable by snapshot_id.
- if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==macroRegimeV2.params.catalog_version)return [snap];
+ if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==macroRegimeV3.params.catalog_version)return [snap];
  const inputs:Input[]=[snap];
  for(const id of s.observation_ids){
   const o=await db.macro.observation(id);   // locator lookup only; every frozen value comes from buildInput
@@ -52,7 +52,7 @@ async function resolveTarget(item:WorkItem):Promise<Target>{
 function compute(subject:Subject,inputs:Input[]):Active<CategoricalClaim>|Abstained{
  const s=snapshotOf(inputs);
  if(!s)return abstain('input_missing',['macro_snapshot']);
- if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==macroRegimeV2.params.catalog_version)return abstain('upstream_version_mismatch');
+ if(s.methodology_version!==MACRO_UPSTREAM_VERSION||s.catalog_version!==macroRegimeV3.params.catalog_version)return abstain('upstream_version_mismatch');
  if(s.region!==subject.key)return abstain('binding_mismatch');
  if(!MACRO_REGIMES.every(r=>Number.isFinite(s.scores?.[r])&&Number.isFinite(s.norm?.[r])&&s.norm[r]>=0)
   ||Math.abs(MACRO_REGIMES.reduce((sum,r)=>sum+s.norm[r],0)-1)>5e-6
@@ -69,26 +69,26 @@ function compute(subject:Subject,inputs:Input[]):Active<CategoricalClaim>|Abstai
 
 function condition(subject:Subject,inputs:Input[],claim:CategoricalClaim):Condition{
  const s=snapshotOf(inputs);
- if(!s)throw new Error('macro_regime@v2 condition() needs the macro_snapshot input');
+ if(!s)throw new Error('macro_regime@v3 condition() needs the macro_snapshot input');
  const period=s.as_of.slice(0,7);const sel=claim.selected as Regime;
  const params={region:s.region,reference_period:period,macro_methodology_version:MACRO_UPSTREAM_VERSION,catalog_version:s.catalog_version};
- if(!validateMacroRegimeReplayParams(params))throw new Error('macro_regime@v2 invalid resolver params');
+ if(!validateMacroRegimeReplayParams(params))throw new Error('macro_regime@v3 invalid resolver params');
  return {resolver:'macro_regime_replay',params,
   predicate:{op:'eq',rhs:sel},
   text:{zh:`${s.region} ${period} 当期象限为“${ZH[sel]}”（同一分类函数在截止 vintage 下对同一参考期重算）`,
    en:`${s.region} ${period} regime is "${sel}" (same classifier re-run for the same reference month on the cutoff vintage)`}};
 }
 
-export const macroRegimeV2:Methodology<CategoricalClaim>={
- id:'macro_regime',version:'v2',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
+export const macroRegimeV3:Methodology<CategoricalClaim>={
+ id:'macro_regime',version:'v3',judgment_type:'macro_regime',kind:'categorical',producer_kind:'rule',
  subject_types:['macro_region'],input_kinds:['macro_snapshot','macro_observation'],
  upstream:{macro_methodology_version:MACRO_UPSTREAM_VERSION},
  title:{zh:'宏观象限（当期 nowcast）',en:'Macro regime (current-period nowcast)'},
- doc:'docs/methodologies/macro_regime/v2.md',
- params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/30bcaa2a33c5'},
+ doc:'docs/methodologies/macro_regime/v3.md',
+ params:{grace_days:30,threshold_n:100,ece_max:0.1,window_years:3,embargo_days:0,label_policy:'cutoff_vintage',catalog_version:'macro-catalog/b91aad6b17f3'},
  horizon:{unit:'calendar_months',n:3},
  deps:['src/lib/judgments/resolvers/macro.ts','src/lib/macro/regime-selection.ts'],
- module:'src/lib/judgments/methodologies/macro-regime.v2.ts',
+ module:'src/lib/judgments/methodologies/macro-regime.v3.ts',
  status:'active',
  gather,resolveTarget,compute,condition,
 };

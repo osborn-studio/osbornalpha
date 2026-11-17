@@ -26,12 +26,12 @@ export function releaseTimeliness(def:Pick<import('./display-catalog').AnySeries
  const deadline=(def.nativeFrequency==='weekly'?parseDate(latestPeriodEnd)+7*DAY:parseDate(nextPeriodEnd(def.period,latestPeriodEnd)))+(def.releaseLagDays+GRACE_DAYS)*DAY;
  return parseDate(today)>deadline?'late':'current';
 }
-export const MACRO_DATASETS=['macro.fred','macro.akshare'] as const;
+export const MACRO_DATASETS=['macro.fred','macro.akshare','macro.bis'] as const;
 export type MacroDataset=typeof MACRO_DATASETS[number];
 export const datasetOf=(region:Region):MacroDataset=>region==='US'?'macro.fred':'macro.akshare';
 export interface CollectionStatus{dataset:MacroDataset;status:FreshnessStatus;lastOkAt:string|null;lastAttemptAt:string|null}
 const isoOrNull=(v:unknown):string|null=>{if(v===null||v===undefined)return null;const t=Date.parse(String(v));return Number.isFinite(t)?new Date(t).toISOString():null;};
-/** Both macro datasets, status recomputed at `now`; a dataset never recorded reads as missing. */
+/** All macro datasets, status recomputed at `now`; a dataset never recorded reads as missing. */
 export async function collectionStatus(tables:TableClient,now=new Date()):Promise<CollectionStatus[]>{
  const rows=await freshnessOf(tables,now);
  return MACRO_DATASETS.map(dataset=>{

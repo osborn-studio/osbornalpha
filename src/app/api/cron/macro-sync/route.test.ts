@@ -24,6 +24,8 @@ vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
 
 import {GET,POST} from './route';
 
+const BIS_CSV=readFileSync('src/lib/macro/fixtures/bis/WS_CBPOL-M.CN.csv','utf8');
+let bisBody:string,bisStatus:number;
 const AUTH={authorization:'Bearer cron-secret'};
 const req=(qs='',headers:Record<string,string>=AUTH)=>new Request(`https://alpha.example/api/cron/macro-sync${qs?`?${qs}`:''}`,{headers});
 const original=process.env.CRON_SECRET;
@@ -38,15 +40,15 @@ function csvFor(code:string){
 }
 /** A deps member that fails the test on any use: preview must not touch it. */
 const trap=(name:string)=>new Proxy({},{get:(_t,k)=>{throw new Error(`preview touched ${name}.${String(k)}`);}});
-function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:EvidenceInput){puts.push(e);return {objectPath:`fred_csv/${e.sha256}.csv`,status:'stored' as const};}};}
+function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:EvidenceInput){puts.push(e);return {objectPath:`${e.adapter}/${e.sha256}.csv`,status:'stored' as const};}};}
 
 let fetchCalls:string[],failCodes:Set<string>,overrides:Map<string,string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
 beforeEach(()=>{
  vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';
- early=false;mocks.laterFirstPeriod=false;mocks.withDisplay=true;fetchCalls=[];failCodes=new Set();overrides=new Map();
+ bisBody=BIS_CSV;bisStatus=200;early=false;mocks.laterFirstPeriod=false;mocks.withDisplay=true;fetchCalls=[];failCodes=new Set();overrides=new Map();
  tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
  const fetch=(async(input:string|URL|Request)=>{
-  const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
+  const url=String(input);if(new URL(url).host==='stats.bis.org')return new Response(bisBody,{status:bisStatus,headers:{'content-type':'text/csv'}});fetchCalls.push(url);const code=codeOfUrl(url);
   return failCodes.has(code)?new Response('down',{status:503}):new Response(overrides.get(code)??csvFor(code),{status:200,headers:{'content-type':'application/csv'}});
  }) as typeof globalThis.fetch;
  deps={db:memoryMacroDb({tables}),evidence,tables,codeVersion:'a'.repeat(40),now:()=>new Date('2026-11-06T05:30:00Z'),fetch,sleep:async()=>{}};   // tables: finalizeBatch (第 6 稿)
@@ -80,7 +82,7 @@ describe('macro-sync cron',()=>{
   expect(body.preview).toBe(true);expect(body.ok).toBe(true);
   expect(fetchCalls.map(codeOfUrl).sort()).toEqual(FRED.map(d=>d.source!.seriesKey).sort());
   expect(fetchCalls.filter(u=>!['WALCL','RRPONTSYD','WTREGEN'].includes(codeOfUrl(u))).every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
-  expect(body.counts.fetched).toBe(2*FRED.length);
+  expect(body.counts.fetched).toBe(2*FRED.length);expect(body.bis.counts.fetched).toBe(87);
   const dgs=body.series.find((s:{series_id:string})=>s.series_id==='US_DGS10_D');
   expect(dgs).toMatchObject({points:2,first:'2026-09-30',last:'2026-10-01',sample:[{period_end:'2026-09-30',value_text:'4.1'},{period_end:'2026-10-01',value_text:'4.2'}]});
  });
@@ -91,10 +93,10 @@ describe('macro-sync cron',()=>{
   expect(body).toMatchObject({ok:true,status:'success',date:'2026-11-06'});
   expect(body.counts.failed).toBe(0);
   expect(body.counts.inserted).toBeGreaterThanOrEqual(2*FRED.length);   // natives plus derived rows
-  expect(evidence.puts).toHaveLength(FRED.length);
+  expect(evidence.puts.filter(e=>e.adapter==='fred_csv')).toHaveLength(FRED.length);
   const [batch]=tables.rows('ingest_batches');
   expect(batch).toMatchObject({batch_id:body.batchId,producer:'ts-fred',dataset:'macro.fred',status:'success',triggered_by:'cron',code_version:'a'.repeat(40)});
-  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.fred',expected_cadence:'daily',consecutive_errors:0})]);
+  expect(tables.rows('dq_freshness')).toEqual([expect.objectContaining({dataset:'macro.fred',expected_cadence:'daily',consecutive_errors:0}),expect.objectContaining({dataset:'macro.bis',expected_cadence:'daily',consecutive_errors:0})]);
   expect((await deps.db.seriesHistory('US_DGS10_D',{maxRows:10})).map(o=>o.value_text)).toEqual(['4.1','4.2']);
   const derived=await deps.db.seriesHistory('US_DGS10',{maxRows:10});
   expect(derived.map(o=>[o.period_end,o.value_text,o.transform,o.batch_id])).toEqual([['2026-09-30','4.1','month_end@1',body.batchId]]);
@@ -217,7 +219,7 @@ describe('macro-sync cron',()=>{
   const stored=tables.rows('ingest_batches')[0].errors as {code:string;key?:string;message?:string}[];
   const e=stored.find(x=>x.key==='US_FEDFUNDS_EFF_D')!;
   expect(e.code.startsWith('parse_')).toBe(true);expect(e.message).toMatch(/^retrieval [0-9a-f-]{36}: /);
-  expect(evidence.puts).toHaveLength(FRED.length);                                                 // the bad bytes were stored too
+  expect(evidence.puts.filter(e=>e.adapter==='fred_csv')).toHaveLength(FRED.length);                                                 // the bad bytes were stored too
   expect(body.counts.failed).toBe(1);expect(body.errors.find((x:{key?:string})=>x.key==='US_FEDFUNDS_EFF_D')).toEqual({code:e.code,key:'US_FEDFUNDS_EFF_D'});
  });
  it('is scheduled daily at 05:30 UTC in vercel.json',()=>{
@@ -261,4 +263,29 @@ it('fetches display fixtures at their first periods, mirrors both versions, and 
  const after=await deps.db.snapshot(second.snapshot_id),afterRegime=await deps.db.regimeOf(second.snapshot_id);
  expect(after?.catalog_version).toBe(CATALOG_VERSION);expect(after?.observation_ids).toEqual(before?.observation_ids);
  expect(afterRegime&&{...afterRegime,snapshot_id:''}).toEqual(regime&&{...regime,snapshot_id:''});
+});
+
+it('BIS owns a separate batch, writes all 87 locators, and deduplicates the next run',async()=>{
+ const first=await (await GET(req())).json();
+ expect(first.bis).toMatchObject({status:'success',counts:{inserted:87,failed:0}});
+ expect(tables.rows('ingest_batches').find(b=>b.batch_id===first.bis.batchId)).toMatchObject({producer:'ts-bis',dataset:'macro.bis',status:'success'});
+ const rows=await deps.db.seriesHistory('CN_LPR_1Y',{maxRows:100});expect(rows).toHaveLength(87);
+ expect(rows.every(r=>r.locator?.kind==='csv_row'&&r.locator.column===11&&r.retrieval_id)).toBe(true);
+ const second=await (await GET(req())).json();expect(second.bis).toMatchObject({status:'success',counts:{inserted:0,duplicates:87,failed:0}});
+ expect(publishMock.mock.calls.every(c=>c[1]==='US')).toBe(true);
+});
+it('BIS 500 stays isolated from FRED and US publication',async()=>{
+ bisStatus=500;const body=await (await GET(req())).json();
+ expect(body.status).toBe('success');expect(body.publish.status).toBe('published');
+ expect(body.bis).toMatchObject({status:'failed',errors:[{code:'fetch_http_5xx',key:'CN_LPR_1Y'}]});
+ expect(tables.rows('dq_freshness').find(r=>r.dataset==='macro.bis')).toMatchObject({consecutive_errors:1,last_ok_at:null});
+});
+it('BIS definition changes keep evidence and retrieval but write no LPR rows',async()=>{
+ bisBody=BIS_CSV.replaceAll('Loan Prime Rate','Other rate');
+ const put=vi.spyOn(deps.db,'putRetrieval');const body=await (await GET(req())).json();
+ expect(body.bis).toMatchObject({status:'failed',errors:[{code:'parse_bis_definition_changed',key:'CN_LPR_1Y'}]});
+ expect(await deps.db.seriesHistory('CN_LPR_1Y',{maxRows:100})).toEqual([]);
+ expect(evidence.puts.find(e=>e.adapter==='bis_sdmx_csv')?.bytes).toEqual(new TextEncoder().encode(bisBody));
+ expect(put.mock.calls.some(c=>c[0].adapter==='bis_sdmx_csv')).toBe(true);
+ expect((tables.rows('ingest_batches').find(b=>b.dataset==='macro.bis')!.errors as {message:string}[])[0].message).toMatch(/^retrieval [0-9a-f-]{36}:/);
 });

@@ -3,7 +3,7 @@ import {afterEach,describe,expect,it,vi} from 'vitest';
 import {cardLite,createF4Client,F4Unavailable,judgmentDetailOf} from './f4-client';
 
 const CARD={judgment_id:'j1',judgment_type:'macro_regime',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',registered_at:'2026-10-15T07:00:00Z',
- methodology:{id:'macro_regime',version:'v2',title:{zh:'宏观象限',en:'Macro quadrant'},href:'/intel/methods/macro_regime/v2'},display:{headline:{zh:'',en:''},percent:null,value:'overheat'}};
+ methodology:{id:'macro_regime',version:'v3',title:{zh:'宏观象限',en:'Macro quadrant'},href:'/intel/methods/macro_regime/v3'},display:{headline:{zh:'',en:''},percent:null,value:'overheat'}};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
 function client(handler:(url:URL)=>Response|Promise<Response>,o:{baseUrl?:string|null;timeoutMs?:number}={}){
  const urls:URL[]=[];
@@ -15,7 +15,7 @@ afterEach(()=>{vi.unstubAllEnvs();});
 describe('createF4Client (spec §9.1: same-site HTTP, 3 s timeout, any failure → F4Unavailable)',()=>{
  it('latestRegimeCard reads /api/judgments for the region and projects number-free fields',async()=>{
   const {c,urls}=client(()=>json({subject:{},cards:[{...CARD,methodology:{...CARD.methodology,version:'v1'}},{...CARD,judgment_type:'other'},CARD]}));
-  expect(await c.latestRegimeCard('US')).toEqual({judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',methodology:{id:'macro_regime',version:'v2'},selected:'overheat'});
+  expect(await c.latestRegimeCard('US')).toEqual({judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',methodology:{id:'macro_regime',version:'v3'},selected:'overheat'});
   expect(urls[0].origin+urls[0].pathname).toBe('https://alpha.test/api/judgments');
   expect(Object.fromEntries(urls[0].searchParams)).toEqual({subject_type:'macro_region',subject_key:'US',types:'macro_regime'});
  });
@@ -29,9 +29,9 @@ describe('createF4Client (spec §9.1: same-site HTTP, 3 s timeout, any failure �
    expect(await client(()=>json({cards})).c.latestRegimeCard('US')).toBeNull();
   }
  });
- it('selects the v2 regime card after a v1 card',async()=>{
-  const v2={...CARD,judgment_id:'j2'};
-  const {c}=client(()=>json({cards:[{...CARD,methodology:{...CARD.methodology,version:'v1'}},v2]}));
+ it('selects the v3 regime card after a v1 card',async()=>{
+  const v3={...CARD,judgment_id:'j2'};
+  const {c}=client(()=>json({cards:[{...CARD,methodology:{...CARD.methodology,version:'v1'}},v3]}));
   expect((await c.latestRegimeCard('US'))?.judgment_id).toBe('j2');
  });
  it('judgmentDetail: JSON 404 → null; HTML 404 (route absent) → F4Unavailable',async()=>{
@@ -60,7 +60,7 @@ describe('createF4Client (spec §9.1: same-site HTTP, 3 s timeout, any failure �
   ['network error',()=>client(()=>{throw new TypeError('fetch failed');}).c],
   ['non-JSON 200',()=>client(()=>new Response('ok',{status:200,headers:{'content-type':'text/plain'}})).c],
   ['malformed list',()=>client(()=>json({nope:true})).c],
-  ['malformed card',()=>client(()=>json({cards:[{judgment_type:'macro_regime',methodology:{id:'macro_regime',version:'v2'}}]})).c],
+  ['malformed card',()=>client(()=>json({cards:[{judgment_type:'macro_regime',methodology:{id:'macro_regime',version:'v3'}}]})).c],
  ])('%s → F4Unavailable',async(_,make)=>{
   await expect(make().latestRegimeCard('US')).rejects.toBeInstanceOf(F4Unavailable);
  });
@@ -92,7 +92,7 @@ describe('createF4Client (spec §9.1: same-site HTTP, 3 s timeout, any failure �
 describe('projections',()=>{
  it('cardLite drops every numeric display field and maps an unknown class to null',()=>{
   const lite=cardLite({...CARD,display:{percent:61,value:'sideways'},calibration_summary:{brier:0.2}});
-  expect(lite).toEqual({judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',methodology:{id:'macro_regime',version:'v2'},selected:null});
+  expect(lite).toEqual({judgment_id:'j1',lifecycle:'open',calibration:'insufficient',as_of:'2026-10-15',methodology:{id:'macro_regime',version:'v3'},selected:null});
  });
  it('judgmentDetailOf falls back to the card for selected and requires an id',()=>{
   expect(judgmentDetailOf({card:CARD,judgment:{judgment_id:'j1',as_of:'2026-10-15',inputs:[]},settlements:[]}).selected).toBe('overheat');
