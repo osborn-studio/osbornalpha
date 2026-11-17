@@ -26,6 +26,12 @@ describe('GET /api/industries',()=>{
   expect(body.valuation).toEqual({state:'not_enabled'});
   expect(res.headers.get('cache-control')).toMatch(/^public, s-maxage=\d+, stale-while-revalidate=600$/);
  });
+ it('defaults an omitted scheme to SIC with its version, level, metric and duration',async()=>{
+  mocks.deps.mockImplementation((now:Date)=>readDepsOf(stubIndustryDb({tree:[classRow({scheme:'sic',version:'sec-current',code:'3674'})],runs:[runRow({scheme:'sic',version:'sec-current'})]}),{now}));
+  const res=await get('');
+  expect(res.status).toBe(200);
+  expect(await res.json()).toMatchObject({scheme:'sic',version:'sec-current',level:1,metric:'revenue_sum',duration:'12M'});
+ });
  it('403 unlicensed with no-store when the scheme dataset is not public',async()=>{
   mocks.deps.mockImplementation((now:Date)=>readDepsOf(stubIndustryDb({public:new Set(),tree:TREE}),{now}));
   const res=await get('');
@@ -35,7 +41,7 @@ describe('GET /api/industries',()=>{
  });
  it('empty (no active run) is 200 with runId null and no-store',async()=>{
   mocks.deps.mockImplementation((now:Date)=>readDepsOf(stubIndustryDb({tree:TREE}),{now}));
-  const res=await get('');
+  const res=await get('scheme=sw2021');
   expect(res.status).toBe(200);
   expect(await res.json()).toMatchObject({state:'empty',runId:null,methodVersion:null});
   expect(res.headers.get('cache-control')).toBe('no-store');

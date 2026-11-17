@@ -10,7 +10,7 @@ test.skip(process.env.INDUSTRY_E2E_FIXTURES !== '1', 'fixture mode only (INDUSTR
 test.use({ locale: 'zh-CN' });
 
 test('list: heatmap with reconstruction badge, a cell opens the drawer and replays, table view', async ({ page }) => {
-  await page.goto('/intel/industries');
+  await page.goto('/intel/industries?scheme=sw2021');
   await expect(page.getByRole('heading', { level: 1, name: '行业研究' })).toBeVisible();
   await expect(page.locator('[data-research-state="reconstructed"]').first()).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: '历史重建' })).toBeVisible();
@@ -29,7 +29,7 @@ test('list: heatmap with reconstruction badge, a cell opens the drawer and repla
   await expect(drawer).toBeHidden();
 
   await page.getByRole('link', { name: '表格', exact: true }).click();
-  await page.waitForURL('**/intel/industries?view=table');
+  await page.waitForURL('**/intel/industries?scheme=sw2021&view=table');
   const table = page.getByRole('region', { name: '表格视图' });
   await expect(table).toBeVisible();
   await expect(table.getByRole('link', { name: '食品饮料' })).toBeVisible();
@@ -38,7 +38,7 @@ test('list: heatmap with reconstruction badge, a cell opens the drawer and repla
 });
 
 test('a tampered cell (stored value ≠ its manifest) shows the not-reproduced state (Codex round 1 #8)', async ({ page }) => {
-  await page.goto('/intel/industries');
+  await page.goto('/intel/industries?scheme=sw2021');
   const heatmap = page.getByRole('region', { name: '热力图' });
   await heatmap.getByRole('button', { name: /^电子 · 2025-12-31/ }).click();   // E2E_TAMPERED in src/lib/industry/e2e-fixture.ts
   const drawer = page.getByRole('dialog', { name: /^来源 ·/ });
@@ -71,7 +71,7 @@ test('constituents: date-driven members, unresolved as a count, membership drawe
 test('unlicensed: no number is shown and SIC is offered', async ({ page }) => {
   await page.goto('/intel');
   await page.context().addCookies([{ name: 'industry_e2e', value: 'unlicensed', url: page.url() }]);
-  await page.goto('/intel/industries');
+  await page.goto('/intel/industries?scheme=sw2021');
   await expect(page.getByText('申万 2021 数据授权待确认')).toBeVisible();
   await expect(page.getByRole('region', { name: '热力图' })).toHaveCount(0);
   await expect(page.getByRole('link', { name: '切换到 SIC' })).toBeVisible();
@@ -79,7 +79,7 @@ test('unlicensed: no number is shown and SIC is offered', async ({ page }) => {
 
 test('mobile 390px: no horizontal page scroll, drawer is a bottom sheet', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/intel/industries');
+  await page.goto('/intel/industries?scheme=sw2021');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByRole('region', { name: '热力图' }).getByRole('button', { name: /^食品饮料 · 2025-12-31/ }).click();
   const box = await page.getByRole('dialog', { name: /^来源 ·/ }).boundingBox();
@@ -112,4 +112,12 @@ test('SIC snapshot: fiscal heatmap → reproduced drawer → table → detail', 
   await expect(page.getByText('表格等价视图').filter({ visible: true })).toBeVisible();
   await expect(page.locator('[data-state="reconstruction"]')).toBeVisible();
   await expect(page.getByRole('link', { name: /查看成分/ })).toBeVisible();
+});
+
+test('bare list defaults to the SIC fixture view', async ({ page }) => {
+  await page.goto('/intel/industries');
+  await expect(page.locator('nav a[href="/intel/industries?scheme=sic"]')).toHaveAttribute('aria-current', 'page');
+  const heatmap = page.getByRole('region', { name: '热力图' });
+  await expect(heatmap).toBeVisible();
+  await expect(heatmap.getByRole('button', { name: /^Semiconductors & Related Devices · 2025-12-31/ })).toBeVisible();
 });
