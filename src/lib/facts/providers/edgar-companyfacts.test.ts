@@ -4,12 +4,12 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import type {Budget,ConceptDef} from '../types';
 import {FACT_CONCEPTS} from '../concepts';
 import {ProviderError,rawHashOf,snapshotOf,stringifyPreservingNumbers} from './shared';
-import {companyFactsUrl,fetchCompanyFacts,parseCompanyFacts,resetSecPacing} from './edgar-companyfacts';
-import {scanJsonNumbers} from '../json-numbers';
+import {COMPANYFACTS_SCHEMA,companyFactsUrl,decodeCompanyFacts,fetchCompanyFacts,parseCompanyFacts,resetSecPacing} from './edgar-companyfacts';
+import {decodeWithSchema,scanJsonNumbers} from '../json-numbers';
 
 const budget=(ms:number):Budget=>({remainingMs:()=>ms,signal:new AbortController().signal});
 const bytes=(s:string)=>new TextEncoder().encode(s);
-const doc=(facts:Record<string,unknown>)=>snapshotOf(bytes(JSON.stringify({cik:320193,entityName:'T',facts})),{source:'edgar'});
+const doc=(facts:Record<string,unknown>,cik:unknown=320193)=>snapshotOf(bytes(JSON.stringify({cik,entityName:'T',facts})),{source:'edgar'});
 const entry=(o:Record<string,unknown>)=>({accn:'0000320193-23-000106',fy:2023,fp:'FY',form:'10-K',filed:'2023-11-03',...o});
 const revenue=FACT_CONCEPTS.find(c=>c.id==='revenue')!;
 const assets=FACT_CONCEPTS.find(c=>c.id==='total_assets')!;
@@ -45,6 +45,29 @@ describe('fetchCompanyFacts',()=>{
   await expect(fetchCompanyFacts('0000000001',budget(15_000),{fetch:noCall,sleep})).rejects.toMatchObject({code:'sec_unavailable'});
   expect(noCall).not.toHaveBeenCalled();
   await expect(fetchCompanyFacts('320193',budget(300_000),{fetch:noCall,sleep})).rejects.toBeInstanceOf(ProviderError);
+ });
+});
+
+describe('decodeCompanyFacts cik',()=>{
+ it('normalises a padded string cik to the numeric form with the same filings and companyfacts URLs',()=>{
+  const facts={'us-gaap':{Revenues:{units:{USD:[entry({start:'2022-09-25',end:'2023-09-30',val:1})]}}}};
+  const numeric=doc(facts,1991792),padded=doc(facts,'0001991792');
+  expect(decodeWithSchema(scanJsonNumbers(padded.bytes),COMPANYFACTS_SCHEMA)).toMatchObject({cik:'0001991792'});
+  expect(decodeWithSchema(scanJsonNumbers(numeric.bytes),COMPANYFACTS_SCHEMA)).toMatchObject({cik:1991792});
+  for(const s of [numeric,padded]){
+   const d=decodeCompanyFacts(s.bytes),r=parseCompanyFacts(s,{concepts:[revenue],sinceYear:2019});
+   expect(d.cik).toBe(1991792);
+   expect(companyFactsUrl(String(d.cik).padStart(10,'0'))).toBe('https://data.sec.gov/api/xbrl/companyfacts/CIK0001991792.json');
+   expect(r.filings).toEqual(parseCompanyFacts(numeric,{concepts:[revenue],sinceYear:2019}).filings);
+   expect(r.filings[0].url).toBe('https://www.sec.gov/Archives/edgar/data/1991792/000032019323000106/');
+   expect(r.candidates).toEqual([expect.objectContaining({value:'1',filingRef:r.filings[0].sourceRef})]);
+  }
+ });
+ it.each([0,'0','0000000000','1',9999999999,'9999999999'])('accepts valid cik %j',cik=>{
+  expect(decodeCompanyFacts(doc({},cik).bytes).cik).toBe(Number(cik));
+ });
+ it.each(['','abc','1991792x','-1','1.5',' 1','1 ','1e2','00001991792',-1,1.5,10000000000,Number.MAX_SAFE_INTEGER+1,null,true,{},[]])('rejects invalid cik %j as parse_error',cik=>{
+  expect(()=>decodeCompanyFacts(doc({},cik).bytes)).toThrow(expect.objectContaining({code:'parse_error'}));
  });
 });
 
