@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { TopBar } from '@/components/TopBar';
+import { ResearchChain } from '@/components/research-ui/ResearchChain';
 import { TabBar } from '@/components/TabBar';
 import { CopilotFab } from '@/components/CopilotFab';
 import { TimezoneProvider } from '@/components/TimezoneProvider';
@@ -20,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <TimezoneProvider>
       <FirstLoginTracker />
       <TopBar />
+      <ResearchChain />
       <main className="mx-auto w-full max-w-[1600px] p-3 lg:p-4">{children}</main>
       <TabBar />
       <CopilotFab />

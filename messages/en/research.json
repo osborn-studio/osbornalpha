@@ -1,0 +1,143 @@
+{
+  "chain": {
+    "label": "Research chain",
+    "steps": {
+      "macro": "Macro strategy",
+      "industry": "Industry research",
+      "company": "Company research",
+      "foreign": "Foreign research",
+      "topic": "Topic research"
+    },
+    "notServed": "Not served",
+    "notServedHint": "This section is not open yet",
+    "short": {
+      "macro": "Macro",
+      "industry": "Industry",
+      "company": "Company",
+      "foreign": "Foreign",
+      "topic": "Topic"
+    }
+  },
+  "legend": {
+    "label": "Legend"
+  },
+  "marks": {
+    "fact": "Fact",
+    "judgment": "Judgment",
+    "hypothesis": "Hypothesis",
+    "thirdParty": "Institution view · {institution}"
+  },
+  "freshness": {
+    "asOf": "Facts as of {date}",
+    "status": {
+      "fresh": "Current",
+      "stale": "Stale",
+      "error": "Read failed",
+      "missing": "No record yet"
+    }
+  },
+  "view": {
+    "label": "View",
+    "chart": "Chart",
+    "table": "Table"
+  },
+  "footer": {
+    "sources": "Sources",
+    "via": "{publisher} via {relay}",
+    "methods": "Methods and sources",
+    "disclaimer": "Nothing on this page is investment advice. Data may be delayed or revised; each number's source is in its drawer."
+  },
+  "states": {
+    "missing": "Missing",
+    "withheld": "Withheld",
+    "notServed": "Not served",
+    "lowCoverage": "Low coverage",
+    "reconstructed": "Reconstructed",
+    "stale": "Stale",
+    "revised": "Revised",
+    "retracted": "Retracted"
+  },
+  "stateMeaning": {
+    "missing": "Expected but not obtained",
+    "withheld": "A value exists but licence or gate does not release it",
+    "notServed": "Deliberately not offered",
+    "lowCoverage": "Aggregate coverage is below the threshold",
+    "reconstructed": "History rebuilt from later evidence, not what was visible then",
+    "stale": "Dataset is past its update grace period",
+    "revised": "The source issued a new version after publication",
+    "retracted": "The object was quarantined or retracted"
+  },
+  "drawer": {
+    "title": "Source",
+    "close": "Close source drawer",
+    "copy": "Copy",
+    "copyHash": "Copy hash",
+    "copied": "Copied",
+    "loadingLabel": "Reading source",
+    "loadFailed": "Source could not be read; the value on the page still stands as published.",
+    "noRelay": "None (taken directly from the publisher)",
+    "withheldNote": "Only identity and reason are shown. The value never leaves the server.",
+    "retractedNote": "The value and its history are no longer shown. Identity is kept so the record can be identified.",
+    "sections": {
+      "identity": "Identity",
+      "source": "Source",
+      "times": "Times",
+      "transform": "Transform",
+      "licence": "Licence",
+      "links": "Links"
+    },
+    "kinds": {
+      "macro_observation": "Macro observation",
+      "industry_metric": "Industry aggregate cell",
+      "financial_fact": "Disclosed fact",
+      "document_citation": "Document citation",
+      "broker_report_meta": "Foreign research metadata",
+      "judgment": "Judgment"
+    },
+    "fields": {
+      "object": "Object",
+      "evidenceId": "Evidence id",
+      "asOf": "As of",
+      "publisher": "Publisher",
+      "relay": "Relay (via)",
+      "adapter": "Adapter",
+      "url": "Fetch URL",
+      "locator": "Locator",
+      "sha256": "Evidence SHA-256",
+      "period": "Period",
+      "availableAt": "Available at",
+      "ingestedAt": "Ingested at",
+      "transform": "Transform",
+      "methodVersion": "Method version",
+      "mappingVersion": "Mapping version",
+      "codeVersion": "Code version",
+      "status": "Status",
+      "note": "Note",
+      "attribution": "Attribution",
+      "reason": "Reason",
+      "category": "Category",
+      "retractedAt": "Time"
+    },
+    "links": {
+      "module": {
+        "macro_observation": "View in macro",
+        "industry_metric": "View in industries",
+        "financial_fact": "View on the company page",
+        "document_citation": "Open the document at this page",
+        "broker_report_meta": "View in foreign research",
+        "judgment": "Method page"
+      }
+    },
+    "revisions": {
+      "period": "Period",
+      "value": "Value",
+      "available": "Available",
+      "version": "Version"
+    },
+    "revised": {
+      "frozen": "Frozen in this version",
+      "current": "Current at source",
+      "note": "Both values are shown side by side; the frozen value is not replaced."
+    }
+  }
+}

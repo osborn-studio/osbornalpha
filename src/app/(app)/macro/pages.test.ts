@@ -28,8 +28,8 @@ describe('macro pages',()=>{
  });
  it('TabBar highlights /macro/* with segment-aware matching',()=>{
   const tb=read('src/components/TabBar.tsx');
-  expect(tb).toContain("href: '/macro'");
-  expect(tb).toContain('const active = isTabActive(pathname, t.href);');
+  expect(read('src/components/nav/nav-items.ts')).toContain("href: '/macro'");
+  expect(tb).toContain('activeNavId(pathname)');
   expect(tb).not.toContain('pathname.startsWith(t.href)');
  });
 });

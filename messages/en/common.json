@@ -6,13 +6,22 @@
   "nav": {
     "macro": "Macro",
     "watchlist": "Watchlist",
-    "industries": "Industry research (US SIC)",
-    "companies": "Company research",
-    "intel": "Intel",
+    "intel": "Research",
     "portfolio": "Portfolio",
     "analyst": "Analyst",
     "tools": "Tools",
-    "settings": "Settings"
+    "settings": "Settings",
+    "label": "Main navigation",
+    "more": "More",
+    "close": "Close",
+    "search": "Search",
+    "language": "Language",
+    "theme": "Theme",
+    "themeDark": "Dark",
+    "themeLight": "Light",
+    "about": "About",
+    "langZh": "中",
+    "langEn": "EN"
   },
   "actions": {
     "save": "Save",
@@ -40,5 +49,14 @@
   "footer": {
     "copyright": "© 2026 osbornalpha",
     "about": "About"
+  },
+  "navAlt": {
+    "analyst": "分析",
+    "tools": "工具",
+    "settings": "设置",
+    "about": "关于",
+    "language": "语言",
+    "theme": "主题",
+    "more": "更多"
   }
 }

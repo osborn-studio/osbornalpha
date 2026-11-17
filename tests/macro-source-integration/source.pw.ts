@@ -6,6 +6,8 @@
 import { createHash } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { expect, test as base, type Locator, type Page, type Response } from '@playwright/test';
+import research from '../../messages/en/research.json';
+import macro from '../../messages/en/macro.json';
 import { fixtures, hashes } from './fixtures';
 import { installMacroFixtures } from './transport';
 import type { ProvenanceJson } from '../../src/components/macro/view-model';
@@ -16,7 +18,7 @@ function instant(iso: string): string {
 }
 
 function definition(scope: Locator, label: string): Locator {
-  return scope.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::dd[1]');
+  return scope.locator('dt').filter({ hasText: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }).locator('xpath=following-sibling::dd[1]');
 }
 
 async function assertProof(scope: Locator, input: ProvenanceJson): Promise<void> {
@@ -45,12 +47,43 @@ async function assertProof(scope: Locator, input: ProvenanceJson): Promise<void>
   await expect(definition(scope, 'Locator')).toHaveText(expectedLocator);
 }
 
+const fields = research.drawer.fields;
+function drawerDefinition(dialog: Locator, section: string, label: string): Locator {
+  return definition(dialog.locator(`section[data-drawer-section="${section}"] > dl`), label);
+}
+
+async function assertDrawerProof(dialog: Locator, input: ProvenanceJson): Promise<void> {
+  expect(input.retrieval, 'proof fixture must carry a retrieval').not.toBeNull();
+  expect(input.evidence, 'proof fixture must carry archived evidence').not.toBeNull();
+  const retrieval = input.retrieval!;
+  const evidence = input.evidence!;
+  await expect(drawerDefinition(dialog, 'source', fields.url)).toHaveText(retrieval.fetch_url);
+  await expect(drawerDefinition(dialog, 'source', macro.drawer.host)).toHaveText(retrieval.fetch_host);
+  await expect(drawerDefinition(dialog, 'times', fields.ingestedAt)).toHaveText(instant(retrieval.fetched_at));
+  await expect(drawerDefinition(dialog, 'times', fields.availableAt)).toHaveText(instant(input.available_at));
+  await expect(drawerDefinition(dialog, 'source', fields.sha256).getByRole('link', {name: evidence.sha256, exact: true})).toHaveCount(1);
+  await expect(drawerDefinition(dialog, 'transform', fields.codeVersion)).toHaveText(input.code_version!);
+  await expect(drawerDefinition(dialog, 'transform', fields.transform)).toHaveText(input.transform ?? macro.drawer.none);
+  await expect(drawerDefinition(dialog, 'source', fields.adapter)).toHaveText(macro.drawer.adapters[evidence.adapter]);
+  await expect(drawerDefinition(dialog, 'source', macro.drawer.toolVersions)).toHaveText(
+    Object.entries(retrieval.tool_versions).sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => `${key}=${value}`).join(' · '),
+  );
+  const locator = input.locator;
+  expect(locator, 'proof fixture must carry a locator').not.toBeNull();
+  const expectedLocator = locator!.kind === 'csv_row'
+    ? `CSV line ${locator!.line} · column ${locator!.column + 1} (both 1-based)`
+    : locator!.kind === 'html_cell'
+      ? `HTML table ${locator!.table} · row ${locator!.row} · cell ${locator!.cell} (0-based)`
+      : `JSON pointer ${locator!.pointer}`;
+  await expect(drawerDefinition(dialog, 'source', fields.locator)).toHaveText(expectedLocator);
+}
+
 async function openSource(page: Page, scenario: string): Promise<Locator> {
   const response = await page.goto(`/fixture/source?case=${scenario}`);
   expect(response?.status(), 'real component harness must load').toBe(200);
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText('Loading evidence…', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText(research.drawer.loadingLabel, { exact: true })).toHaveCount(0);
   return dialog;
 }
 
@@ -140,23 +173,22 @@ test.describe('captured SourceDrawer lineage (synthetic local fixtures)', () => 
     const newer = fixture.versions.versions[0];
     const dialog = await openSource(page, 'valid');
     await expect(dialog.getByRole('heading', { level: 2 })).toContainText('2.5%');
-    await expect(definition(dialog, 'Publisher')).toHaveText('Synthetic Bureau of Local Fixtures');
-    await expect(definition(dialog, 'Via')).toHaveText('Synthetic fixture archive');
-    await expect(definition(dialog, 'Rights')).toHaveText('Public domain');
-    await expect(definition(dialog, 'Attribution')).toHaveText('SYNTHETIC LOCAL FIXTURE ONLY');
+    await expect(drawerDefinition(dialog, 'source', fields.publisher)).toHaveText('Synthetic Bureau of Local Fixtures');
+    await expect(drawerDefinition(dialog, 'source', fields.relay)).toHaveText('Synthetic fixture archive');
+    await expect(drawerDefinition(dialog, 'licence', fields.status)).toHaveText('Public domain');
+    await expect(drawerDefinition(dialog, 'licence', fields.attribution)).toHaveText('SYNTHETIC LOCAL FIXTURE ONLY');
     await expect(dialog.locator('tr[aria-current="true"]')).toHaveCount(1);
     const displayed = dialog.locator('tr[aria-current="true"]');
-    await expect(displayed.getByRole('cell').nth(0)).toHaveText('v1');
+    await expect(displayed.getByRole('cell').nth(0)).toHaveText(fixture.drawerTarget.periodEnd);
     await expect(displayed.getByRole('cell').nth(1)).toHaveText('2.5%');
-    await expect(displayed.getByRole('cell').nth(3)).toHaveText('Displayed');
-    const later = dialog.getByRole('row').filter({ has: page.getByRole('cell', { name: 'v2', exact: true }) });
+    await expect(displayed.getByRole('cell').nth(3)).toHaveText(`v1 · ${macro.drawer.current}`);
+    const later = dialog.getByRole('row').filter({ has: page.getByRole('cell', { name: `v2 · ${macro.drawer.later}`, exact: true }) });
     await expect(later.getByRole('cell').nth(1)).toHaveText('2.5% → 2.75%');
-    await expect(later.getByRole('cell').nth(3)).toHaveText('Later revision');
+    await expect(later.getByRole('cell').nth(3)).toHaveText(`v2 · ${macro.drawer.later}`);
     await expect(later).not.toHaveAttribute('aria-current', 'true');
-    const derivedProof = dialog.locator('dl').filter({ has: page.locator('dd', { hasText: 'yoy_from_index@1' }) });
-    await expect(definition(derivedProof, 'Transform')).toHaveText('yoy_from_index@1');
-    await expect(definition(derivedProof, 'Available')).toHaveText(instant(captured.available_at));
-    await expect(definition(derivedProof, 'Code version')).toHaveText(captured.code_version!);
+    await expect(drawerDefinition(dialog, 'transform', fields.transform)).toHaveText('yoy_from_index@1');
+    await expect(drawerDefinition(dialog, 'times', fields.availableAt)).toHaveText(instant(captured.available_at));
+    await expect(drawerDefinition(dialog, 'transform', fields.codeVersion)).toHaveText(captured.code_version!);
     await expect(dialog.getByText('Derived from 2 input observations', { exact: true })).toBeVisible();
     expect(captured.inputs).toHaveLength(2);
     for (const input of captured.inputs) {
@@ -240,7 +272,7 @@ test.describe('raw SourceDrawer observation', () => {
     const raw = fixture.versions.versions.find((version) => version.observation_id === fixture.drawerTarget.observationId)!;
     expect(raw.derived_from).toBeNull();
     await expect(dialog.getByRole('heading', { level: 2 })).toContainText(fixture.drawerTarget.display);
-    await assertProof(dialog, raw);
+    await assertDrawerProof(dialog, raw);
     await expect(dialog.getByText(/^Derived from /)).toHaveCount(0);
     await assertArchivedContent(page, dialog, raw, 'raw');
     expect(registry.hits.some((hit) => hit.path === `/api/macro/evidence/${raw.evidence!.sha256}`)).toBe(true);
@@ -251,11 +283,16 @@ test.describe('failed SourceDrawer versions read', () => {
   test.use({ scenario: 'versions-error' });
   test('shows an explicit evidence error while preserving the published snapshot value', async ({ page, registry }) => {
     const dialog = await openSource(page, 'versions-error');
-    await expect(dialog.getByText('Evidence could not be read; page values still come from the published snapshot.', { exact: true })).toBeVisible();
+    const error = dialog.getByText(macro.drawer.loadFailed, { exact: true });
+    await expect(error).toHaveCount(1);
+    await expect(error).toBeVisible();
     await expect(dialog.getByRole('heading', { level: 2 })).toContainText('2.5%');
-    await expect(dialog.getByText(/US_CPI_YOY · 2026-09-30/)).toBeVisible();
-    await expect(dialog.getByRole('link')).toHaveCount(0);
-    await expect(dialog.getByText('Publisher', { exact: true })).toBeVisible();
+    await expect(dialog.locator('section[data-drawer-section="identity"]')).toContainText('US_CPI_YOY');
+    await expect(dialog.getByRole('heading', { level: 2 })).toContainText('2026-09-30');
+    await expect(dialog.locator('a[href^="/api/macro/evidence/"]')).toHaveCount(0);
+    await expect(dialog.getByRole('link').filter({hasText: /^https?:\/\//})).toHaveCount(0);
+    await expect(dialog.locator('a:not([href="/macro/US_CPI_YOY"])')).toHaveCount(0);
+    await expect(dialog.locator('dt').getByText(fields.publisher, { exact: true })).toBeVisible();
     await expect(dialog.getByRole('table')).toHaveCount(0);
     expect(registry.hits.find((hit) => hit.path.includes('/versions'))?.status).toBe(fixtures['versions-error'].versionsStatus);
   });

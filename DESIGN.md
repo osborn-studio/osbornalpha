@@ -33,7 +33,8 @@ The signature techniques that make it ours:
 ### Text Hierarchy
 - **Bone White** (#fafafa) — Primary text, headlines, prices, key data points
 - **Pewter Steel** (#a1a1aa) — Secondary text, descriptions, timestamps
-- **Distant Fog** (#52525b) — Tertiary text, placeholders, "empty state" copy
+- **Distant Fog** (#8b8b94) — Tertiary text, placeholders, "empty state" copy
+Changed 2026-11-17 from #52525b for contrast (owner approved); passes 4.5:1 on all four dark surfaces.
 
 ### Accent (Single, Restrained)
 - **Distressed Brass** (#ca8a04) — The ONLY chromatic accent. Used for primary CTAs, focus rings, active-tab indicator, selected-state outlines. Saturation ≈ 75%. Pairs with charcoal like brass hardware on dark walnut.
@@ -138,19 +139,9 @@ The signature techniques that make it ours:
 - **Error state:** border → Pulse Red, error text below in Pulse Red 12px
 - **Helper text:** 11px Distant Fog below field
 
-### Tab Bar (fixed bottom on mobile, top on desktop ≥1024px)
-- **Mobile:** fixed bottom, 56px height, Elevated Charcoal fill, `border-top: 1px Whisper Border`, `padding-bottom: env(safe-area-inset-bottom)`
-- **Per-tab:** vertical stack icon (24px line-art) + label (10px Pewter Steel)
-- **Active tab:** icon Distressed Brass + label Distressed Brass + 2px brass top-edge bar above the tab
-- **Desktop ≥1024px:** transforms into horizontal top nav, icons hidden, label-only with brass underline for active
-- **Tab icons:** line-art (not filled), 24×24px, 1.5px stroke. Specific icons:
-  - 🏠 Home → home outline icon (door + roof line)
-  - 📋 Watchlist → kanban columns icon (3 vertical bars)
-  - 🌅 Radar → concentric circle pulse icon
-  - 📰 Briefs → document with horizontal lines icon
-  - 🧪 Backtest → line-chart icon
-  - ⚙️ Settings → gear icon
-- **Note:** the emoji prefixes are DESIGN DOC labels only — the actual rendered UI uses line-art icons (no emojis in chrome). Signal emojis 🔴🟡⚪️ in card content remain (functional glyphs, not chrome)
+### Tab Bar
+- **Below 1024px:** fixed 60px bottom bar plus safe-area padding, with 宏观 / 股票池 / 研究 / 我的投资 / 更多. Line-art icons and labels; active item has a brass top-edge marker. 更多 opens a sheet directly above the bar with 分析 / 工具 / 设置 / 语言 / 主题 / 关于.
+- **From 1024px:** seven text links in the top bar (宏观 / 股票池 / 研究 / 我的投资 / 分析 / 工具 / 设置), with a brass underline on the active link. No bottom bar.
 
 ### Loading States
 - **Skeletal shimmer** matching exact layout dimensions (card → card-shaped skeleton with stock-card field positions)
@@ -281,7 +272,8 @@ Border          Whisper Border    rgba(255,255,255,0.06)
 Border (active) Active Border     rgba(202,138,4,0.4)
 Text primary    Bone White        #fafafa
 Text secondary  Pewter Steel      #a1a1aa
-Text tertiary   Distant Fog       #52525b
+Text tertiary   Distant Fog       #8b8b94
+Changed 2026-11-17 from #52525b for contrast (owner approved); passes 4.5:1 on all four dark surfaces.
 Accent          Distressed Brass  #ca8a04
 Accent fill     Brass Wash        rgba(202,138,4,0.12)
 Signal up       Pulse Red         #e11d48

@@ -1,0 +1,143 @@
+{
+  "chain": {
+    "label": "研究链",
+    "steps": {
+      "macro": "宏观策略",
+      "industry": "行业研究",
+      "company": "公司研究",
+      "foreign": "外资研报",
+      "topic": "专题研究"
+    },
+    "notServed": "未服务",
+    "notServedHint": "该板块尚未开放",
+    "short": {
+      "macro": "宏观",
+      "industry": "行业",
+      "company": "公司",
+      "foreign": "外资研报",
+      "topic": "专题"
+    }
+  },
+  "legend": {
+    "label": "图例"
+  },
+  "marks": {
+    "fact": "事实",
+    "judgment": "判断",
+    "hypothesis": "假设",
+    "thirdParty": "机构观点 · {institution}"
+  },
+  "freshness": {
+    "asOf": "事实截至 {date}",
+    "status": {
+      "fresh": "正常",
+      "stale": "过期",
+      "error": "读取失败",
+      "missing": "尚无记录"
+    }
+  },
+  "view": {
+    "label": "视图",
+    "chart": "图表",
+    "table": "表格"
+  },
+  "footer": {
+    "sources": "来源",
+    "via": "{publisher} via {relay}",
+    "methods": "方法与来源",
+    "disclaimer": "本页内容不构成投资建议。数据可能延迟或修订；每个数字的来源见其抽屉。"
+  },
+  "states": {
+    "missing": "缺失",
+    "withheld": "受限",
+    "notServed": "未服务",
+    "lowCoverage": "覆盖不足",
+    "reconstructed": "重建口径",
+    "stale": "过期",
+    "revised": "已修订",
+    "retracted": "已撤回"
+  },
+  "stateMeaning": {
+    "missing": "应有而没有取到",
+    "withheld": "有值，但授权或闸门不放行",
+    "notServed": "产品明确不做",
+    "lowCoverage": "聚合覆盖低于阈值",
+    "reconstructed": "历史用事后证据重建，非当时可见",
+    "stale": "数据集超出更新宽限",
+    "revised": "发布后源头出了新版本",
+    "retracted": "对象被隔离或撤回"
+  },
+  "drawer": {
+    "title": "来源",
+    "close": "关闭来源抽屉",
+    "copy": "复制",
+    "copyHash": "复制哈希",
+    "copied": "已复制",
+    "loadingLabel": "正在读取来源",
+    "loadFailed": "来源读取失败；页面数值仍以已发布数据为准。",
+    "noRelay": "无（直接取自发布机构）",
+    "withheldNote": "只显示身份与原因。值不出服务器。",
+    "retractedNote": "不再展示数值，也不展示历史值。保留身份，方便核对是哪一条。",
+    "sections": {
+      "identity": "身份",
+      "source": "来源",
+      "times": "时间",
+      "transform": "变换",
+      "licence": "许可",
+      "links": "链接"
+    },
+    "kinds": {
+      "macro_observation": "宏观观测",
+      "industry_metric": "行业聚合格",
+      "financial_fact": "披露事实",
+      "document_citation": "文档引用",
+      "broker_report_meta": "外资研报元数据",
+      "judgment": "判断"
+    },
+    "fields": {
+      "object": "对象",
+      "evidenceId": "证据 id",
+      "asOf": "截至",
+      "publisher": "发布机构",
+      "relay": "转发方 via",
+      "adapter": "适配器",
+      "url": "取数 URL",
+      "locator": "定位",
+      "sha256": "证据 SHA-256",
+      "period": "数据期",
+      "availableAt": "可得时间",
+      "ingestedAt": "入库时间",
+      "transform": "变换",
+      "methodVersion": "方法版本",
+      "mappingVersion": "映射版本",
+      "codeVersion": "代码版本",
+      "status": "状态",
+      "note": "说明",
+      "attribution": "署名",
+      "reason": "原因",
+      "category": "类别",
+      "retractedAt": "时间"
+    },
+    "links": {
+      "module": {
+        "macro_observation": "在宏观模块中查看",
+        "industry_metric": "在行业模块中查看",
+        "financial_fact": "在公司页中查看",
+        "document_citation": "打开文档到该页",
+        "broker_report_meta": "在外资研报中查看",
+        "judgment": "方法页"
+      }
+    },
+    "revisions": {
+      "period": "数据期",
+      "value": "值",
+      "available": "可得",
+      "version": "版本"
+    },
+    "revised": {
+      "frozen": "本版本冻结",
+      "current": "源头现行",
+      "note": "两值并列，不替换冻结值。"
+    }
+  }
+}

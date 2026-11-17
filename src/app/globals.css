@@ -16,7 +16,7 @@
   --border-active: rgba(202, 138, 4, 0.4);    /* Active Border (brass) */
   --text: #fafafa;                            /* Bone White */
   --text-dim: #a1a1aa;                        /* Pewter Steel */
-  --text-muted: #52525b;                      /* Distant Fog */
+  --text-muted: #8b8b94;                      /* Distant Fog */
   --accent: #ca8a04;                          /* Distressed Brass */
   --accent-dim: #a16207;                      /* Brass darker (hover) */
   --accent-wash: rgba(202, 138, 4, 0.12);     /* Brass Wash */
@@ -165,4 +165,10 @@ table { font-variant-numeric: tabular-nums; }
 .num {
   font-family: var(--num-font);
   font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 1024px) {
+  body {
+    padding-bottom: 0;
+  }
 }
