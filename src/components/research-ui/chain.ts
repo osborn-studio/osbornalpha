@@ -3,7 +3,7 @@ export type ChainStepId = 'macro' | 'industry' | 'company' | 'foreign' | 'topic'
 export interface ChainStep { id: ChainStepId; no: '01'|'02'|'03'|'04'|'05'; href: string; match: readonly string[] }
 export const CHAIN_STEPS: readonly ChainStep[] = [
   {id:'macro',no:'01',href:'/macro',match:['/macro']},
-  {id:'industry',no:'02',href:'/intel/industries?scheme=sic&metric=member_count',match:['/intel/industries']},
+  {id:'industry',no:'02',href:'/intel/industries?scheme=sic',match:['/intel/industries']},
   {id:'company',no:'03',href:'/intel/companies',match:['/intel/companies','/stock']},
   {id:'foreign',no:'04',href:'/intel/foreign-research',match:['/intel/foreign-research']},
   {id:'topic',no:'05',href:'/intel/topics',match:['/intel/topics']},

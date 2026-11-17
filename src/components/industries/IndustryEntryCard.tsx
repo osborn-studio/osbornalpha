@@ -32,7 +32,7 @@ export function IndustryEntryCard(){
       <h2 className="m-0 flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{t('title')}</span><span className="text-xs font-normal text-text-dim">{t('titleEn')}</span></h2>
       <p className="m-0 text-xs text-text-dim">{t('desc')}</p>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:'sic',metric:'member_count'})} className="flex flex-col gap-1.5 rounded border border-border p-3 text-text hover:border-[var(--border-active)] hover:no-underline">
+        <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:'sic'})} className="flex flex-col gap-1.5 rounded border border-border p-3 text-text hover:border-[var(--border-active)] hover:no-underline">
           <span className="flex items-center gap-2 text-sm font-semibold">{t('sicTitle')}<span aria-hidden="true" className="ml-auto text-accent">→</span></span>
           <span className="text-xs text-text-dim">{t('sicDesc')}</span>
         </Link>

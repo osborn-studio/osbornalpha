@@ -116,7 +116,8 @@ test('SIC snapshot: fiscal heatmap → reproduced drawer → table → detail', 
 
 test('bare list defaults to the SIC fixture view', async ({ page }) => {
   await page.goto('/intel/industries');
-  await expect(page.locator('nav a[href="/intel/industries?scheme=sic"]')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByText(/有值 1 \/ 2 个行业/)).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '方案', exact: true }).getByRole('link', { name: 'SIC · 美股（SEC）', exact: true })).toHaveAttribute('aria-current', 'page');
   const heatmap = page.getByRole('region', { name: '热力图' });
   await expect(heatmap).toBeVisible();
   await expect(heatmap.getByRole('button', { name: /^Semiconductors & Related Devices · 2025-12-31/ })).toBeVisible();
