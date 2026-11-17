@@ -6,6 +6,7 @@ import en from '../../../messages/en/macro.json';
 import zh from '../../../messages/zh/macro.json';
 import { ALLOCATION_LABELS, ALLOCATION_SOURCE, allocationRows } from '@/lib/macro/allocation-template';
 
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key}));
 const { localeState } = vi.hoisted(() => ({ localeState: { value: 'en' as 'zh' | 'en' } }));
 vi.mock('./use-macro-t', () => ({
   useMacroT: () => ({
@@ -44,4 +45,12 @@ describe('allocation template card', () => {
       for (const row of allocationRows()) expect(messages.judgment.allocation.tilt[row.regime]).toBe(row.tilt[locale]);
     });
   }
+});
+
+it('is marked as a hypothesis and names the template precisely, with plain percentages',()=>{
+ localeState.value='en';
+ const html=renderToStaticMarkup(createElement(AllocationTemplateCard,{current:null}));
+ expect(html).toContain('data-mark="hypothesis"');
+ expect(html).toContain('Asset allocation hypothesis template');
+ expect(html).not.toMatch(/<button|<a /);
 });

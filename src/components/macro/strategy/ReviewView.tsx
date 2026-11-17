@@ -22,7 +22,7 @@ export function ReviewView({ data }: { data: ReviewDetailResponse }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-2">
-          <Link href="/intel/macro/review" className="text-xs text-accent hover:underline">{t('review.back')}</Link>
+          <Link href="/macro/review" className="text-xs text-accent hover:underline">{t('review.back')}</Link>
           <h2 className="text-lg font-semibold">{t(`region.${r.region}`)} · <span className="font-mono">{r.month}</span></h2>
           <Tag>{t(`review.status.${r.status}`)}</Tag>
           <span className="font-mono text-[11px] text-text-dim">{t('review.generatedAt', { time: formatInstant(r.created_at) })}</span>
@@ -39,7 +39,7 @@ export function ReviewView({ data }: { data: ReviewDetailResponse }) {
                 {s.items.map((it) => (
                   <li key={it.factId}>
                     {it.text}
-                    {it.seriesId ? <> · <Link className="text-accent hover:underline" href={`/intel/macro/${it.seriesId}`}>{t('review.openSeries')}</Link></> : null}
+                    {it.seriesId ? <> · <Link className="text-accent hover:underline" href={`/macro/${it.seriesId}`}>{t('review.openSeries')}</Link></> : null}
                   </li>
                 ))}
               </ul>

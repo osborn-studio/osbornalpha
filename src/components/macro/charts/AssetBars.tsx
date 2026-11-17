@@ -1,9 +1,10 @@
 'use client';
+import {MacroStateValue} from '../MacroState';
 import type {ReactNode} from 'react';
 import type {AssetByCycle} from '@/lib/macro/series-extras';
 import type {Cycle} from '@/lib/macro/cycles';
 import {assetBarPanels,barGeometry} from './chart-geometry';
-import {DataTableToggle} from './DataTableToggle';
+import { ChartTableSwitch } from '@/components/research-ui/ChartTableSwitch';
 import {cycleKey} from '../detail-model';
 import type {MacroT} from '../use-macro-t';
 
@@ -31,7 +32,7 @@ export function AssetBars({assets,cycles,locale,t,table}:{assets:readonly AssetB
          <line x1={50} x2={50} y1={0} y2={16} stroke="var(--border)" vectorEffect="non-scaling-stroke"/>
          {geometry.width>0&&<rect x={geometry.x} y={4} width={geometry.width} height={8} fill={row.value<0?'var(--down)':'var(--up)'}/>}
         </svg>}
-        <span className={`text-right font-mono tabular-nums ${row.value===null||row.value===0?'text-text-dim':row.value<0?'text-down':'text-up'}`}>{text}</span>
+        <span className={`text-right font-mono tabular-nums ${row.value===null||row.value===0?'text-text-dim':row.value<0?'text-down':'text-up'}`}>{row.value === null ? <MacroStateValue status="missing"/> : text}</span>
        </div>;
       })}
      </div>)}
@@ -39,6 +40,5 @@ export function AssetBars({assets,cycles,locale,t,table}:{assets:readonly AssetB
    </section>;
   })}
  </div>;
- const toggleT:MacroT=(key,values)=>t(key==='detail.chartView'?'assetBars.bars':key,values);
- return <DataTableToggle chart={chart} table={table} t={toggleT}/>;
+ return <ChartTableSwitch chart={chart} table={table}/>;
 }

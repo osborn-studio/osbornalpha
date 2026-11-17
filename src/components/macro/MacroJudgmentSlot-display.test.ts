@@ -1,0 +1,25 @@
+import React,{act} from 'react';
+import {create,type ReactTestRenderer} from 'react-test-renderer';
+import {afterEach,expect,it,vi} from 'vitest';
+import {MacroJudgmentSlot} from './MacroJudgmentSlot';
+import {ClockBreakdown} from './ClockBreakdown';
+vi.mock('next-intl',()=>({useTranslations:()=> (k:string)=>k}));
+vi.mock('./use-macro-t',()=>({useMacroT:()=>({locale:'en',t:(k:string)=>k})}));
+vi.mock('./MacroRegimeClock',()=>({MacroRegimeClock:(p:object)=>React.createElement(ClockBreakdown,{...p,regime:'recovery'} as never)}));
+vi.mock('./AllocationTemplateCard',()=>({AllocationTemplateCard:()=>null}));
+vi.mock('./SourceDrawer',()=>({SourceDrawer:()=>null}));
+(globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
+let tree:ReactTestRenderer;
+afterEach(async()=>{if(tree)await act(async()=>tree.unmount());vi.unstubAllGlobals();});
+it('keeps clock display rows missing without time, then loads them at the overview instant',async()=>{
+ vi.stubGlobal('window',{setInterval:vi.fn(),clearInterval:vi.fn(),addEventListener:vi.fn(),removeEventListener:vi.fn()});
+ const fetcher=vi.fn(async(_url:string)=>({ok:true,json:async()=>({observations:[]})}));vi.stubGlobal('fetch',fetcher);
+ await act(async()=>{tree=create(React.createElement(MacroJudgmentSlot,{region:'US'}));});
+ expect(fetcher.mock.calls.filter(([url])=>url.startsWith('/api/macro/series/'))).toHaveLength(0);
+ expect(JSON.stringify(tree.toJSON())).toContain('keyCards.unavailable');
+ const createdAt='2020-06-15T12:34:56Z';
+ await act(async()=>{tree.update(React.createElement(MacroJudgmentSlot,{region:'US',createdAt}));});
+ const calls=fetcher.mock.calls.filter(([url])=>url.startsWith('/api/macro/series/'));
+ expect(calls).toHaveLength(3);
+ for(const [url] of calls)expect(new URL(url,'http://localhost').searchParams.get('asOf')).toBe(createdAt);
+});

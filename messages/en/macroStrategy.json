@@ -1,4 +1,5 @@
 {
+  "page": {"scope": "Macro observations, transmission hypotheses and historical reviews"},
   "columns": {"label": "Visible columns", "available": "Available only", "all": "Full catalog", "hidden": "{n} columns hidden (restricted / not in catalog)", "plan": "Data gap plan"},
   "tabs": {"workbench": "Macro workbench", "transmission": "Transmission", "history": "History", "review": "Review"},
   "region": {"label": "Region", "US": "US", "CN": "China"},
@@ -128,6 +129,7 @@
     "footer": "Method {method} · manifest {manifest} · input hash {hash} · code version {code} · generation {generation}"
   },
   "explain": {
+    "factsUnavailable": "No rendered facts are available for this explanation.",
     "title": "Explanation",
     "state": {"none": "Not generated", "loading": "Loading", "readError": "Could not read", "running": "Generating", "accepted": "Accepted", "rejected": "Failed validation", "failed": "Failed"},
     "loadingList": "Looking up earlier explanations for this subject; generation stays off until the lookup finishes.",

@@ -1,3 +1,4 @@
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key,useLocale:()=> 'en'}));
 import {readFileSync} from 'node:fs';
 import {createElement, act} from 'react';
 import {create, type ReactTestRenderer} from 'react-test-renderer';
@@ -29,7 +30,7 @@ function fixture():CycleTableView{return {
 const sentence=(v:CycleTableView,l:Locale,key:string)=>cycleNotes(v,l,translator(l))[0].sentences.find(s=>s.key===key)!;
 
 describe('cycle notes',()=>{
- beforeEach(()=>vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true));
+ beforeEach(()=>{vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true);vi.stubGlobal('document',{activeElement:null});vi.stubGlobal('HTMLElement',class {});});
  afterEach(()=>vi.unstubAllGlobals());
  it.each(['zh','en'] as const)('uses episode fields, existing flag labels and exact table formatting (%s)',l=>{
   const v=fixture(),t=translator(l),[note]=cycleNotes(v,l,t);
@@ -84,7 +85,7 @@ describe('cycle notes',()=>{
  it('mounts below the table and uses the canonical boundary URL',()=>{
   const screen=readFileSync(new URL('./StrategyScreens.tsx',import.meta.url),'utf8');
   expect(screen).toMatch(/<CycleReturnsTable[\s\S]*<CycleNotes view=\{v\}/);
-  expect(screen).toContain('router.replace(`/macro/history?boundary=${b}`');
+  expect(screen).toContain("router.replace(macroTabHref('history', region, b), { scroll: false })");
  });
  it('opens only the newest episode and drills sentence evidence in the existing drawer',async()=>{
   const v=fixture();v.episodes.push({...v.episodes[0],index:8,start:'2024-01-01',end:'2024-02-01'});v.cells['8']=v.cells['7'];

@@ -1,8 +1,11 @@
 'use client';
+import { MacroStateLabel, MacroStateValue } from '../MacroState';
 // Policy action episodes × asset interval changes (spec §3.4, §5.5): boundary switch with its definition, episode
 // header (direction, effective dates, upper bound from → to, cumulative bp, event count, left-censored / ongoing / data
 // gap), cells with change and "from (date) → to (date)", the endpoint evidence drawer, a per-column median chart with a
 // table toggle, and the first_seen footer. Below sm the table becomes one list per column.
+import { MacroResearchFooter } from '../MacroResearchFooter';
+import { registryIdsIn } from '../research-sources';
 import { useState } from 'react';
 import { barGeometry } from '../charts/chart-geometry';
 import { Button, Panel, Tag } from '@/components/ui';
@@ -16,7 +19,7 @@ import { useColumnMode } from './use-column-mode';
 
 const BOUNDARIES: readonly Boundary[] = ['event_day', 'first_trading_day', 'month_end'];
 
-export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleTableView; boundary: Boundary; onBoundary: (b: Boundary) => void }) {
+export function CycleReturnsTable({ view, boundary, onBoundary, region = 'US' }: { region?: 'US' | 'CN'; view: CycleTableView; boundary: Boundary; onBoundary: (b: Boundary) => void }) {
   const { t, locale } = useStrategyT();
   const [drill, setDrill] = useState<{ title: string; refs: ObsRef[] } | null>(null);
   const [mediansAsTable, setMediansAsTable] = useState(false);
@@ -51,7 +54,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                 <thead>
                   <tr className="text-right text-text-dim">
                     <th className="px-1.5 py-1 text-left font-medium">{t('history.episode')}</th>
-                    {columns.map((c) => <th key={c.id} className="px-1.5 py-1 font-medium">{c.label[locale]} {c.change_kind === 'pct' ? '%' : 'bp'}{columnInfo.get(c.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(c.id)!.hidden_reason}`)}</span> : null}</th>)}
+                    {columns.map((c) => <th key={c.id} className="px-1.5 py-1 font-medium">{c.label[locale]} {c.change_kind === 'pct' ? '%' : 'bp'}{columnInfo.get(c.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim"><MacroStateLabel status={columnInfo.get(c.id)!.hidden_reason!}>{t(`state.${columnInfo.get(c.id)!.hidden_reason}`)}</MacroStateLabel></span> : null}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -68,7 +71,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                           const c = cycleCell(cycleCellOf(view, e, col.id), t);
                           const body = (
                             <>
-                              <div className="font-mono tabular-nums">{c.main}</div>
+                              <div className="font-mono tabular-nums"><MacroStateValue status={cycleCellOf(view,e,col.id).status} value={c.main}/></div>
                               {c.sub ? <div className="font-mono text-[10px] tabular-nums text-text-dim">{c.sub}</div> : null}
                             </>
                           );
@@ -89,7 +92,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
             <div className="space-y-3 sm:hidden">
               {cycleGroups(view, t, locale).filter(g => visible.has(g.id)).map((g) => (
                 <section key={g.id} className="rounded border border-border p-2">
-                  <h3 className="text-xs font-semibold">{g.label}{columnInfo.get(g.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(g.id)!.hidden_reason}`)}</span> : null}</h3>
+                  <h3 className="text-xs font-semibold">{g.label}{columnInfo.get(g.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim"><MacroStateLabel status={columnInfo.get(g.id)!.hidden_reason!}>{t(`state.${columnInfo.get(g.id)!.hidden_reason}`)}</MacroStateLabel></span> : null}</h3>
                   <ul className="mt-1 space-y-1 text-xs">
                     {g.rows.map((r) => (
                       <li key={r.key} className="flex justify-between gap-2">
@@ -101,7 +104,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                         {(() => {
                           const body = (
                             <>
-                              <span className="font-mono tabular-nums">{r.cell.main}</span>
+                              <span className="font-mono tabular-nums"><MacroStateValue status={r.cell.tone === 'missing' ? (columnInfo.get(g.id)?.hidden_reason ?? 'missing') : undefined} value={r.cell.main}/></span>
                               {r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}
                             </>
                           );
@@ -156,6 +159,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
       <p className="text-[11px] text-text-dim">
         {t('history.footer')} · <a className="text-accent hover:underline" href={strategyApi.manifest(view.manifest_id)}>{t('meta.manifest', { id: shortId(view.manifest_id) })}</a> · {view.version} · {view.episodes_version}
       </p>
+      <MacroResearchFooter seriesIds={registryIdsIn(columns)} region={region} />
       <EvidencePairDrawer open={drill !== null} title={drill?.title ?? ''} onClose={() => setDrill(null)}>
         {drill ? <ObsRefTable refs={drill.refs} /> : null}
       </EvidencePairDrawer>

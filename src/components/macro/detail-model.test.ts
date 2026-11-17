@@ -95,3 +95,8 @@ describe('snapshot history and marker layers',()=>{
   expect(recentEvents(Array.from({length:9},(_,i)=>e(String(i))),[],{})).toHaveLength(6);
  });
 });
+
+it('preserves null values and absent monthly periods as gaps, never zero',()=>{
+ expect(chartPoints([{period_end:'2026-01-31',value_text:'2'},{period_end:'2026-03-31',value_text:'3'}],'month')).toEqual([{time:'2026-01-31',value:2},{time:'2026-02-28',value:null},{time:'2026-03-31',value:3}]);
+ expect(chartPoints([{period_end:'2026-01-31',value_text:''}])).toEqual([{time:'2026-01-31',value:null}]);
+});

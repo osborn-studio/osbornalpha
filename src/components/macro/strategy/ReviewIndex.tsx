@@ -28,8 +28,8 @@ export function ReviewIndex({ months, us, cn }: { months: string[]; us: ReviewIn
             {reviewGrid(months, us, cn).map((row) => (
               <tr key={row.month} className="border-t border-border">
                 <td className="px-1.5 py-1 font-mono tabular-nums">{row.month}</td>
-                <IndexTd cell={row.US} href={`/intel/macro/review/US/${row.month}`} />
-                <IndexTd cell={row.CN} href={`/intel/macro/review/CN/${row.month}`} />
+                <IndexTd cell={row.US} href={`/macro/review/US/${row.month}`} />
+                <IndexTd cell={row.CN} href={`/macro/review/CN/${row.month}`} />
               </tr>
             ))}
           </tbody>

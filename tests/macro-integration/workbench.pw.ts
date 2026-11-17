@@ -73,13 +73,13 @@ test('workbench tabs and strategy/history URLs retain their destinations', async
   await ready(page);
   const nav = page.getByRole('navigation', {name: 'Workbench sections'});
   for (const [name, tab] of [['Method & sources', 'methodology'], ['Indicators', 'indicators'], ['Overview', 'overview']]) {
-    const button = nav.getByRole('button', {name, exact: true});
+    const button = nav.getByRole('link', {name, exact: true});
     await button.focus(); await page.keyboard.press('Enter');
     await expect(button).toHaveAttribute('aria-current', 'page');
     await expect(page).toHaveURL(new RegExp(`tab=${tab}`));
   }
   for (const path of ['transmission', 'history', 'review']) {
-    await expect(nav.locator(`a[href="/intel/macro/${path}"]`)).toBeVisible();
+    await expect(nav.locator(`a[href="/macro/${path}?region=US"]`)).toBeVisible();
   }
 });
 for (const width of [320, 390]) test(`mobile ${width}: navigation and keyboard expansions fit the viewport`, async ({page}) => {

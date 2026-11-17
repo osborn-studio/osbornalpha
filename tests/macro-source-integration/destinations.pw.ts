@@ -72,8 +72,9 @@ test('indicator detail loads observations and the real chart/table controls', as
   await loadedDestination(page, response, '/macro/US_CPI_YOY');
   await expect(page.getByRole('heading', { name: 'U.S. CPI, year over year', exact: true })).toBeVisible();
   await expect(page.getByRole('group', { name: 'Time window' }).getByRole('button', { name: '5Y', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('group', { name: 'Chart or table view' }).getByRole('button', { name: 'Table view', exact: true }).click();
+  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
   const table = page.getByRole('table').filter({ has: page.getByRole('columnheader', { name: 'Version', exact: true }) });
+  await expect(table).toBeVisible();
   const observation = fixtures.valid.detail.observations.at(-1)!;
   const row = table.getByRole('row').filter({ has: page.getByRole('cell', { name: observation.period_end.slice(0, 7), exact: true }) });
   await expect(row).toContainText(`${observation.value_text}%`);
@@ -88,7 +89,7 @@ test('indicator detail loads observations and the real chart/table controls', as
     expect(params.get('to')).toBe('2026-11-07');
   }
   await capture(page, 'detail-observations');
-  await page.getByRole('group', { name: 'Chart or table view' }).getByRole('button', { name: 'Chart', exact: true }).click();
+  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Chart', exact: true }).click();
   const chart = page.getByRole('img', { name: 'U.S. CPI, year over year history', exact: true });
   await expect(chart).toBeVisible();
   await expect(chart.locator('canvas').first(), 'real lightweight-charts canvas renders after the table toggle').toBeVisible();
@@ -110,7 +111,7 @@ test('history month_end reaches a rendered episode and preserves exact boundary 
   expect(apiQueries(macroRegistry, '/api/macro/strategy/cycle-table')).toEqual(['?boundary=month_end']);
   await capture(page, 'history-month-end');
   await boundary.getByRole('button', { name: 'Event day', exact: true }).click();
-  await expect(page).toHaveURL(destinationURL('/macro/history?boundary=event_day'));
+  await expect(page).toHaveURL(destinationURL('/macro/history?region=US&boundary=event_day'));
   await expect(boundary.getByRole('button', { name: 'Event day', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect.poll(() => apiQueries(macroRegistry, '/api/macro/strategy/cycle-table')).toEqual(['?boundary=month_end', '?boundary=event_day']);
   await expect(page.getByText('From = the last daily observation before', { exact: false })).toBeVisible();
@@ -143,7 +144,7 @@ test('real strategy tab opens the review grid and generated review link renders 
   const response = await page.goto(destinationURL('/intel/macro/history?boundary=month_end'));
   await loadedDestination(page, response, '/macro/history?boundary=month_end');
   await page.getByRole('link', { name: 'Review', exact: true }).click();
-  await expect(page).toHaveURL(destinationURL('/macro/review'));
+  await expect(page).toHaveURL(destinationURL('/macro/review?region=US'));
   await expect(page.getByRole('heading', { name: 'Monthly review', exact: true })).toBeVisible();
   const row = page.getByRole('row').filter({ has: page.getByRole('cell', { name: '2026-10', exact: true }) });
   await expect(row.getByRole('link', { name: 'Generated', exact: true })).toBeVisible();
@@ -163,7 +164,7 @@ test('real strategy tab opens the review grid and generated review link renders 
   await capture(page, 'review-facts');
   expect(apiQueries(macroRegistry, '/api/macro/strategy/reviews/US/2026-10')).toEqual(['']);
   // Follow a real ReviewView fact link into the actual indicator renderer.
-  await page.locator('a[href="/intel/macro/US_CPI_YOY"]').first().click();
+  await page.locator('a[href="/macro/US_CPI_YOY"]').first().click();
   await expect(page).toHaveURL(destinationURL('/macro/US_CPI_YOY'));
   await expect(page.getByRole('heading', { name: 'U.S. CPI, year over year', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'View evidence and revisions', exact: true })).toBeVisible();

@@ -2,6 +2,7 @@
 // IndicatorTable — overview / indicators table (spec §3.2, canvas OverviewOff): name | value | change | period |
 // available | status | sparkline. Clicking a value opens the evidence drawer. Missing/restricted rows are greyed with
 // their reason. Moves use neutral arrows only. Below 640px name / value / change stay, with the status (and the reason for missing rows) under the name (spec §3.6).
+import { MacroStateLabel, MacroStateValue } from './MacroState';
 import Link from 'next/link';
 import { Sparkline } from './charts/Sparkline';
 import type { MacroT } from './use-macro-t';
@@ -39,30 +40,30 @@ export function IndicatorTable({ rows, t, onOpenEvidence, onPreview, previewId }
                     <span className="font-medium">{row.name}</span>
                   )}
                   {!row.muted && (
-                    <Link href={`/intel/macro/${encodeURIComponent(row.seriesId)}`} className="text-[11px] text-text-dim hover:text-accent">
+                    <Link href={`/macro/${encodeURIComponent(row.seriesId)}`} className="text-[11px] text-text-dim hover:text-accent">
                       {t('table.detail')}
                     </Link>
                   )}
                 </div>
-                <div className="mt-0.5 text-[11px] text-text-dim sm:hidden">{t(statusKey(row))}{row.muted && row.reason ? ` · ${row.reason}` : ''}</div>
+                <div className="mt-0.5 text-[11px] text-text-dim sm:hidden"><MacroStateLabel status={row.muted ? row.status === 'active' ? 'missing' : row.status : row.timeliness}>{t(statusKey(row))}</MacroStateLabel>{row.muted && row.reason ? ` · ${row.reason}` : ''}</div>
               </td>
               <td className="px-2 py-1.5 text-right font-mono tabular-nums">
-                {row.hasEvidence && onOpenEvidence ? (
+                <MacroStateValue status={row.muted ? row.status === 'active' ? 'missing' : row.status : row.timeliness} detail={row.reason ?? undefined} value={row.hasEvidence && onOpenEvidence ? (
                   <button type="button" onClick={() => onOpenEvidence(row)} className="border-b border-dotted border-accent font-mono tabular-nums text-text">
                     {row.value}{row.unit}
                   </button>
                 ) : (
                   <span>{row.value}{row.unit}</span>
-                )}
+                )} />
               </td>
               <td className="px-2 py-1.5 text-right font-mono tabular-nums text-text-dim">
-                {row.change ? `${row.change.arrow} ${row.change.text}` : '—'}
+                <MacroStateValue value={row.change ? `${row.change.arrow} ${row.change.text}` : null} />
               </td>
               <td className="hidden px-2 py-1.5 font-mono tabular-nums sm:table-cell">{row.period}</td>
               <td className="hidden px-2 py-1.5 font-mono tabular-nums md:table-cell">{row.available}</td>
               <td className="hidden px-2 py-1.5 sm:table-cell">
                 <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ${row.status === 'active' && row.timeliness === 'late' ? 'border-[color-mix(in_srgb,var(--warn)_35%,transparent)] text-warn' : 'border-border text-text-dim'}`}>
-                  {t(statusKey(row))}
+                  <MacroStateLabel status={row.muted ? row.status === 'active' ? 'missing' : row.status : row.timeliness}>{t(statusKey(row))}</MacroStateLabel>
                 </span>
               </td>
               <td className="hidden px-2 py-1.5 md:table-cell">

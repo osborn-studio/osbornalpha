@@ -3,11 +3,12 @@
 // (spec §3.3). Band tokens stay neutral and distinguishable: up/hiking = --warn (amber) wash, down/cutting = --text-dim
 // (grey) wash, plateau = --text-muted at a faint alpha. Axis text uses Geist Mono (--font-mono).
 // Derived events are arrows above the line; calendar entries are circles below it.
+import { lineSegments } from '@/components/research-ui/chart-gaps';
 import { useEffect, useRef } from 'react';
 import type { IChartApi, SeriesMarker, Time } from 'lightweight-charts';
 import { bandPoints, snapMarkers, withAlpha } from './chart-geometry';
 
-export interface LinePoint { time: string; value: number }
+export interface LinePoint { time: string; value: number | null }
 export interface ChartBand { start: string; end: string; direction: 'up' | 'down' | 'plateau' }
 export interface MarkerLayers { derived?: boolean; calendar?: boolean }
 export interface ChartMarker { time: string; kind: 'derived' | 'calendar'; text: string }
@@ -58,15 +59,20 @@ export function MacroLineChart({ points, bands = [], markers = [], height = 260,
           color: b.direction === 'up' ? withAlpha(warn, 0.2) : b.direction === 'down' ? withAlpha(dim, 0.22) : withAlpha(muted, 0.08),
         })));
       }
+      const segments = lineSegments(points.map(p => ({...p, y: p.value !== null && Number.isFinite(p.value) ? p.value : null})));
+      const visibleTimes = segments.flatMap(segment => segment.map(p => p.time));
+      const snapped = snapMarkers(visibleTimes, markers.filter(m => m.kind === 'derived' ? layers?.derived !== false : layers?.calendar === true));
+      for (const segment of segments) {
       const line = chart.addLineSeries({ color: text, lineWidth: 2, priceLineVisible: false });
-      line.setData(points.map((p) => ({ time: p.time as Time, value: p.value })));
-      line.setMarkers(snapMarkers(times, markers.filter(m => m.kind === 'derived' ? layers?.derived !== false : layers?.calendar === true)).map((m): SeriesMarker<Time> => ({
+      line.setData(segment.map((p) => ({ time: p.time as Time, value: p.y! })));
+      line.setMarkers(snapped.filter(m => segment.some(p => p.time === m.time)).map((m): SeriesMarker<Time> => ({
         time: m.time as Time,
         position: m.kind === 'derived' ? 'aboveBar' : 'belowBar',
         shape: m.kind === 'derived' ? 'arrowDown' : 'circle',
         color: m.kind === 'derived' ? accent : dim,
         text: m.text,
       })));
+      }
       chart.timeScale().fitContent();
       observer = new ResizeObserver(([entry]) => {
         const width = Math.floor(entry.contentRect.width);

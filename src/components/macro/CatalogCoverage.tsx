@@ -1,3 +1,4 @@
+import { MacroStateLabel } from './MacroState';
 // CatalogCoverage — 目录覆盖 (spec §3.2): verified / catalog as counts (never percentages), not-verified items with
 // their reasons, and collection status per dataset (spec §4.5 collection freshness).
 import { Panel } from '@/components/ui';
@@ -24,7 +25,7 @@ export function CatalogCoverage({ coverage, collection, t, onMethodology }: { co
           {coverage.notVerified.map((n) => (
             <li key={n.seriesId} className="flex gap-2">
               <span className="min-w-[120px]">{n.name}</span>
-              <span className="text-text-dim">{t(`status.${n.status}`)}{n.reason ? `：${n.reason}` : ''}</span>
+              <span className="text-text-dim"><MacroStateLabel status={n.status}>{t(`status.${n.status}`)}</MacroStateLabel>{n.reason ? `：${n.reason}` : ''}</span>
             </li>
           ))}
         </ul>
@@ -42,7 +43,7 @@ export function CatalogCoverage({ coverage, collection, t, onMethodology }: { co
           {collection.map((c) => (
             <tr key={c.dataset} className="border-t border-border">
               <td className="py-1 font-mono">{c.dataset}</td>
-              <td className={`py-1 ${c.status === 'error' || c.status === 'stale' ? 'text-warn' : c.status === 'missing' ? 'text-text-dim' : ''}`}>{t(`collection.${c.status}`)}</td>
+              <td className={`py-1 ${c.status === 'error' || c.status === 'stale' ? 'text-warn' : c.status === 'missing' ? 'text-text-dim' : ''}`}>{c.status === 'stale' || c.status === 'missing' ? <MacroStateLabel status={c.status} /> : t(`collection.${c.status}`)}</td>
               <td className="py-1 font-mono tabular-nums text-text-dim">{c.lastOk}</td>
             </tr>
           ))}

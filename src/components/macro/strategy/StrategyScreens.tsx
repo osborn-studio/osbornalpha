@@ -1,7 +1,10 @@
 'use client';
 // Client screens of the four strategy pages (spec §3.1–§3.5): link tabs, region / window / boundary switches, data
 // loading through the strategy APIs and the capability-matrix states (spec §9.1). Pages stay thin server components.
-import Link from 'next/link';
+import { MacroResearchFooter } from '../MacroResearchFooter';
+import { registryIdsIn } from '../research-sources';
+import { MacroTabs, macroTabHref } from '../MacroTabs';
+import { PageHeader } from '@/components/research-ui/PageHeader';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui';
@@ -20,25 +23,9 @@ import { closedMonths, formatInstant, hasSnapshot, shortId, strategyApi, type Lo
 import { useStrategyFetch } from './use-strategy-fetch';
 import { useStrategyT } from './use-strategy-t';
 
-const TABS = [
-  { id: 'transmission', href: '/intel/macro/transmission' },
-  { id: 'history', href: '/intel/macro/history' },
-  { id: 'review', href: '/intel/macro/review' },
-] as const;
-
-export function StrategyTabs({ active }: { active: 'transmission' | 'history' | 'review' }) {
-  const { t } = useStrategyT();
-  return (
-    <nav className="flex flex-wrap gap-1 border-b border-border text-sm">
-      <Link href="/intel/macro" className="px-3 py-2 text-text-dim hover:text-text">{t('tabs.workbench')}</Link>
-      {TABS.map((tab) => (
-        <Link key={tab.id} href={tab.href} aria-current={tab.id === active ? 'page' : undefined}
-          className={`px-3 py-2 ${tab.id === active ? 'border-b-2 border-accent text-text' : 'text-text-dim hover:text-text'}`}>
-          {t(`tabs.${tab.id}`)}
-        </Link>
-      ))}
-    </nav>
-  );
+export function StrategyPageHeader({active,region='US'}:{active:'transmission'|'history'|'review';region?:Region}) {
+ const {t}=useStrategyT();
+ return <><PageHeader title={t(`tabs.${active}`)} scope={t('page.scope')} /><MacroTabs active={active} region={region} /></>;
 }
 
 function Gate<T>({ state, reload, children }: { state: LoadState<T>; reload: () => void; children: (data: T) => ReactNode }) {
@@ -69,16 +56,17 @@ export function TransmissionScreen({ initialRegion }: { initialRegion: Region })
   const { t } = useStrategyT();
   const router = useRouter();
   const [region, setRegion] = useState<Region>(initialRegion);
+  const [responseSeries, setResponseSeries] = useState<string[]>([]);
   const [window, setWindow] = useState<1 | 3 | 6>(3);
   const tr = useStrategyFetch<TransmissionResponse>(strategyApi.transmission(region));
   const pr = useStrategyFetch<PolicyResponseView>(strategyApi.policyResponse(window));
   function switchRegion(r: Region) {
     setRegion(r);
-    router.replace(`/intel/macro/transmission?region=${r}`, { scroll: false });
+    router.replace(`/macro/transmission?region=${r}`, { scroll: false });
   }
   return (
     <div className="space-y-4">
-      <StrategyTabs active="transmission" />
+      <StrategyPageHeader active="transmission" region={region} />
       <RegionSwitch region={region} onRegion={switchRegion} />
       <Gate state={tr.state} reload={tr.reload}>
         {(d) => {
@@ -99,37 +87,40 @@ export function TransmissionScreen({ initialRegion }: { initialRegion: Region })
         }}
       </Gate>
       <Gate state={pr.state} reload={pr.reload}>
-        {(v) => <PolicyResponseMatrix view={v} window={window} onWindow={setWindow} />}
+        {(v) => <PolicyResponseMatrix view={v} window={window} onWindow={setWindow} onSeriesShown={setResponseSeries} />}
       </Gate>
+      <MacroResearchFooter seriesIds={[...registryIdsIn(tr.state.kind === 'ok' ? tr.state.data : null), ...(pr.state.kind === 'ok' ? responseSeries : [])]} region={region} />
     </div>
   );
 }
 
-export function HistoryScreen({ initialBoundary }: { initialBoundary: Boundary }) {
+export function HistoryScreen({ initialBoundary, region = 'US' }: { initialBoundary: Boundary; region?: Region }) {
   const router = useRouter();
   const [boundary, setBoundary] = useState<Boundary>(initialBoundary);
   const ct = useStrategyFetch<CycleTableView>(strategyApi.cycleTable(boundary));
   function switchBoundary(b: Boundary) {
     setBoundary(b);
-    router.replace(`/macro/history?boundary=${b}`, { scroll: false });
+    router.replace(macroTabHref('history', region, b), { scroll: false });
   }
   return (
     <div className="space-y-4">
-      <StrategyTabs active="history" />
+      <StrategyPageHeader active="history" region={region} />
+      {ct.state.kind !== 'ok' && <MacroResearchFooter seriesIds={[]} region={region} />}
       <Gate state={ct.state} reload={ct.reload}>
-        {(v) => <><CycleReturnsTable view={v} boundary={boundary} onBoundary={switchBoundary} /><CycleNotes view={v} /></>}
+        {(v) => <><CycleReturnsTable view={v} region={region} boundary={boundary} onBoundary={switchBoundary} /><CycleNotes view={v} /></>}
       </Gate>
     </div>
   );
 }
 
-export function ReviewIndexScreen() {
+export function ReviewIndexScreen({region = 'US'}:{region?:Region}) {
   const us = useStrategyFetch<ReviewIndexResponse>(strategyApi.reviews('US'));
   const cn = useStrategyFetch<ReviewIndexResponse>(strategyApi.reviews('CN'));
   const months = useMemo(() => closedMonths(new Date(), 36), []);
   return (
     <div className="space-y-4">
-      <StrategyTabs active="review" />
+      <StrategyPageHeader active="review" region={region} />
+      <MacroResearchFooter seriesIds={[]} region={region} />
       <Gate state={us.state} reload={us.reload}>
         {(u) => (
           <Gate state={cn.state} reload={cn.reload}>
@@ -145,8 +136,9 @@ export function ReviewScreen({ region, month }: { region: Region; month: string 
   const rv = useStrategyFetch<ReviewDetailResponse>(strategyApi.review(region, month));
   return (
     <div className="space-y-4">
-      <StrategyTabs active="review" />
+      <StrategyPageHeader active="review" region={region} />
       <Gate state={rv.state} reload={rv.reload}>{(d) => <ReviewView data={d} />}</Gate>
+      <MacroResearchFooter seriesIds={registryIdsIn(rv.state.kind === 'ok' ? rv.state.data.result.facts : null)} region={region} />
     </div>
   );
 }

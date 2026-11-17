@@ -4,9 +4,13 @@
 // assets only) → method → source, evidence and revisions (drawer). `compact` (overview preview) keeps the facts and
 // the chart/table only.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { MacroStateLabel, MacroStateValue } from './MacroState';
+import { MacroResearchFooter } from './MacroResearchFooter';
+import { MacroTabs } from './MacroTabs';
+import { PageHeader } from '@/components/research-ui/PageHeader';
 import { seriesById } from '@/lib/macro/series-registry';
 import { AssetBars } from './charts/AssetBars';
-import { DataTableToggle } from './charts/DataTableToggle';
+import { ChartTableSwitch } from '@/components/research-ui/ChartTableSwitch';
 import { MacroLineChart } from './charts/MacroLineChart';
 import { assetChangeView, bandsOf, chartPoints, cycleKey, defaultWindow, diffByPeriod, fetchSeriesWindow, markersOf, recentEvents, sourceJsonOf, transformLabel, windowFrom, windowsFor, yoyOf, type DetailWindow, type Transform } from './detail-model';
 import { MISSING, formatInstant, formatPeriod, formatValueText, typedChange, unitSuffix } from './macro-format';
@@ -22,7 +26,7 @@ function Fact({ label, value, note }: { label: string; value: string; note?: str
   return (
     <div>
       <dt className="text-[10px] uppercase tracking-wider text-text-dim">{label}</dt>
-      <dd className="font-mono text-base tabular-nums">{value}</dd>
+      <dd className="font-mono text-base tabular-nums"><MacroStateValue value={value}/></dd>
       {note && <dd className="text-[11px] text-text-dim">{note}</dd>}
     </div>
   );
@@ -69,7 +73,7 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
   const d = base.data;
   const diffRowsJson = wantDiff ? diffLoad.data?.observations ?? null : null;
   const diffMap = useMemo(() => (diffRowsJson ? diffByPeriod(diffRowsJson) : new Map<string, string>()), [diffRowsJson]);
-  const points = useMemo(() => (d ? chartPoints(wantDiff ? diffRowsJson ?? [] : d.observations) : []), [d, wantDiff, diffRowsJson]);
+  const points = useMemo(() => (d ? chartPoints(wantDiff ? diffRowsJson ?? [] : d.observations, period) : []), [d, wantDiff, diffRowsJson, period]);
   const bands = useMemo(() => (d ? bandsOf(d.cycles) : []), [d]);
   const markers = useMemo(() => (d && d.observations.length > 0 ? markersOf(d.events, d.calendar, d.observations[0].period_end, layers) : []), [d, layers]);
   const events = useMemo(() => (d ? recentEvents(d.events, d.calendar, layers) : []), [d, layers]);
@@ -119,14 +123,15 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
 
   return (
     <div className={compact ? 'space-y-3 [&_.card-base]:!rounded-md' : 'space-y-3'}>
+      {!compact && <><PageHeader title={name} scope={t('page.subtitle')} legend={false} /><MacroTabs active="indicators" region={def.region} /></>}
       <div className="card-base space-y-3">
         <div className="flex flex-wrap items-baseline gap-2">
-          <h2 className="text-lg font-semibold">{name}</h2>
+          {compact && <h2 className="text-lg font-semibold">{name}</h2>}
           <span className="font-mono text-[11px] text-text-dim">{def.id}</span>
-          {def.status !== 'active' && <span className="rounded border border-border px-1.5 text-[11px] text-text-dim">{t(`status.${def.status}`)}{def.reason ? `：${pick(def.reason, locale)}` : ''}</span>}
+          {def.status !== 'active' && <span className="rounded border border-border px-1.5 text-[11px] text-text-dim"><MacroStateLabel status={def.status}>{t(`status.${def.status}`)}</MacroStateLabel>{def.reason ? `：${pick(def.reason, locale)}` : ''}</span>}
         </div>
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-density="data">
-          <Fact label={t('detail.current')} value={cur ? `${formatValueText(cur.value_text)}${unit}` : MISSING} />
+          <Fact label={t('detail.current')} value={def.status === 'active' && cur ? `${formatValueText(cur.value_text)}${unit}` : MISSING} />
           <Fact label={t('detail.change')} value={change ? `${change.arrow} ${change.text}` : MISSING} />
           <Fact label={t('detail.period')} value={cur ? formatPeriod(cur.period_end, def.period) : MISSING} />
           <Fact label={t('detail.available')} value={cur ? formatInstant(cur.available_at) : MISSING} note={t('detail.basis')} />
@@ -147,8 +152,8 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
         {error && <div role="alert" className="text-xs text-text-dim">{t('states.loadFailed', { code: error })}</div>}
         {loading && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
         {!error && !loading && (points.length === 0
-          ? <div className="text-xs text-text-dim">{t('detail.empty')}</div>
-          : <DataTableToggle t={t} chart={<MacroLineChart points={points} bands={bands} markers={markers} layers={layers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />)}
+          ? <MacroStateLabel status={def.status === 'restricted' ? 'restricted' : 'missing'} detail={t('detail.empty')} />
+          : <ChartTableSwitch chart={<MacroLineChart points={points} bands={bands} markers={markers} layers={layers} ariaLabel={t('detail.chartLabel', { name })} />} table={obsTable} />)}
         {d && d.cycles.length > 0 && <div className="text-[11px] text-text-dim">{t('detail.confirmNote')}</div>}
       </section>
 
@@ -216,6 +221,7 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
           </Section>
         </>
       )}
+      {!compact && <MacroResearchFooter seriesIds={[readDef.id, ...(d?.assetsByCycle.map(a => a.asset_id) ?? [])]} region={def.region} />}
       <SourceDrawer target={drawer} onClose={closeDrawer} t={t} locale={locale} />
     </div>
   );

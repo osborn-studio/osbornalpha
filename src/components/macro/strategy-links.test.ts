@@ -15,12 +15,10 @@ describe('strategyLinkTabs',()=>{
 });
 
 describe('workbench wiring (structural)',()=>{
- it('MacroWorkbench renders the link tabs inside a MACRO-P3 block, from a strategyEnabled prop',()=>{
+ it('MacroWorkbench renders the shared seven-tab navigation',()=>{
   const src=read('src/components/macro/MacroWorkbench.tsx');
-  expect(src).toMatch(/\{\/\* MACRO-P3 \*\/\}[\s\S]*strategyLinkTabs\(strategyEnabled\)[\s\S]*\{\/\* \/MACRO-P3 \*\/\}/);
-  expect(src).toMatch(/\/\/ MACRO-P3\nimport \{ strategyLinkTabs \} from '.\/strategy-links';\n\/\/ \/MACRO-P3/);
-  expect(src).toContain('strategyEnabled');
-  expect(src).not.toContain('MACRO_STRATEGY_ENABLED');   // the flag is read server-side only
+  expect(src).toContain('<MacroTabs active={tab} region={region}');
+  expect(src).not.toContain('strategyLinkTabs(');
  });
  it('only the server page reads the flag, through the strategy flag helper',()=>{
   const page=read('src/app/(app)/macro/page.tsx');

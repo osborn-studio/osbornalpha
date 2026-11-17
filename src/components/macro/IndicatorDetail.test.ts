@@ -1,3 +1,4 @@
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key,useLocale:()=> 'en'}));
 import React, {act} from 'react';
 import {create, type ReactTestRenderer} from 'react-test-renderer';
 import {afterEach,expect,it,vi} from 'vitest';

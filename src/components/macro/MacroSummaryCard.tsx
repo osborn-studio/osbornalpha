@@ -17,7 +17,7 @@ export function MacroSummaryCard() {
       {state.status === 'loading' && <div className="text-[11px] text-text-dim">{t('states.loading')}</div>}
       {(state.status === 'error' || (state.status === 'ok' && groups.length === 0)) && <div className="text-[11px] text-text-dim">{t('summary.unavailable')}</div>}
       {groups.length > 0 && <MacroKeyRows groups={groups} t={t} />}
-      <Link href="/intel/macro" className="mt-2 inline-block text-[11px] text-accent">{t('summary.enter')}</Link>
+      <Link href="/macro" className="mt-2 inline-block text-[11px] text-accent">{t('summary.enter')}</Link>
     </Panel>
   );
 }

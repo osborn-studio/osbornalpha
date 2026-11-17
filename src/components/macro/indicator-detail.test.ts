@@ -1,3 +1,5 @@
+vi.mock('next/link',()=>({default:({children,...props}:{children:import('react').ReactNode;href:string})=>createElement('a',props,children)}));
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key,useLocale:()=> 'en'}));
 import {act, createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {create, type ReactTestRenderer} from 'react-test-renderer';
@@ -38,4 +40,11 @@ describe('registry detail definitions', () => {
       seriesId:'US_WALCL_W',unit:'usd_mn',source:{publisher:{en:'Board of Governors of the Federal Reserve System'}},
     });
   });
+});
+
+it.each([false, true])('renders the series title once (compact=%s)', compact => {
+ const name=catalogById('US_CPI_YOY')!.name.en;
+ const html=renderToStaticMarkup(createElement(IndicatorDetail,{seriesId:'US_CPI_YOY',compact}));
+ const headings=[...html.matchAll(/<h([12])[^>]*>(.*?)<\/h[12]>/g)].filter(match=>match[2]===name);
+ expect(headings.map(match=>match[1])).toEqual([compact?'2':'1']);
 });

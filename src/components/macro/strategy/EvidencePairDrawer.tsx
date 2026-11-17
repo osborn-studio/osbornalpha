@@ -2,32 +2,14 @@
 // Right-side evidence drawer (spec §3.2; canvas "推导 / 逐事件抽屉"): derived-node inputs, per-event rows of a matrix
 // cell, the two endpoint observations of a history cell. ObsRefTable lists the frozen manifest inputs exactly.
 import type { ReactNode } from 'react';
-import { Button } from '@/components/ui';
+import { SourceDrawer } from '@/components/research-ui/source-drawer/SourceDrawer';
+import { evidencePairInput } from './evidence-pair-adapter';
 import type { ObsRef } from '@/lib/macro/strategy/contract';
 import { formatInstant } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 export function EvidencePairDrawer({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
-  const { t } = useStrategyT();
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/40" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        className="h-full w-full max-w-[560px] space-y-3 overflow-y-auto border-l border-border bg-bg-elevated p-4"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => { if (e.key === 'Escape') onClose(); }}
-      >
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold">{title}</h3>
-          <Button variant="ghost" size="sm" onClick={onClose} autoFocus>{t('view.close')}</Button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
+  return <SourceDrawer input={open ? evidencePairInput(title) : null} onClose={onClose} slots={{transform: children}} />;
 }
 
 const COLUMNS = ['series', 'period', 'value', 'version', 'available', 'source'] as const;

@@ -1,4 +1,5 @@
 "use client";
+import type { DisplayRow } from "./display-series";
 import { useId, useRef } from "react";
 import type { Regime } from "@/lib/macro/judgment-contract";
 import type { MacroT } from "./use-macro-t";
@@ -12,6 +13,7 @@ export function ClockPhasePanel({
   current,
   expanded,
   rows,
+  displayRows = [],
   t,
   locale,
   metadataLoading,
@@ -24,6 +26,7 @@ export function ClockPhasePanel({
   current: boolean;
   expanded: boolean;
   rows: WeightedRow[];
+  displayRows?: DisplayRow[];
   t: MacroT;
   locale: "zh" | "en";
   metadataLoading: boolean;
@@ -121,6 +124,7 @@ export function ClockPhasePanel({
           <>
             <ClockBreakdown
               rows={rows}
+              displayRows={displayRows}
               regime={regime}
               t={t}
               onEvidence={onEvidence}

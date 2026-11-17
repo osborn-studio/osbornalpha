@@ -43,7 +43,7 @@ describe('macro strategy pages',()=>{
   expect(src).toMatch(/export const dynamic\s*=\s*'force-dynamic'/);
   expect(src).toContain("import { strategyEnabled } from '@/lib/macro/strategy/flags';");
   expect(src).toMatch(/if \(!strategyEnabled\(\)\) notFound\(\);/);
-  expect(src).toMatch(/if \(!strategyPort\(\)\) return <DependencyState kind="foundation" \/>;/);
+  expect(src).toMatch(/if \(!strategyPort\(\)\) return .*<StrategyPageHeader.*<DependencyState kind="foundation"/);
   expect(src.indexOf('strategyEnabled()')).toBeLessThan(src.indexOf('strategyPort()'));
   expect(src).not.toContain('process.env');
  });

@@ -1,4 +1,5 @@
 'use client';
+import { MacroStateLabel, MacroStateValue } from '../MacroState';
 // Live transmission flow (spec §3.3, §5.1): six stages, text badges for node states (never colour alone), edges are
 // mechanism assumptions, derived nodes open their two inputs. Stages stack vertically below lg; a table view lists
 // every node.
@@ -38,16 +39,20 @@ export function TransmissionFlow({ view }: { view: TransmissionView }) {
               </tr>
             </thead>
             <tbody>
-              {flowRows(view, locale).map((r) => (
+              {flowRows(view, locale).map((r) => {
+                const dataState = r.stateKey === 'state.missing' ? 'missing'
+                  : r.stateKey === 'state.restricted' ? 'restricted'
+                  : r.stateKey === 'state.not_in_catalog' ? 'not_in_catalog' : undefined;
+                return (
                 <tr key={r.key} className="border-t border-border">
                   <td className="px-1.5 py-1">{r.stage}</td>
                   <td className="px-1.5 py-1">{r.node}</td>
-                  <td className="px-1.5 py-1">{t(r.stateKey)}</td>
-                  <td className="px-1.5 py-1 font-mono tabular-nums">{r.value}</td>
+                  <td className="px-1.5 py-1">{dataState ? <MacroStateLabel status={dataState} /> : t(r.stateKey)}</td>
+                  <td className="px-1.5 py-1 font-mono tabular-nums"><MacroStateValue status={dataState} value={r.value}/></td>
                   <td className="px-1.5 py-1 font-mono tabular-nums">{r.period}</td>
                   <td className="px-1.5 py-1 text-text-dim">{r.reason}</td>
                 </tr>
-              ))}
+              );})}
             </tbody>
           </table>
         </div>
@@ -85,9 +90,9 @@ function NodeCard({ node, onOpen }: { node: NodeView; onOpen: (n: NodeView) => v
   const d = nodeDisplay(node, locale);
   return (
     <div className={`rounded p-2 ${d.dashed ? 'border border-dashed border-border' : 'bg-bg-card'}`}>
-      <Tag>{t(d.badgeKey)}</Tag>
+      {node.state === 'missing' || node.state === 'restricted' || node.state === 'not_in_catalog' ? <MacroStateLabel status={node.state} /> : <Tag>{t(d.badgeKey)}</Tag>}
       <div className="mt-1 text-xs">{d.label}</div>
-      {d.value !== null ? <div className="font-mono text-[15px] tabular-nums">{d.value}{d.unit}</div> : null}
+      {d.value !== null ? <div className="font-mono text-[15px] tabular-nums"><MacroStateValue status={node.state === 'missing' || node.state === 'restricted' || node.state === 'not_in_catalog' ? node.state : undefined} value={`${d.value}${d.unit}`}/></div> : null}
       {d.period ? <div className="font-mono text-[10px] text-text-dim">{d.period}</div> : null}
       {d.formula || d.reason || d.drill || d.seriesId ? (
         <details className="mt-1 text-[11px]">

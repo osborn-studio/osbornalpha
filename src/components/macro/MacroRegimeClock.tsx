@@ -1,4 +1,5 @@
 "use client";
+import type { DisplayRow } from "./display-series";
 import { useState } from "react";
 import type { ClockMetadata, JudgmentCard } from "./judgment-view";
 import type { Regime } from "@/lib/macro/judgment-contract";
@@ -19,6 +20,7 @@ export interface MacroRegimeClockProps {
   locale?: "zh" | "en";
   date?: string;
   rows?: WeightedRow[];
+  displayRows?: DisplayRow[];
   weightedStatus?: WeightedClock["status"];
   insufficientCoverage?: boolean;
   card?: JudgmentCard | null;
@@ -37,6 +39,7 @@ export function MacroRegimeClock({
   locale = "zh",
   date,
   rows = [],
+  displayRows = [],
   weightedStatus,
   insufficientCoverage = false,
   card,
@@ -162,6 +165,7 @@ export function MacroRegimeClock({
               current={selected === regime}
               expanded={inspected === regime}
               rows={rows}
+              displayRows={displayRows}
               t={t}
               locale={locale}
               metadataLoading={metadataLoading}
