@@ -1,0 +1,13 @@
+[
+ {
+  "file": "WS_CBPOL-M.CN.csv",
+  "series_id": "CN_LPR_1Y",
+  "url": "https://stats.bis.org/api/v2/data/dataflow/BIS/WS_CBPOL/1.0/M.CN?startPeriod=2019-01&format=csv",
+  "fetched_at": "2026-11-16T14:01:14.927Z",
+  "http_status": 200,
+  "content_type": "text/csv;charset=UTF-8",
+  "sha256": "23cc70f4033780b7fa1e5f9399719269fc4c80145121488594047abcb8617d4e",
+  "bytes": 22273,
+  "terms": "https://data.bis.org/help/legal (BIS statistics: unrestricted use with citation)"
+ }
+]
