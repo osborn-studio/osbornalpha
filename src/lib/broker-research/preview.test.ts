@@ -2,7 +2,7 @@
 import {describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {previewPageData} from './preview';
-import type {AdminReadDeps} from './admin-document';
+import type {AdminReadDeps} from './admin-read';
 import type {BrokerResearchDb,FieldRow} from './types';
 
 const RID='11111111-1111-4111-8111-111111111111';

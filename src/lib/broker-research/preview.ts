@@ -10,7 +10,7 @@
 // what the preview is for). History and spread are public-view only and therefore empty.
 import {effectiveValue} from './effective';
 import {TARGET_PRICE_FIELDS,toPublicReportDetail} from './public-dto';
-import type {AdminReadDeps} from './admin-document';
+import type {AdminReadDeps} from './admin-read';
 import type {ReportPageData} from './public-types';
 import type {ReportStatus,ReviewStatus} from './types';
 

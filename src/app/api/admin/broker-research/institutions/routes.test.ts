@@ -86,8 +86,8 @@ describe('institution maintenance routes',()=>{
  });
 });
 
-// Page gate checks are local because D4's shared page-test file is not in this worktree.
-vi.mock('next/navigation',()=>({redirect:(url:string)=>{throw new Error(`redirect:${url}`);},useRouter:()=>({refresh:vi.fn()})}));
+// Exercise the institution page through the shared admin gate and shell.
+vi.mock('next/navigation',()=>({usePathname:()=>'/admin/broker-research/institutions',redirect:(url:string)=>{throw new Error(`redirect:${url}`);},useRouter:()=>({refresh:vi.fn()})}));
 vi.mock('next-intl/server',()=>({getTranslations:async()=>((key:string)=>key)}));
 vi.mock('next-intl',()=>({useTranslations:()=>((key:string)=>key)}));
 describe('institutions admin page',()=>{
@@ -102,7 +102,12 @@ describe('institutions admin page',()=>{
   mocks.requireAdmin.mockRejectedValueOnce(new AdminForbidden());
   const {default:Page}=await import('@/app/(app)/admin/broker-research/institutions/page');
   const {renderToStaticMarkup}=await import('react-dom/server');
-  expect(renderToStaticMarkup(await Page())).toContain('title');
+  const d=memoryCoreDeps();mocks.deps=d;
+  const read=vi.spyOn(d.db,'listInstitutions');
+  const {AdminDenied}=await import('@/app/(app)/admin/broker-research/_shared/gate');
+  expect((await Page()).type).toBe(AdminDenied);
+  expect(renderToStaticMarkup(await AdminDenied())).toContain('title');
+  expect(read).not.toHaveBeenCalled();
  });
  it('renders service-role institution details and remains dynamic',async()=>{
   const d=memoryCoreDeps();mocks.deps=d;mocks.requireAdmin.mockResolvedValue({id:ADMIN_ID});
@@ -116,8 +121,8 @@ describe('institutions admin page',()=>{
  });
 });
 
-// Shared locales are commander-owned; validate the exact integration fragments locally.
-it('supplies matching non-empty zh/en integration messages and ICU parameters',()=>{
+// Validate the integrated production locales.
+it('keeps shared zh/en messages and ICU parameters in parity',()=>{
  const fragments=['zh','en'].map(locale=>JSON.parse(readFileSync(`messages/${locale}/foreign-research.json`,'utf8')) as Record<string,unknown>);
  expect(fragments).toHaveLength(2);
  const flat=(tree:Record<string,unknown>,prefix=''):[string,string][]=>Object.entries(tree).flatMap(([key,value])=>typeof value==='string'?[[prefix+key,value] as [string,string]]:flat(value as Record<string,unknown>,`${prefix}${key}.`));
