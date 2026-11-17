@@ -1,6 +1,6 @@
 ---
 name: verify-osbornalpha
-description: Drive the real osbornalpha (stock-monitor) Next.js app locally and prove behavior with evidence — web UI over headless Chrome/CDP (landing + i18n, guest watchlist search/add, Portfolio K-line, guest Macro Workbench allocation template) and its HTTP APIs (/api/quote, /api/search, auth gate). Use when you changed osbornalpha and need to show a user-facing feature works, when reviewing a PR head, or when something "looks off" in the running app.
+description: Drive the real osbornalpha (stock-monitor) Next.js app locally and prove behavior with evidence — web UI over headless Chrome/CDP (landing + i18n, guest watchlist search/add, Portfolio K-line, guest Macro Workbench allocation template + research footer) and its HTTP APIs (/api/quote, /api/search, auth gate). Use when you changed osbornalpha and need to show a user-facing feature works, when reviewing a PR head, or when something "looks off" in the running app.
 ---
 
 # verify-osbornalpha
