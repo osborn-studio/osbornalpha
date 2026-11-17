@@ -1,6 +1,5 @@
 'use client';
 // Institution scales (insert / close) and analyst bylines (spec §4.5, §4.9; D6). Metadata-only client props.
-import {StateBadge,StateCell} from '@/components/research-ui';
 import {institutionSummary} from './institutions-model';
 import {adminJson} from '../_shared/admin-fetch';
 import {useState} from 'react';
@@ -42,10 +41,10 @@ export function InstitutionsClient({details}:{details:InstitutionDetail[]}){
     <thead><tr>{['institution','scale','analysts','reports','licence','edit'].map(k=><th scope="col" className={TH} key={k}>{t(`columns.${k}`)}</th>)}</tr></thead>
     <tbody>{details.map(d=>{const summary=institutionSummary(d,new Date().toISOString().slice(0,10));return <tr className="border-t border-border" key={d.institution.institution_id}>
      <td className={TD}>{d.institution.name_en}</td>
-     <td className={TD}>{summary.mapped?t('mapped',{n:summary.mapped}):<StateBadge state="missing" detail={t('noScale')}/>}</td>
+     <td className={TD}>{summary.mapped?t('mapped',{n:summary.mapped}):<span className="text-text-muted">{t('noScale')}</span>}</td>
      <td className={TD}>{summary.analysts}</td>
-     <td className={TD}><StateCell state="missing" detail={t('unavailable')}/></td>
-     <td className={TD}><StateBadge state="missing" detail={t('unavailable')}/></td>
+     <td className={TD}><span className="text-text-muted">{t('unavailable')}</span></td>
+     <td className={TD}><span className="text-text-muted">{t('unavailable')}</span></td>
      <td className={TD}><button type="button" className={BTN} aria-pressed={active?.institution.institution_id===d.institution.institution_id} onClick={()=>setSelected(d.institution.institution_id)}>{t('columns.edit')}</button></td>
     </tr>;})}</tbody>
    </table></div>

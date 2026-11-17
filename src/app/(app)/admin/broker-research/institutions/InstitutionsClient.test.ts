@@ -11,4 +11,10 @@ it('renders an institution summary table and selected append-only editor with la
  for(const label of ['机构','评级量表','分析师','报告','许可','编辑','保存映射'])expect(html).toContain(label);
  expect(html).toContain('data-institution-editor');expect(html).toContain('overflow-x-auto');expect(html).toContain('未提供');
  expect(html).not.toContain('已登记');
+ const cells=[...html.matchAll(/<td\b[^>]*>(.*?)<\/td>/g)].map(match=>match[1]);
+ expect(cells[1]).toBe(`<span class="text-text-muted">${foreign.admin.institutions.noScale}</span>`);
+ for(const index of [3,4])expect(cells[index]).toBe(`<span class="text-text-muted">${foreign.admin.institutions.unavailable}</span>`);
+ expect(html).not.toContain('data-state');
+ expect(html).not.toContain('data-research-state');
+ expect(html).not.toMatch(/缺失|Missing/);
 });
