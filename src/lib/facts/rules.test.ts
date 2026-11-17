@@ -61,7 +61,9 @@ describe('evaluateFactRules',()=>{
    {code:'rule_warning_summary',key:'gross_margin_range',message:JSON.stringify({count:2,keys:['k1','k2']})},
    {code:'rule_warning_summary',key:'revenue_jump',message:JSON.stringify({count:1,keys:['k3']})},
   ]);
-  expect(INFO_CODES).toEqual(['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary']);
+  // FOREIGN ↓ broker research informational receipt code
+  expect(INFO_CODES).toEqual(['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit','claims_summary','eval_receipt_absent']);
+  // FOREIGN ↑
   expect(batchStatusFromCounts({...emptyCounts(),inserted:1},errors)).toBe('success');
   expect(summarizeWarnings(new Map([['x',[]]]))).toEqual([]);
  });

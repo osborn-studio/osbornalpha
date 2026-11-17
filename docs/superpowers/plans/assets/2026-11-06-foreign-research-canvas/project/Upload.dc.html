@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>研报管理 上传</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1150px">
+  <header class="top"><div class="wrap" style="display: flex; align-items: center; gap: 16px; height: 56px"><span class="brand">OsbornAlpha</span><span class="tag" style="color: #ca8a04; border-color: rgba(202,138,4,.4)">admin</span><a href="AdminOverview.dc.html" class="cap">研报管理</a><span class="tiny">/ 上传</span></div></header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 20px; padding-top: 24px; padding-bottom: 48px">
+    <h1 class="h1">上传研报 <span class="en" style="font-size: 16px">Upload</span></h1>
+    <ol class="row" style="list-style: none; margin: 0; padding: 0; gap: 20px">
+      <li class="step done"><span class="no">✓</span><span class="cap">拖拽 Drop</span></li>
+      <li class="step done"><span class="no">✓</span><span class="cap">sha256</span></li>
+      <li class="step done"><span class="no">✓</span><span class="cap">查重 Dedupe</span></li>
+      <li class="step cur"><span class="no">4</span><span style="font-size: 12px">选许可 Licence</span></li>
+      <li class="step"><span class="no">5</span><span class="cap">直传 Upload</span></li>
+      <li class="step"><span class="no">6</span><span class="cap">提交 Submit</span></li>
+    </ol>
+    <div style="display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 20px; align-items: start">
+      <section class="card pad" style="display: flex; flex-direction: column; gap: 16px">
+        <div style="border: 1px dashed rgba(255,255,255,.2); border-radius: 8px; padding: 28px; display: flex; flex-direction: column; align-items: center; gap: 8px">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#a1a1aa" stroke-width="1.5" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"></path></svg>
+          <span class="cap">拖拽 PDF 到此处，或 <button class="btn ghost sm" style="display: inline-flex">选择文件</button></span>
+          <span class="tiny">只接受 owner 合法持有的 PDF；不抓取付费墙或第三方网站</span>
+        </div>
+        <dl class="kv">
+          <dt>文件</dt><dd>GS_Moutai_2026-11-01.pdf · <span class="m">2.4 MB</span> · 18 页</dd>
+          <dt>sha256</dt><dd class="hash">9a4c1f0e…be27（本地计算）</dd>
+          <dt>查重</dt><dd><span class="chip ac">新文件 new</span></dd>
+        </dl>
+        <div class="field">
+          <label for="lic">许可 Licence（必填）</label>
+          <button id="lic" class="sel" style="justify-content: space-between; width: 100%">GS 机构订阅 · v3 · 已确认 2026-10-02 ▾</button>
+          <span class="help">每份文件绑定一条版本化许可；许可决定目标价与片段能否公开。</span>
+        </div>
+        <div class="row"><button class="btn pri">直传到私有桶 Upload</button><button class="btn ghost">取消</button></div>
+      </section>
+      <div style="display: flex; flex-direction: column; gap: 16px">
+        <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+          <div class="lbl-state">步骤 5 · 直传中</div>
+          <div class="bar"><i style="width: 64%"></i></div>
+          <div class="tiny"><span class="m">1.5 / 2.4 MB</span> · 直传 broker-research 私有桶（内容寻址），不经应用服务器</div>
+        </section>
+        <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+          <div class="lbl-state">查重命中 Duplicate</div>
+          <div class="callout" style="font-size: 13px">同一 sha256 已存在：<a href="Document.dc.html">文档 8c1… · 2026-11-01 入库</a>。不重复存储；可在原文档追加许可版本。</div>
+        </section>
+        <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+          <div class="lbl-state">提交完成</div>
+          <div class="cap">已创建文档 <span class="hash">doc 3e9…</span>，状态 待解析。<a href="Document.dc.html">打开文档页 →</a></div>
+        </section>
+        <section class="card pad" style="display: flex; flex-direction: column; gap: 10px">
+          <div class="lbl-state">错误</div>
+          <div class="errcard" style="font-size: 12px">上传意图过期（intent_expired）：请重新选择文件。</div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1150}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

@@ -29,7 +29,8 @@
     "test:revocation-retention": "tsx scripts/revocation/retention-smoke.ts",
     "test:revocation-list": "tsx scripts/revocation/list-smoke.ts",
     "prebuild": "tsx scripts/documents/build-extract-worker.ts",
-    "predev": "tsx scripts/documents/build-extract-worker.ts"
+    "predev": "tsx scripts/documents/build-extract-worker.ts",
+    "test:storage": "tsx scripts/broker-research/storage-check.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

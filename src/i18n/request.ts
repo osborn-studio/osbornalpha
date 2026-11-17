@@ -38,6 +38,9 @@ const MESSAGE_DOMAINS = [
   // Judgment framework (spec 2026-11-04 §9.5):
   'judgments',
   // /F4
+  // FOREIGN ↓ foreign broker research (plan Task D2)
+  'foreign-research',
+  // FOREIGN ↑
 ] as const;
 
 export default getRequestConfig(async () => {

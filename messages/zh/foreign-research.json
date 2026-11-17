@@ -1,0 +1,803 @@
+{
+  "public": {
+    "breadcrumb": {
+      "research": "研究",
+      "list": "外资研报",
+      "report": "报告",
+      "institution": "机构"
+    },
+    "entry": {
+      "tab": "外资研报"
+    },
+    "list": {
+      "title": "外资研报",
+      "titleEn": "Foreign broker research",
+      "intro": "私有馆藏的结构化元数据。原文不对外提供；摘要为 OsbornAlpha 独立生成。",
+      "stats": {
+        "reports": "馆藏",
+        "institutions": "机构",
+        "lastAdded": "最近入库"
+      },
+      "filters": {
+        "security": "标的",
+        "securityPlaceholder": "代码",
+        "institution": "机构",
+        "all": "全部",
+        "rating": "标准化评级",
+        "published": "发布日期",
+        "from": "开始日期",
+        "to": "结束日期",
+        "summaryOnly": "只看有摘要",
+        "apply": "筛选",
+        "clear": "清除筛选"
+      },
+      "columns": {
+        "institution": "机构",
+        "security": "标的",
+        "title": "标题",
+        "published": "日期",
+        "rating": "评级 原文 / 标准化",
+        "target": "目标价",
+        "upside": "空间 · 派生",
+        "summary": "摘要"
+      },
+      "hasSummary": "有 AI 摘要",
+      "summaryShort": "AI 摘要",
+      "judgment": "第三方判断（未结算）",
+      "upsideDerived": "空间 {value}（派生）",
+      "upsideNote": "空间 = 目标价 / 报告时价格 − 1（派生 · upside/1，同币种）。评级、目标价与空间是第三方判断（未结算）。不显示最新价。",
+      "prev": "上一页",
+      "next": "下一页 →",
+      "loading": "加载中",
+      "error": {
+        "body": "报告列表加载失败。不回退到示例数据。",
+        "retry": "重试"
+      },
+      "empty": {
+        "title": "尚无已发布研报",
+        "body": "研报由管理员上传并经许可确认后发布。"
+      },
+      "noResults": {
+        "title": "没有符合条件的报告",
+        "unknownTicker": "没有找到这个标的",
+        "clear": "清除筛选"
+      }
+    },
+    "title": {
+      "translated": "译",
+      "rewritten": "改写",
+      "rewrittenNote": "公开标题为改写版本，非机构原题",
+      "translatedNote": "机器翻译的标题；原题：{original}"
+    },
+    "target": {
+      "notPublic": "—（许可不允许公开）",
+      "absent": "—（报告未给出）"
+    },
+    "notFound": {
+      "report": {
+        "title": "找不到这份报告",
+        "body": "报告不存在，或已不再公开。"
+      },
+      "institution": {
+        "title": "找不到这家机构",
+        "body": "机构不存在，或其报告已不再公开。"
+      },
+      "back": "返回外资研报"
+    },
+    "drawer": {
+      "title": "来源：{field}",
+      "close": "关闭",
+      "page": "页码",
+      "pageValue": "第 {page} 页",
+      "method": "抽取方式",
+      "availableAt": "入库 available_at",
+      "codeVersion": "代码版本",
+      "rulesVersion": "规则版本",
+      "publication": "发布快照",
+      "derived": "派生值",
+      "judgment": "第三方判断（未结算）",
+      "privateLibrary": "私有馆藏（不对外提供原文）",
+      "snippet": "片段"
+    },
+    "provenance": {
+      "llmConfirmed": "LLM 抽取 + 人工确认",
+      "llmCorrected": "LLM 抽取 + 人工修正",
+      "humanAdded": "人工新增",
+      "absent": "人工标注：报告未给出",
+      "unknown": "来源未标注"
+    },
+    "facts": {
+      "title": "报告所载",
+      "titleEn": "Stated in report · per target",
+      "hint": "点开数值 → 来源抽屉",
+      "page": "p.{page}",
+      "rows": {
+        "rating": "评级 原文 / 标准化",
+        "target": "目标价 · 币种 · 期限",
+        "priceAtReport": "报告时价格 · 币种 · 日期",
+        "upside": "空间",
+        "method": "方法论参数"
+      },
+      "absentTarget": "报告未给出目标价",
+      "months": "{n} 个月",
+      "upsideFormula": "目标价 / 报告时价格 − 1，同币种",
+      "kind": {
+        "judgment": "第三方判断（未结算）",
+        "assumption": "第三方假设 · 文件所载",
+        "derivedJudgment": "派生 · {version} · 第三方判断（未结算）"
+      },
+      "columns": {
+        "field": "字段",
+        "value": "值",
+        "kind": "性质",
+        "provenance": "出处"
+      },
+      "noLatestPrice": "不显示最新价。报告未写明的参数不显示，不补数。"
+    },
+    "summary": {
+      "title": "独立摘要",
+      "titleEn": "Independent summary",
+      "none": "尚无摘要",
+      "label": "OsbornAlpha 独立摘要 · AI 生成（{model}）· 非机构原文 · 生成于 {date}",
+      "otherLanguage": "仅有另一种语言的摘要。",
+      "grounded": "数字出处"
+    },
+    "snippets": {
+      "title": "引用片段",
+      "titleEn": "Snippets · ≤ {n} 字",
+      "none": "无公开片段",
+      "purpose": {
+        "rating": "评级依据",
+        "target": "目标价依据",
+        "thesis": "核心观点",
+        "risk": "风险",
+        "method": "估值方法",
+        "other": "其他"
+      },
+      "page": "第 {page} 页"
+    },
+    "history": {
+      "title": "评级与目标价历史",
+      "titleEn": "History",
+      "scope": "同机构 · 同证券 · 同币种",
+      "judgment": "第三方判断（未结算）",
+      "viewToggle": "切换图表与表格",
+      "chart": "图",
+      "table": "表",
+      "none": "暂无历史",
+      "chartLabel": "{institution} 对 {ticker} 的目标价轨迹，{n} 个报告点；数值见表格视图",
+      "stepNote": "阶梯线 = 目标价在两次报告之间不变",
+      "columns": {
+        "range": "区间",
+        "rating": "评级",
+        "target": "目标价 {currency}",
+        "change": "变化",
+        "reportIds": "report_id（两端）",
+        "availableAt": "available_at",
+        "versions": "公式 / 代码"
+      }
+    },
+    "spread": {
+      "title": "跨机构分歧",
+      "titleEn": "Cross-institution spread",
+      "scope": "{ticker} · {currency} · 各机构最近一篇 · {months} 个月窗口",
+      "judgment": "第三方判断（未结算）",
+      "viewToggle": "切换图表与表格",
+      "chart": "图",
+      "table": "表",
+      "none": "窗口内没有其他机构的报告",
+      "chartLabel": "{n} 家机构对 {ticker}（{currency}）的目标价与报告时价格；数值见表格视图",
+      "legendPrice": "报告时价格",
+      "legendTarget": "目标价",
+      "legendNote": "不画最新价",
+      "noTarget": "报告未给出目标价",
+      "targetHidden": "目标价不可公开",
+      "columns": {
+        "institution": "机构",
+        "report": "report_id",
+        "date": "日期",
+        "rating": "评级",
+        "priceAtReport": "报告时价格",
+        "target": "目标价",
+        "upside": "空间"
+      }
+    },
+    "settlement": {
+      "title": "结算（判断）",
+      "body": "F4 落地后出现：窗口收益、到期命中、pending / unsettleable 原因、方法版本、价格来源、补登记角标。"
+    },
+    "detail": {
+      "published": "发布 {date}",
+      "targets": "标的",
+      "analysts": "分析师",
+      "noTargets": "本报告不针对单个标的（行业 / 宏观策略）。"
+    },
+    "preview": {
+      "status": "{status} · 复核 {review} · 快照尚未生成或未对外",
+      "noHistory": "预览不含历史与跨机构分歧（它们只来自公开视图）。",
+      "banner": "预览 · 未对外",
+      "bannerBody": "此页用 service_role 读基表，与公开页同一组件；只有管理员可见。公开路由此时可能返回 404。",
+      "back": "返回复核"
+    },
+    "institution": {
+      "aliases": "别名",
+      "ratingDisclosure": "评级体系披露",
+      "stats": {
+        "reports": "馆藏报告",
+        "securities": "覆盖证券",
+        "lastReport": "最近报告"
+      },
+      "reports": "报告",
+      "reportsEn": "Reports",
+      "analysts": {
+        "title": "分析师",
+        "titleEn": "Analysts",
+        "none": "暂无公开署名的分析师",
+        "reports": "{n} 篇"
+      },
+      "performance": {
+        "title": "馆藏样本表现",
+        "titleEn": "Library sample performance",
+        "badge": "判断 · F4 结算后显示",
+        "body": "基于馆藏样本 {n} 篇。F4 结算落地前不显示命中率。",
+        "sampleNote": "这是馆藏样本，不是该机构的全部报告；补登记将单独列出。"
+      }
+    },
+    "stock": {
+      "title": "馆藏研报（{n}）",
+      "titleEn": "Library reports",
+      "all": "全部 →"
+    }
+  },
+  "rating": {
+    "buy": "买入",
+    "overweight": "增持",
+    "neutral": "中性",
+    "underweight": "减持",
+    "sell": "卖出",
+    "not_rated": "未评级",
+    "unmapped": "未映射"
+  },
+  "fields": {
+    "institution": "机构",
+    "analyst": "分析师",
+    "published_date": "发布日期",
+    "price_as_of_date": "价格日期",
+    "ticker": "代码",
+    "rating": "评级",
+    "target_price": "目标价",
+    "target_currency": "目标价币种",
+    "target_horizon": "目标期限",
+    "price_at_report": "报告时价格",
+    "price_currency": "价格币种",
+    "upside_stated": "自述空间",
+    "wacc": "WACC",
+    "terminal_growth": "永续增长",
+    "terminal_value_share": "终值占比",
+    "valuation_method": "估值方法",
+    "sector": "行业",
+    "title": "标题"
+  },
+  "admin": {
+    "denied": {
+      "title": "无权访问",
+      "body": "此页面仅限管理员。"
+    },
+    "shell": {
+      "title": "研报管理",
+      "nav": "研报管理导航",
+      "nav_overview": "总览",
+      "nav_upload": "上传",
+      "nav_licences": "许可",
+      "nav_accessLog": "访问日志",
+      "nav_institutions": "机构"
+    },
+    "errors": {
+      "generic": "操作失败（{code}）",
+      "duplicate_document": "同一 sha256 已存在，不重复存储。",
+      "intent_mismatch": "上传意向不匹配或已过期，请重新选择文件。",
+      "intent_busy": "另一个提交正在处理这个意向，请稍后重试。",
+      "intent_expired": "上传意向已过期，请重新选择文件。",
+      "promotion_lost": "暂存与正式对象都不存在（promotion_lost），请重新上传同一文件。",
+      "promotion_pending": "文档提升尚未完成。",
+      "sha_mismatch": "服务端复算的 sha256 与浏览器不一致。",
+      "size_mismatch": "文件大小与声明不一致。",
+      "not_pdf": "只接受 PDF 文件。",
+      "too_large": "文件超过 50 MiB。",
+      "empty": "文件为空。",
+      "upload_failed": "直传到私有桶失败。",
+      "lease_held": "另一个处理正在占用这份文档，请稍后再试。",
+      "licence_forbids_processing": "许可不允许把全文送交处理。",
+      "version_mismatch": "许可版本已变化，请刷新后再确认。",
+      "publish_blocked": "存在发布阻断项。",
+      "published_immutable": "已发布报告不可修改，请先取消发布。",
+      "document_withdrawn": "文档已撤回。",
+      "access_log_failed": "访问日志写入失败，未返回内容。",
+      "llm_unavailable": "平台 LLM 未启用。",
+      "f3_unavailable": "文档管道（F3）未启用。",
+      "hook_params_required": "缺少处理参数。"
+    },
+    "overview": {
+      "title": "总览",
+      "titleEn": "Overview",
+      "switch": {
+        "title": "对外开关",
+        "on": "开启",
+        "off": "关闭",
+        "body": "开关在数据库层（broker_research_settings.public_enabled）。关闭时公开视图返回 0 行、公开路由 404；管理员只看预览。",
+        "enable": "打开对外",
+        "disable": "关闭对外",
+        "ownerOnly": "打开由 owner 在三项门禁完成后按 runbook 执行（FR-6）；本页只显示门禁状态。"
+      },
+      "gates": {
+        "d1": "D1 许可确认",
+        "storage": "test:storage 回执",
+        "gold": "黄金集回执",
+        "ok": "已满足",
+        "notOk": "未满足",
+        "d1Detail": "当前有效且已确认的许可 {confirmed} / {total}",
+        "storageDetail": "人工门禁：本地 Supabase 栈运行 npm run test:storage，回执在审计目录；本页无法核对。",
+        "goldDetail": "{date} · n={n} · passed {passed}",
+        "goldMissing": "尚无 gold 回执"
+      },
+      "counts": {
+        "title": "计数",
+        "toParse": "待解析",
+        "toExtract": "待抽取",
+        "toReview": "待复核",
+        "toPublish": "待发布",
+        "published": "已发布",
+        "withdrawn": "已撤回"
+      },
+      "gold": {
+        "title": "黄金集最新回执",
+        "tuple": "五元组",
+        "minima": "最小值",
+        "worst": "最差字段",
+        "corpusMismatch": "清单哈希与批准值不符",
+        "code": "代码版本",
+        "none": "尚无 gold 回执"
+      },
+      "batches": {
+        "title": "最近批次"
+      },
+      "quarantine": {
+        "title": "open 隔离项",
+        "link": "/admin/dq →"
+      },
+      "attention": {
+        "title": "需要处理",
+        "mappingUpdates": "有更新映射可用的已发布报告",
+        "outboxFailed": "outbox 失败事件",
+        "licencesPending": "许可实质性修改后待确认"
+      },
+      "queue": {
+        "title": "复核队列",
+        "untitled": "（无标题）"
+      },
+      "documents": {
+        "title": "最近文档"
+      },
+      "empty": "暂无"
+    },
+    "upload": {
+      "title": "上传研报",
+      "titleEn": "Upload",
+      "steps": {
+        "drop": "拖拽",
+        "sha": "sha256",
+        "dedupe": "查重",
+        "licence": "选许可",
+        "upload": "直传",
+        "commit": "提交"
+      },
+      "drop": "拖拽 PDF 到此处，或点击选择文件",
+      "dropNote": "只接受 owner 合法持有的 PDF；不抓取付费墙或第三方网站",
+      "file": "文件",
+      "hashing": "本地计算中…",
+      "licence": "许可（必填）",
+      "licencePlaceholder": "选择许可",
+      "confirmed": "已确认 {date}",
+      "unconfirmed": "未确认",
+      "licenceHelp": "每份文件绑定一条版本化许可；许可决定目标价与片段能否公开。",
+      "submit": "直传到私有桶",
+      "cancel": "取消",
+      "uploading": "直传中",
+      "committing": "提交中",
+      "direct": "直传 broker-research 私有桶，不经应用服务器",
+      "duplicate": "同一 sha256 已存在，不重复存储。",
+      "openDocument": "打开文档页 →",
+      "done": "提交完成",
+      "retry": "重试"
+    },
+    "licences": {
+      "title": "许可",
+      "titleEn": "Licences",
+      "new": "新建许可",
+      "columns": {
+        "licence": "许可",
+        "version": "版本",
+        "status": "状态",
+        "allowed": "允许公开",
+        "documents": "文档",
+        "snippets": "公开片段",
+        "actions": "操作"
+      },
+      "pending": "待确认（实质性修改）",
+      "confirmedOn": "已确认 {date}",
+      "outOfWindow": "未确认或不在有效期",
+      "confirm": "确认 v{version}",
+      "edit": "编辑",
+      "empty": "尚无许可",
+      "flagsShort": {
+        "metadata": "元数据",
+        "target": "目标价",
+        "snippets": "片段 ≤ {n} 字",
+        "summary": "摘要",
+        "none": "不允许公开"
+      },
+      "form": {
+        "source_label": "名称",
+        "licence_kind": "类型",
+        "holder": "持有人",
+        "terms_summary": "条款摘要",
+        "evidence_path": "依据文件路径（licences/'{sha}'.pdf）",
+        "snippet_max_chars": "片段上限 N（≤ 500）",
+        "valid_from": "生效日",
+        "valid_to": "到期日（可空）",
+        "newTitle": "新建许可",
+        "editTitle": "编辑许可",
+        "flags": "允许",
+        "materialNote": "改动公开标志、N 或有效期是实质性修改：版本 +1、确认清空、受影响片段与摘要回草稿。",
+        "save": "保存",
+        "cancel": "取消"
+      },
+      "invalid": {
+        "source_label": "1–120 字",
+        "holder": "必填",
+        "terms_summary": "必填",
+        "evidence_path": "路径无效",
+        "snippet_max_chars": "1–500 的整数",
+        "valid_from": "日期无效",
+        "valid_to": "不能早于生效日"
+      },
+      "kinds": {
+        "terminal_subscription": "终端订阅",
+        "direct_from_broker": "券商直接提供",
+        "owner_authored": "owner 自撰",
+        "other": "其他"
+      },
+      "flags": {
+        "allows_llm_processing": "允许送交 F3 / 平台 LLM 处理",
+        "allows_public_metadata": "元数据（机构、标题、日期、评级）",
+        "allows_public_snippets": "片段",
+        "allows_public_summary": "独立摘要",
+        "allows_public_target_price": "目标价"
+      },
+      "impact": {
+        "title": "影响 · {label}",
+        "publishedReports": "已发布报告",
+        "hiddenReports": "披露待重查而隐藏的报告",
+        "approvedSnippets": "已批准片段",
+        "approvedSummaries": "已批准摘要",
+        "revertedTexts": "因修改回到草稿的片段与摘要",
+        "note": "确认新版本后，回到草稿的内容需重新批准才会公开。",
+        "window": "有效期"
+      }
+    },
+    "accessLog": {
+      "title": "访问日志",
+      "titleEn": "Access log",
+      "intro": "每次返回全文、跨度或签名 URL 的请求都先写一行，再返回内容。只追加，不可编辑；不记 IP。",
+      "filters": {
+        "user": "管理员",
+        "action": "动作",
+        "all": "全部",
+        "document": "文档 {id}"
+      },
+      "export": "导出 CSV",
+      "columns": {
+        "at": "时间",
+        "user": "管理员",
+        "action": "动作",
+        "object": "对象",
+        "detail": "详情"
+      },
+      "empty": "暂无记录"
+    },
+    "document": {
+      "status": {
+        "uploaded": "待解析",
+        "parsing": "解析中",
+        "parsed": "已解析",
+        "parse_failed": "解析失败",
+        "withdrawn": "已撤回"
+      },
+      "review": {
+        "pending": "待复核",
+        "in_review": "复核中",
+        "approved": "已复核",
+        "rejected": "复核拒绝"
+      },
+      "licenceLine": "许可 {label} v{version} · {pages} 页",
+      "promotionPending": "提升未完成",
+      "verify": "核验结果：{status}",
+      "working": "处理中…",
+      "actions": {
+        "viewOriginal": "查看原文（签名链接）",
+        "parse": "解析",
+        "extract": "抽取",
+        "summarize": "生成摘要 {lang}",
+        "translate": "翻译标题",
+        "review": "去复核 →",
+        "verify": "重跑核验"
+      },
+      "actionsNote": "查看原文：先写访问日志，再现铸 600 秒签名 URL（只发给管理员）。解析与抽取是两个独立动作，各自 maxDuration 300 s。",
+      "runs": {
+        "title": "运行（不可变）",
+        "run": "run",
+        "kind": "类型",
+        "started": "开始",
+        "status": "状态",
+        "artifact": "产物 / 请求",
+        "versions": "代码 · 提示词 / 抽取器",
+        "detail": "详情",
+        "empty": "尚无运行"
+      },
+      "withdraw": {
+        "title": "撤回",
+        "body": "撤回后公开路由 404，签名链接与原文路由一律 410；证据与审计保留。",
+        "done": "已撤回 {date}：{reason}",
+        "reason": "原因（必填）",
+        "placeholder": "例如：许可终止",
+        "alsoPurge": "同时开始清除",
+        "submit": "撤回",
+        "ok": "已撤回。"
+      },
+      "purge": {
+        "title": "清除",
+        "irreversible": "不可逆",
+        "steps": {
+          "pdf": "删除私有桶原文 PDF",
+          "artifacts": "删除解析产物与页面图像",
+          "runs": "删除运行请求 / 响应原文",
+          "fields_text": "清空证据行原文跨度",
+          "snippets_text": "清空片段文本",
+          "summaries": "摘要置为拒绝",
+          "quarantine_payload": "清空隔离项载荷"
+        },
+        "attempts": "尝试 {n} 次",
+        "done": "已清除 {date}",
+        "confirm": "输入文档 sha256 前 8 位以确认",
+        "retry": "重试未完成步骤",
+        "run": "执行清除",
+        "needsWithdraw": "先撤回文档才能清除。"
+      },
+      "accessLog": "本文档的访问日志 →"
+    },
+    "review": {
+      "withdrawn": "文档已撤回，复核数据不可读取（410）。",
+      "loading": "加载中…",
+      "prov": {
+        "absent": "absent · 报告明确没有",
+        "human": "人工新增",
+        "llm": "LLM 抽取",
+        "llmReviewed": "人工确认"
+      },
+      "unverified": "跨度未命中",
+      "actions": {
+        "confirm": "确认",
+        "correct": "修正",
+        "reject": "拒绝",
+        "absent": "标为 absent",
+        "saveCorrection": "保存修正",
+        "cancel": "取消",
+        "add": "新增字段",
+        "override": "保存覆盖",
+        "save": "保存",
+        "bindAnalyst": "绑定分析师",
+        "approve": "批准",
+        "publish": "发布…",
+        "publishBlocked": "发布（{n} 项阻断）",
+        "markReviewed": "标记已复核"
+      },
+      "useSelection": "用当前框选作为引用位置（第 {page} 页，{n} 字）",
+      "selectHint": "在左侧原文中框选文本，可作为引用位置或片段。",
+      "typed": {
+        "text": "原文值",
+        "num_price": "数值",
+        "num_pct": "小数（12.5% → 0.125）",
+        "num_months": "月数",
+        "currency": "币种（ISO，如 CNY）",
+        "date": "日期",
+        "help_price": "价格：数值 + 币种分别校验（typed/1）。",
+        "help_currency": "三位 ISO 币种代码。",
+        "help_months": "整数月数。",
+        "help_pct": "百分数按小数录入。",
+        "help_date": "ISO 日期。",
+        "help_text": "按原文录入。",
+        "invalid_value_text": "原文值不能为空或格式不符",
+        "invalid_value_num": "数值格式不符",
+        "invalid_value_currency": "币种须为三位大写字母",
+        "invalid_value_date": "日期无效"
+      },
+      "addNeedsSelection": "新增字段需要先在原文中框选它的出处。",
+      "addField": "按框选新增字段",
+      "field": "字段",
+      "addSpan": "出处：第 {page} 页，偏移 {start}–{end}，occurrence {occurrence}",
+      "resolved": "解析：{ticker} · 发行人 {issuer}",
+      "ratingUnmapped": "评级未映射",
+      "conflict": "候选冲突：{field}（{n} 条，确认其一，其余自动拒绝）",
+      "markAbsent": "{field} 标为 absent（第 {page} 页）",
+      "override": "解析覆盖：证券代码",
+      "bind": {
+        "scope": "范围",
+        "institution": "机构",
+        "reportType": "报告类型",
+        "primary": "主标的",
+        "supersedes": "取代的报告",
+        "analyst": "分析师",
+        "private": "不公开",
+        "analystField": "分析师证据行",
+        "role": "角色"
+      },
+      "scopes": {
+        "single_issuer": "单一发行人",
+        "multi_issuer": "多发行人",
+        "sector": "行业",
+        "macro_strategy": "宏观策略"
+      },
+      "snippets": {
+        "new": "新片段",
+        "remaining": "剩余字数",
+        "purpose": "用途",
+        "target": "标的",
+        "noTarget": "不绑定标的",
+        "field": "引用字段",
+        "noField": "不绑定字段",
+        "create": "创建片段",
+        "none": "尚无片段",
+        "disclosureHits": "披露检查未通过：{tokens}",
+        "purged": "（文本已清除）"
+      },
+      "purposes": {
+        "rating": "评级依据",
+        "target": "目标价依据",
+        "thesis": "核心观点",
+        "risk": "风险",
+        "method": "估值方法",
+        "other": "其他"
+      },
+      "title": {
+        "original": "原题",
+        "zh": "中文译名",
+        "en": "英文译名",
+        "public": "公开标题 title_public",
+        "blocked": "阻断第 15 条命中：{surfaces}。请改写公开标题。",
+        "translate": "重新翻译"
+      },
+      "summaries": {
+        "generate": "生成摘要 {lang}",
+        "none": "尚无摘要",
+        "overlap": "最长逐字重合 {n} / {max}",
+        "grounded": "数字全部落地",
+        "ungrounded": "数字未落地",
+        "disclosureOk": "披露检查通过",
+        "disclosureHit": "披露检查未通过",
+        "stale": "输入已变化（需重新生成）"
+      },
+      "tabs": {
+        "report": "报告级字段",
+        "snippets": "片段",
+        "title": "标题",
+        "summaries": "摘要"
+      },
+      "crumb": "复核 {id}",
+      "confirmedCount": "字段 {done} / {total} 已生效",
+      "toDocument": "文档页 →",
+      "toPreview": "预览 →",
+      "staleRun": "stale_run：部分字段绑定的解析运行不是当前运行 {run}。人工确认的字段会保留；请核对后重新确认。",
+      "page": {
+        "title": "原文 · 第 {page} 页",
+        "private": "私有 · 仅管理员",
+        "prev": "← 上一页",
+        "next": "下一页 →",
+        "selection": "已框选 {n} 字（{start}–{end}）",
+        "parseRun": "解析运行 {run}"
+      },
+      "typedNote": "类型化编辑：数值、币种、期限、日期各自校验（typed/1）；跨度须在页文本中逐字命中（R1），否则不能确认。",
+      "blockers": {
+        "title": "阻断项",
+        "reviewReady": "复核就绪",
+        "publishReady": "发布就绪",
+        "none": "无",
+        "review_not_approved": "尚未标记已复核",
+        "licence_unconfirmed": "许可当前版本未确认（D1）",
+        "licence_no_public_metadata": "许可不允许公开元数据",
+        "document_not_parsed": "文档未解析",
+        "report_incomplete": "报告级字段缺失：{arg}",
+        "required_field_missing": "必填字段缺失：{arg}",
+        "field_pending": "必填字段仍是候选：{arg}",
+        "target_unresolved": "标的未解析：{arg}",
+        "target_cardinality": "标的数量与范围不符",
+        "quarantine_open": "有未处理隔离项：{arg}",
+        "materialize_stale": "物化已过期",
+        "rules_stale": "规则回执过期或未通过",
+        "eval_receipt_missing": "含 LLM 字段但缺少有效黄金集回执",
+        "summary_stale": "已批准摘要的输入已变化",
+        "restricted_value_in_text": "受限值或受限姓名出现在：{arg}",
+        "evidence_drift": "核验发现证据漂移",
+        "disclosure_stale": "披露输入变化，需重跑披露检查",
+        "conflict_unresolved": "候选冲突未解决：{arg}"
+      },
+      "unpublish": {
+        "reason": "取消发布原因",
+        "submit": "取消发布",
+        "note": "取消发布后公开路由 404，revision +1；快照保留用于审计。"
+      },
+      "disclosureRecheck": {
+        "note": "许可或分析师披露信息已变化（disclosure_ok=false）。用当前输入重跑标题与已批准片段 / 摘要的披露检查；全部通过才恢复。",
+        "submit": "重跑披露检查",
+        "failures": "未通过项"
+      }
+    },
+    "publish": {
+      "title": "发布这份报告？",
+      "doneTitle": "已发布",
+      "checking": "检查阻断项…",
+      "blockers": "阻断（{n}）",
+      "willBePublic": "将公开",
+      "public": {
+        "metadata": "元数据、评级原文与标准化",
+        "target": "目标价（许可 v{version} 允许）",
+        "noTarget": "目标价不公开（许可不允许）",
+        "summary": "独立摘要 {n} 篇（AI 标注）",
+        "snippets": "片段 {n} 段（≤ {max} 字）"
+      },
+      "switchNote": "对外开关关闭时，发布后只能在预览中查看。",
+      "snapshot": "发布快照",
+      "immutable": "不可变",
+      "snapshotHash": "快照哈希",
+      "rulesReceipt": "规则回执",
+      "licenceVersion": "许可版本",
+      "codeVersion": "代码版本",
+      "f4": "F4 登记",
+      "f4Queued": "outbox claim.register 已由发布函数入队",
+      "afterNote": "取消发布 / 撤回会让公开路由返回 404；快照保留用于审计。",
+      "viewPreview": "查看预览",
+      "done": "完成",
+      "cancel": "取消",
+      "publish": "发布"
+    },
+    "previewPage": {
+      "incomplete": "报告缺少标题等公开必需字段，暂时无法预览。",
+      "metadataHidden": "许可不允许公开元数据：即使发布，公开页也不会出现这份报告。"
+    },
+    "institutions": {
+      "title": "机构与评级映射",
+      "nameEn": "机构英文名",
+      "add": "新增机构",
+      "none": "尚无机构",
+      "deniedTitle": "仅限管理员",
+      "deniedBody": "你没有维护研报机构的权限。",
+      "error": "操作失败：{code}",
+      "scales": {
+        "label": "原始评级",
+        "normalized": "标准化",
+        "validFrom": "生效日",
+        "validTo": "失效日",
+        "source": "披露来源",
+        "add": "新增映射行",
+        "close": "关闭",
+        "closeOn": "关闭日期",
+        "note": "映射行只增不改：修改 = 关闭旧行 + 新增一行。比较键为去首尾空白、不分大小写的原始评级。"
+      },
+      "analysts": {
+        "name": "分析师姓名",
+        "add": "新增分析师",
+        "public": "公开署名",
+        "confirm": "切换公开署名会把相关已批准片段 / 摘要退回草稿，需重新批准。继续？"
+      }
+    }
+  }
+}

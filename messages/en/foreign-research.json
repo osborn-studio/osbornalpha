@@ -1,0 +1,803 @@
+{
+  "public": {
+    "breadcrumb": {
+      "research": "Research",
+      "list": "Foreign research",
+      "report": "Report",
+      "institution": "Institution"
+    },
+    "entry": {
+      "tab": "Foreign research"
+    },
+    "list": {
+      "title": "Foreign broker research",
+      "titleEn": "外资研报",
+      "intro": "Structured metadata from a private library. Originals are never distributed; summaries are written independently by OsbornAlpha.",
+      "stats": {
+        "reports": "Reports",
+        "institutions": "Institutions",
+        "lastAdded": "Last added"
+      },
+      "filters": {
+        "security": "Security",
+        "securityPlaceholder": "Ticker",
+        "institution": "Institution",
+        "all": "All",
+        "rating": "Normalized rating",
+        "published": "Published",
+        "from": "From",
+        "to": "To",
+        "summaryOnly": "With summary only",
+        "apply": "Filter",
+        "clear": "Clear filters"
+      },
+      "columns": {
+        "institution": "Institution",
+        "security": "Security",
+        "title": "Title",
+        "published": "Published",
+        "rating": "Rating stated / normalized",
+        "target": "Target",
+        "upside": "Upside · derived",
+        "summary": "Summary"
+      },
+      "hasSummary": "AI summary",
+      "summaryShort": "AI summary",
+      "judgment": "Third-party judgment (unsettled)",
+      "upsideDerived": "Upside {value} (derived)",
+      "upsideNote": "Upside = target / price at report − 1 (derived · upside/1, same currency). Ratings, targets and upside are third-party judgments (unsettled). No latest price is shown.",
+      "prev": "Previous",
+      "next": "Next →",
+      "loading": "Loading",
+      "error": {
+        "body": "The report list failed to load. No sample data is shown instead.",
+        "retry": "Retry"
+      },
+      "empty": {
+        "title": "No published reports yet",
+        "body": "Reports are uploaded by admins and published after licence confirmation."
+      },
+      "noResults": {
+        "title": "No reports match these filters",
+        "unknownTicker": "This security was not found",
+        "clear": "Clear filters"
+      }
+    },
+    "title": {
+      "translated": "Translated",
+      "rewritten": "Rewritten",
+      "rewrittenNote": "The public title is a rewrite, not the institution's original title",
+      "translatedNote": "Machine-translated title; original: {original}"
+    },
+    "target": {
+      "notPublic": "— (licence does not allow public display)",
+      "absent": "— (not given in report)"
+    },
+    "notFound": {
+      "report": {
+        "title": "Report not found",
+        "body": "This report does not exist or is no longer public."
+      },
+      "institution": {
+        "title": "Institution not found",
+        "body": "This institution does not exist or its reports are no longer public."
+      },
+      "back": "Back to foreign research"
+    },
+    "drawer": {
+      "title": "Source: {field}",
+      "close": "Close",
+      "page": "Page",
+      "pageValue": "Page {page}",
+      "method": "Extraction",
+      "availableAt": "Available at",
+      "codeVersion": "Code version",
+      "rulesVersion": "Rules version",
+      "publication": "Publication snapshot",
+      "derived": "Derived value",
+      "judgment": "Third-party judgment (unsettled)",
+      "privateLibrary": "Private library (originals are not distributed)",
+      "snippet": "Snippet"
+    },
+    "provenance": {
+      "llmConfirmed": "LLM extracted + human confirmed",
+      "llmCorrected": "LLM extracted + human corrected",
+      "humanAdded": "Added by a reviewer",
+      "absent": "Marked by a reviewer: not in report",
+      "unknown": "Source not labelled"
+    },
+    "facts": {
+      "title": "Stated in report",
+      "titleEn": "报告所载 · per target",
+      "hint": "Open a value → source drawer",
+      "page": "p.{page}",
+      "rows": {
+        "rating": "Rating stated / normalized",
+        "target": "Target · currency · horizon",
+        "priceAtReport": "Price at report · currency · date",
+        "upside": "Upside",
+        "method": "Method parameters"
+      },
+      "absentTarget": "No target price in report",
+      "months": "{n} months",
+      "upsideFormula": "target / price at report − 1, same currency",
+      "kind": {
+        "judgment": "Third-party judgment (unsettled)",
+        "assumption": "Third-party assumption · stated",
+        "derivedJudgment": "Derived · {version} · third-party judgment (unsettled)"
+      },
+      "columns": {
+        "field": "Field",
+        "value": "Value",
+        "kind": "Kind",
+        "provenance": "Provenance"
+      },
+      "noLatestPrice": "No latest price is shown. Parameters the report does not state are not shown or filled in."
+    },
+    "summary": {
+      "title": "Independent summary",
+      "titleEn": "独立摘要",
+      "none": "No summary yet",
+      "label": "OsbornAlpha independent summary · AI-generated ({model}) · not the institution's text · generated {date}",
+      "otherLanguage": "Only a summary in the other language exists.",
+      "grounded": "Numbers checked against"
+    },
+    "snippets": {
+      "title": "Snippets",
+      "titleEn": "≤ {n} chars",
+      "none": "No public snippets",
+      "purpose": {
+        "rating": "Rating rationale",
+        "target": "Target rationale",
+        "thesis": "Thesis",
+        "risk": "Risks",
+        "method": "Valuation method",
+        "other": "Other"
+      },
+      "page": "p.{page}"
+    },
+    "history": {
+      "title": "Rating & target history",
+      "titleEn": "评级与目标价历史",
+      "scope": "Same institution · security · currency",
+      "judgment": "Third-party judgment (unsettled)",
+      "viewToggle": "Toggle chart and table",
+      "chart": "Chart",
+      "table": "Table",
+      "none": "No history yet",
+      "chartLabel": "Target-price trajectory of {institution} for {ticker}, {n} report points; values in the table view",
+      "stepNote": "Step line = the target is unchanged between reports",
+      "columns": {
+        "range": "From → to",
+        "rating": "Rating",
+        "target": "Target {currency}",
+        "change": "Change",
+        "reportIds": "report_id (both ends)",
+        "availableAt": "available_at",
+        "versions": "Formula / code"
+      }
+    },
+    "spread": {
+      "title": "Cross-institution spread",
+      "titleEn": "跨机构分歧",
+      "scope": "{ticker} · {currency} · latest per institution · {months}-month window",
+      "judgment": "Third-party judgment (unsettled)",
+      "viewToggle": "Toggle chart and table",
+      "chart": "Chart",
+      "table": "Table",
+      "none": "No other institution reported in the window",
+      "chartLabel": "Targets and prices at report of {n} institutions for {ticker} ({currency}); values in the table view",
+      "legendPrice": "Price at report",
+      "legendTarget": "Target",
+      "legendNote": "No latest price",
+      "noTarget": "No target price in report",
+      "targetHidden": "Target not public",
+      "columns": {
+        "institution": "Institution",
+        "report": "report_id",
+        "date": "Date",
+        "rating": "Rating",
+        "priceAtReport": "Price at report",
+        "target": "Target",
+        "upside": "Upside"
+      }
+    },
+    "settlement": {
+      "title": "Settlement (judgment)",
+      "body": "Appears after F4 ships: window returns, horizon hit, pending / unsettleable reasons, method version, price source, retrospective badge."
+    },
+    "detail": {
+      "published": "Published {date}",
+      "targets": "Targets",
+      "analysts": "Analysts",
+      "noTargets": "This report has no single-security target (sector / macro strategy)."
+    },
+    "preview": {
+      "status": "{status} · review {review} · no public snapshot yet",
+      "noHistory": "The preview has no history or spread (they come from the public views only).",
+      "banner": "Preview · not public",
+      "bannerBody": "This page reads base tables with service_role and renders the same components as the public page; admins only. Public routes may return 404 right now.",
+      "back": "Back to review"
+    },
+    "institution": {
+      "aliases": "Aliases",
+      "ratingDisclosure": "Rating system disclosure",
+      "stats": {
+        "reports": "Library reports",
+        "securities": "Securities covered",
+        "lastReport": "Latest report"
+      },
+      "reports": "Reports",
+      "reportsEn": "报告",
+      "analysts": {
+        "title": "Analysts",
+        "titleEn": "分析师",
+        "none": "No publicly named analysts",
+        "reports": "{n} reports"
+      },
+      "performance": {
+        "title": "Library sample performance",
+        "titleEn": "馆藏样本表现",
+        "badge": "Judgment · shown after F4 settlement",
+        "body": "Based on a library sample of {n} reports. Hit rates are not shown before F4 settlement ships.",
+        "sampleNote": "This is the library sample, not every report by this institution; retrospective registrations will be listed separately."
+      }
+    },
+    "stock": {
+      "title": "Library reports ({n})",
+      "titleEn": "馆藏研报",
+      "all": "All →"
+    }
+  },
+  "rating": {
+    "buy": "Buy",
+    "overweight": "Overweight",
+    "neutral": "Neutral",
+    "underweight": "Underweight",
+    "sell": "Sell",
+    "not_rated": "Not rated",
+    "unmapped": "Unmapped"
+  },
+  "fields": {
+    "institution": "Institution",
+    "analyst": "Analyst",
+    "published_date": "Published date",
+    "price_as_of_date": "Price date",
+    "ticker": "Ticker",
+    "rating": "Rating",
+    "target_price": "Target price",
+    "target_currency": "Target currency",
+    "target_horizon": "Target horizon",
+    "price_at_report": "Price at report",
+    "price_currency": "Price currency",
+    "upside_stated": "Stated upside",
+    "wacc": "WACC",
+    "terminal_growth": "Terminal growth",
+    "terminal_value_share": "Terminal value share",
+    "valuation_method": "Valuation method",
+    "sector": "Sector",
+    "title": "Title"
+  },
+  "admin": {
+    "denied": {
+      "title": "Access denied",
+      "body": "This page is for admins only."
+    },
+    "shell": {
+      "title": "Broker research admin",
+      "nav": "Broker research admin navigation",
+      "nav_overview": "Overview",
+      "nav_upload": "Upload",
+      "nav_licences": "Licences",
+      "nav_accessLog": "Access log",
+      "nav_institutions": "Institutions"
+    },
+    "errors": {
+      "generic": "Action failed ({code})",
+      "duplicate_document": "A document with this sha256 already exists; it is not stored twice.",
+      "intent_mismatch": "The upload intent does not match or has expired; choose the file again.",
+      "intent_busy": "Another commit is processing this intent; try again shortly.",
+      "intent_expired": "The upload intent expired; choose the file again.",
+      "promotion_lost": "Neither the staged nor the final object exists (promotion_lost); upload the same file again.",
+      "promotion_pending": "Document promotion has not finished.",
+      "sha_mismatch": "The server-side sha256 differs from the browser's.",
+      "size_mismatch": "The file size differs from the declared size.",
+      "not_pdf": "Only PDF files are accepted.",
+      "too_large": "The file exceeds 50 MiB.",
+      "empty": "The file is empty.",
+      "upload_failed": "The direct upload to the private bucket failed.",
+      "lease_held": "Another job holds this document; try again later.",
+      "licence_forbids_processing": "The licence does not allow sending the full text for processing.",
+      "version_mismatch": "The licence version changed; refresh and confirm again.",
+      "publish_blocked": "Publish blockers remain.",
+      "published_immutable": "A published report cannot be changed; unpublish it first.",
+      "document_withdrawn": "The document is withdrawn.",
+      "access_log_failed": "Writing the access log failed; nothing was returned.",
+      "llm_unavailable": "The platform LLM is not enabled.",
+      "f3_unavailable": "The document pipeline (F3) is not enabled.",
+      "hook_params_required": "Processing parameters are missing."
+    },
+    "overview": {
+      "title": "Overview",
+      "titleEn": "总览",
+      "switch": {
+        "title": "Public switch",
+        "on": "on",
+        "off": "off",
+        "body": "The switch lives in the database (broker_research_settings.public_enabled). While off, public views return 0 rows and public routes 404; admins see previews only.",
+        "enable": "Enable public",
+        "disable": "Disable public",
+        "ownerOnly": "Enabling is the owner's FR-6 step after the three gates, following the runbook; this page only shows the gates."
+      },
+      "gates": {
+        "d1": "D1 licence confirmation",
+        "storage": "test:storage receipt",
+        "gold": "Gold set receipt",
+        "ok": "met",
+        "notOk": "not met",
+        "d1Detail": "Licences confirmed and in force: {confirmed} / {total}",
+        "storageDetail": "Manual gate: run npm run test:storage on the local Supabase stack; the receipt is in the audit folder and cannot be checked here.",
+        "goldDetail": "{date} · n={n} · passed {passed}",
+        "goldMissing": "No gold receipt yet"
+      },
+      "counts": {
+        "title": "Counts",
+        "toParse": "To parse",
+        "toExtract": "To extract",
+        "toReview": "To review",
+        "toPublish": "To publish",
+        "published": "Published",
+        "withdrawn": "Withdrawn"
+      },
+      "gold": {
+        "title": "Latest gold receipt",
+        "tuple": "Tuple",
+        "minima": "Minima",
+        "worst": "Worst field",
+        "corpusMismatch": "Corpus hash differs from the approved one",
+        "code": "Code version",
+        "none": "No gold receipt yet"
+      },
+      "batches": {
+        "title": "Recent batches"
+      },
+      "quarantine": {
+        "title": "Open quarantine",
+        "link": "/admin/dq →"
+      },
+      "attention": {
+        "title": "Needs attention",
+        "mappingUpdates": "Published reports with a newer mapping available",
+        "outboxFailed": "Failed outbox events",
+        "licencesPending": "Licences pending confirmation after a material change"
+      },
+      "queue": {
+        "title": "Review queue",
+        "untitled": "(untitled)"
+      },
+      "documents": {
+        "title": "Recent documents"
+      },
+      "empty": "None"
+    },
+    "upload": {
+      "title": "Upload report",
+      "titleEn": "上传研报",
+      "steps": {
+        "drop": "Drop",
+        "sha": "sha256",
+        "dedupe": "Dedupe",
+        "licence": "Licence",
+        "upload": "Upload",
+        "commit": "Commit"
+      },
+      "drop": "Drop a PDF here, or click to choose a file",
+      "dropNote": "Only PDFs the owner lawfully holds; no paywall or third-party scraping",
+      "file": "File",
+      "hashing": "Hashing locally…",
+      "licence": "Licence (required)",
+      "licencePlaceholder": "Choose a licence",
+      "confirmed": "confirmed {date}",
+      "unconfirmed": "unconfirmed",
+      "licenceHelp": "Each file binds one versioned licence; the licence decides whether targets and snippets may be public.",
+      "submit": "Upload to the private bucket",
+      "cancel": "Cancel",
+      "uploading": "Uploading",
+      "committing": "Committing",
+      "direct": "direct to the private broker-research bucket, not through the app server",
+      "duplicate": "A document with this sha256 already exists; it is not stored twice.",
+      "openDocument": "Open document →",
+      "done": "Committed",
+      "retry": "Retry"
+    },
+    "licences": {
+      "title": "Licences",
+      "titleEn": "许可",
+      "new": "New licence",
+      "columns": {
+        "licence": "Licence",
+        "version": "Version",
+        "status": "Status",
+        "allowed": "Public",
+        "documents": "Documents",
+        "snippets": "Public snippets",
+        "actions": "Actions"
+      },
+      "pending": "Pending (material change)",
+      "confirmedOn": "Confirmed {date}",
+      "outOfWindow": "Unconfirmed or out of term",
+      "confirm": "Confirm v{version}",
+      "edit": "Edit",
+      "empty": "No licences yet",
+      "flagsShort": {
+        "metadata": "metadata",
+        "target": "target",
+        "snippets": "snippets ≤ {n} chars",
+        "summary": "summary",
+        "none": "nothing public"
+      },
+      "form": {
+        "source_label": "Name",
+        "licence_kind": "Kind",
+        "holder": "Holder",
+        "terms_summary": "Terms summary",
+        "evidence_path": "Evidence path (licences/'{sha}'.pdf)",
+        "snippet_max_chars": "Snippet cap N (≤ 500)",
+        "valid_from": "Valid from",
+        "valid_to": "Valid to (optional)",
+        "newTitle": "New licence",
+        "editTitle": "Edit licence",
+        "flags": "Allows",
+        "materialNote": "Changing a public flag, N or the term is material: version +1, confirmation cleared, affected snippets and summaries back to draft.",
+        "save": "Save",
+        "cancel": "Cancel"
+      },
+      "invalid": {
+        "source_label": "1–120 characters",
+        "holder": "Required",
+        "terms_summary": "Required",
+        "evidence_path": "Invalid path",
+        "snippet_max_chars": "An integer 1–500",
+        "valid_from": "Invalid date",
+        "valid_to": "Cannot be before valid from"
+      },
+      "kinds": {
+        "terminal_subscription": "Terminal subscription",
+        "direct_from_broker": "Direct from broker",
+        "owner_authored": "Owner authored",
+        "other": "Other"
+      },
+      "flags": {
+        "allows_llm_processing": "May be sent to F3 / the platform LLM",
+        "allows_public_metadata": "Metadata (institution, title, date, rating)",
+        "allows_public_snippets": "Snippets",
+        "allows_public_summary": "Independent summary",
+        "allows_public_target_price": "Target price"
+      },
+      "impact": {
+        "title": "Impact · {label}",
+        "publishedReports": "Published reports",
+        "hiddenReports": "Reports hidden pending a disclosure re-check",
+        "approvedSnippets": "Approved snippets",
+        "approvedSummaries": "Approved summaries",
+        "revertedTexts": "Snippets and summaries sent back to draft by a change",
+        "note": "After confirming a new version, texts back in draft are public only once re-approved.",
+        "window": "Term"
+      }
+    },
+    "accessLog": {
+      "title": "Access log",
+      "titleEn": "访问日志",
+      "intro": "Every request returning full text, spans or a signed URL writes a row first, then returns content. Append-only; no IP is stored.",
+      "filters": {
+        "user": "Admin",
+        "action": "Action",
+        "all": "All",
+        "document": "Document {id}"
+      },
+      "export": "Export CSV",
+      "columns": {
+        "at": "At",
+        "user": "Admin",
+        "action": "Action",
+        "object": "Object",
+        "detail": "Detail"
+      },
+      "empty": "No entries"
+    },
+    "document": {
+      "status": {
+        "uploaded": "To parse",
+        "parsing": "Parsing",
+        "parsed": "Parsed",
+        "parse_failed": "Parse failed",
+        "withdrawn": "Withdrawn"
+      },
+      "review": {
+        "pending": "Review pending",
+        "in_review": "In review",
+        "approved": "Reviewed",
+        "rejected": "Review rejected"
+      },
+      "licenceLine": "Licence {label} v{version} · {pages} pages",
+      "promotionPending": "Promotion pending",
+      "verify": "Verification result: {status}",
+      "working": "Working…",
+      "actions": {
+        "viewOriginal": "View original (signed link)",
+        "parse": "Parse",
+        "extract": "Extract",
+        "summarize": "Summarize {lang}",
+        "translate": "Translate title",
+        "review": "Review →",
+        "verify": "Re-run verification"
+      },
+      "actionsNote": "View original writes the access log first, then mints a 600-second signed URL for admins only. Parse and extract are separate actions, each with maxDuration 300 s.",
+      "runs": {
+        "title": "Runs (immutable)",
+        "run": "run",
+        "kind": "Kind",
+        "started": "Started",
+        "status": "Status",
+        "artifact": "Artifact / request",
+        "versions": "Code · prompt / extractor",
+        "detail": "Detail",
+        "empty": "No runs yet"
+      },
+      "withdraw": {
+        "title": "Withdraw",
+        "body": "After withdrawal public routes 404 and signed-link and text routes 410; evidence and audit are kept.",
+        "done": "Withdrawn {date}: {reason}",
+        "reason": "Reason (required)",
+        "placeholder": "e.g. licence ended",
+        "alsoPurge": "Also start purging",
+        "submit": "Withdraw",
+        "ok": "Withdrawn."
+      },
+      "purge": {
+        "title": "Purge",
+        "irreversible": "Irreversible",
+        "steps": {
+          "pdf": "Delete the original PDF from the private bucket",
+          "artifacts": "Delete parse artifacts and page images",
+          "runs": "Delete raw run requests / responses",
+          "fields_text": "Clear evidence spans",
+          "snippets_text": "Clear snippet text",
+          "summaries": "Reject summaries",
+          "quarantine_payload": "Clear quarantine payloads"
+        },
+        "attempts": "{n} attempts",
+        "done": "Purged {date}",
+        "confirm": "Type the first 8 characters of the document sha256 to confirm",
+        "retry": "Retry unfinished steps",
+        "run": "Run purge",
+        "needsWithdraw": "Withdraw the document before purging."
+      },
+      "accessLog": "Access log for this document →"
+    },
+    "review": {
+      "withdrawn": "The document is withdrawn; review data can no longer be read (410).",
+      "loading": "Loading…",
+      "prov": {
+        "absent": "absent · not in report",
+        "human": "Added by reviewer",
+        "llm": "LLM extracted",
+        "llmReviewed": "Human confirmed"
+      },
+      "unverified": "span not found",
+      "actions": {
+        "confirm": "Confirm",
+        "correct": "Correct",
+        "reject": "Reject",
+        "absent": "Mark absent",
+        "saveCorrection": "Save correction",
+        "cancel": "Cancel",
+        "add": "Add field",
+        "override": "Save override",
+        "save": "Save",
+        "bindAnalyst": "Bind analyst",
+        "approve": "Approve",
+        "publish": "Publish…",
+        "publishBlocked": "Publish ({n} blockers)",
+        "markReviewed": "Mark reviewed"
+      },
+      "useSelection": "Use the current selection as the citation (page {page}, {n} chars)",
+      "selectHint": "Select text in the original on the left to use it as a citation or snippet.",
+      "typed": {
+        "text": "Stated value",
+        "num_price": "Number",
+        "num_pct": "Fraction (12.5% → 0.125)",
+        "num_months": "Months",
+        "currency": "Currency (ISO, e.g. CNY)",
+        "date": "Date",
+        "help_price": "Price: number and currency are validated separately (typed/1).",
+        "help_currency": "Three-letter ISO currency code.",
+        "help_months": "Whole months.",
+        "help_pct": "Enter percentages as fractions.",
+        "help_date": "ISO date.",
+        "help_text": "As stated in the report.",
+        "invalid_value_text": "The stated value is empty or malformed",
+        "invalid_value_num": "Malformed number",
+        "invalid_value_currency": "Currency must be three capital letters",
+        "invalid_value_date": "Invalid date"
+      },
+      "addNeedsSelection": "Select the source text in the original before adding a field.",
+      "addField": "Add a field from the selection",
+      "field": "Field",
+      "addSpan": "Source: page {page}, offsets {start}–{end}, occurrence {occurrence}",
+      "resolved": "Resolved: {ticker} · issuer {issuer}",
+      "ratingUnmapped": "Rating not mapped",
+      "conflict": "Candidate conflict: {field} ({n} rows; confirm one, the rest are rejected)",
+      "markAbsent": "Mark {field} absent (page {page})",
+      "override": "Resolution override: security ticker",
+      "bind": {
+        "scope": "Scope",
+        "institution": "Institution",
+        "reportType": "Report type",
+        "primary": "Primary target",
+        "supersedes": "Supersedes report",
+        "analyst": "Analyst",
+        "private": "not public",
+        "analystField": "Analyst evidence row",
+        "role": "Role"
+      },
+      "scopes": {
+        "single_issuer": "Single issuer",
+        "multi_issuer": "Multiple issuers",
+        "sector": "Sector",
+        "macro_strategy": "Macro strategy"
+      },
+      "snippets": {
+        "new": "New snippet",
+        "remaining": "Remaining",
+        "purpose": "Purpose",
+        "target": "Target",
+        "noTarget": "No target",
+        "field": "Cited field",
+        "noField": "No field",
+        "create": "Create snippet",
+        "none": "No snippets yet",
+        "disclosureHits": "Disclosure check failed: {tokens}",
+        "purged": "(text purged)"
+      },
+      "purposes": {
+        "rating": "Rating rationale",
+        "target": "Target rationale",
+        "thesis": "Thesis",
+        "risk": "Risks",
+        "method": "Valuation method",
+        "other": "Other"
+      },
+      "title": {
+        "original": "Original title",
+        "zh": "Chinese title",
+        "en": "English title",
+        "public": "Public title title_public",
+        "blocked": "Blocker 15 hit: {surfaces}. Rewrite the public title.",
+        "translate": "Translate again"
+      },
+      "summaries": {
+        "generate": "Generate summary {lang}",
+        "none": "No summaries yet",
+        "overlap": "Longest verbatim overlap {n} / {max}",
+        "grounded": "All numbers grounded",
+        "ungrounded": "Numbers not grounded",
+        "disclosureOk": "Disclosure check passed",
+        "disclosureHit": "Disclosure check failed",
+        "stale": "Inputs changed (regenerate)"
+      },
+      "tabs": {
+        "report": "Report fields",
+        "snippets": "Snippets",
+        "title": "Title",
+        "summaries": "Summaries"
+      },
+      "crumb": "Review {id}",
+      "confirmedCount": "{done} / {total} fields effective",
+      "toDocument": "Document →",
+      "toPreview": "Preview →",
+      "staleRun": "stale_run: some fields are bound to a parse run other than the current run {run}. Human-confirmed fields are kept; check and re-confirm them.",
+      "page": {
+        "title": "Original · page {page}",
+        "private": "Private · admins only",
+        "prev": "← Previous",
+        "next": "Next →",
+        "selection": "{n} chars selected ({start}–{end})",
+        "parseRun": "Parse run {run}"
+      },
+      "typedNote": "Typed editing: number, currency, horizon and date are validated separately (typed/1); a span must match the page text verbatim (R1) to be confirmed.",
+      "blockers": {
+        "title": "Blockers",
+        "reviewReady": "Review-ready",
+        "publishReady": "Publish-ready",
+        "none": "None",
+        "review_not_approved": "Not marked reviewed",
+        "licence_unconfirmed": "Current licence version unconfirmed (D1)",
+        "licence_no_public_metadata": "Licence does not allow public metadata",
+        "document_not_parsed": "Document not parsed",
+        "report_incomplete": "Report field missing: {arg}",
+        "required_field_missing": "Required field missing: {arg}",
+        "field_pending": "Required field still a candidate: {arg}",
+        "target_unresolved": "Target unresolved: {arg}",
+        "target_cardinality": "Target count does not fit the scope",
+        "quarantine_open": "Open quarantine item: {arg}",
+        "materialize_stale": "Materialisation is stale",
+        "rules_stale": "Rule receipt stale or failed",
+        "eval_receipt_missing": "LLM fields without a valid gold receipt",
+        "summary_stale": "Inputs of an approved summary changed",
+        "restricted_value_in_text": "Restricted value or name in: {arg}",
+        "evidence_drift": "Verification found evidence drift",
+        "disclosure_stale": "Disclosure inputs changed; re-run the disclosure check",
+        "conflict_unresolved": "Unresolved candidate conflict: {arg}"
+      },
+      "unpublish": {
+        "reason": "Reason for unpublishing",
+        "submit": "Unpublish",
+        "note": "After unpublishing public routes 404 and the revision goes up by one; the snapshot is kept for audit."
+      },
+      "disclosureRecheck": {
+        "note": "The licence or an analyst's disclosure changed (disclosure_ok=false). Re-run the disclosure check of the titles and approved snippets / summaries with the current inputs; it is restored only if everything passes.",
+        "submit": "Re-run disclosure check",
+        "failures": "Failed checks"
+      }
+    },
+    "publish": {
+      "title": "Publish this report?",
+      "doneTitle": "Published",
+      "checking": "Checking blockers…",
+      "blockers": "Blockers ({n})",
+      "willBePublic": "Will be public",
+      "public": {
+        "metadata": "Metadata, stated and normalized rating",
+        "target": "Target price (allowed by licence v{version})",
+        "noTarget": "Target price not public (licence does not allow it)",
+        "summary": "{n} independent summaries (AI-labelled)",
+        "snippets": "{n} snippets (≤ {max} chars)"
+      },
+      "switchNote": "While the public switch is off, a published report is visible in the preview only.",
+      "snapshot": "Publication snapshot",
+      "immutable": "immutable",
+      "snapshotHash": "Snapshot hash",
+      "rulesReceipt": "Rule receipt",
+      "licenceVersion": "Licence version",
+      "codeVersion": "Code version",
+      "f4": "F4 registration",
+      "f4Queued": "outbox claim.register queued by the publish function",
+      "afterNote": "Unpublishing or withdrawing makes public routes return 404; the snapshot is kept for audit.",
+      "viewPreview": "View preview",
+      "done": "Done",
+      "cancel": "Cancel",
+      "publish": "Publish"
+    },
+    "previewPage": {
+      "incomplete": "The report lacks fields required for public display (e.g. a title); it cannot be previewed yet.",
+      "metadataHidden": "The licence does not allow public metadata: even when published, this report will not appear publicly."
+    },
+    "institutions": {
+      "title": "Institutions and rating scales",
+      "nameEn": "English name",
+      "add": "Add institution",
+      "none": "No institutions yet",
+      "deniedTitle": "Administrators only",
+      "deniedBody": "You do not have permission to maintain research institutions.",
+      "error": "Operation failed: {code}",
+      "scales": {
+        "label": "Stated rating",
+        "normalized": "Normalized",
+        "validFrom": "Valid from",
+        "validTo": "Valid to",
+        "source": "Disclosure source",
+        "add": "Add scale row",
+        "close": "Close",
+        "closeOn": "Close on",
+        "note": "Scale rows are append-only: to change one, close it and add a new row. Labels match case-insensitively after trimming."
+      },
+      "analysts": {
+        "name": "Analyst name",
+        "add": "Add analyst",
+        "public": "Public byline",
+        "confirm": "Changing the public byline sends affected approved snippets / summaries back to draft for re-approval. Continue?"
+      }
+    }
+  }
+}

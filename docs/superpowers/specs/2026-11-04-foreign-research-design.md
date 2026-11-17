@@ -1,8 +1,8 @@
 # 外资研报模块 · 设计规格
 
-日期：2026-11-04（第 4 稿，Codex 三轮审计后；审计轨迹：`docs/audits/2026-11-04-foreign-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表（含第三轮处置）、04 Codex 第三轮、05 Codex 第四轮）
+日期：2026-11-04（第 4 稿，Codex 三轮审计后；审计轨迹：`docs/audits/2026-11-04-foreign-research/` —— 01 Codex 第一轮、02 Codex 第二轮、03 处置表（含第三轮处置）、04 Codex 第三轮、05 Codex 第四轮）；2026-11-06 第 5 稿：Codex 第五轮（增量，限计划一 / 二落地代码，`docs/audits/2026-11-06-foreign-research/01-codex-spec-round5.md`）FR5-01–04 已按处方落实
 状态：草案，待 owner 评审（§15.2 有七项 owner 决策；其中 D1 许可确认是本模块任何对外功能的前置条件）
-上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一：发行人、DQ 层，已落地，§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二：披露事实库，设计稿，未落地）；`docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`（前向评分内核，已落地）。并行规格：文档管道 F3、判断框架 F4、评测 F6、计划三（标识符与对账）——依赖接口见 §11。
+上游：`docs/superpowers/specs/2026-11-04-data-foundation-design.md`（规格一：发行人、DQ 层，已落地，§14 为既定事实）；`docs/superpowers/specs/2026-11-04-data-foundation-2-disclosure-facts-design.md`（规格二：披露事实库，已经 PR #102 落地，迁移 `20261106090000_financial_facts.sql`）；`docs/superpowers/specs/2026-10-17-analyst-scoring-layer-design.md`（前向评分内核，已落地）。并行规格：文档管道 F3、判断框架 F4、评测 F6、计划三（标识符与对账）——依赖接口见 §11。
 总纲：`docs/research/chaosai-integration-2026-11-04/EXPERT_PLAYBOOK_AND_BRIEF.md` §3 与 §5。本规格逐条对照其硬约束：
 - 约束 1（只用一手来源）：研报原件只来自 owner 合法持有的 PDF，由管理员上传；不抓取任何付费墙或对方网站；Tushare `report_rc` 不是来源（§6.6）。
 - 约束 2（每个数字可回放）：每条证据行绑定一次不可变的解析运行（产物哈希）与——若为 LLM 抽取——一次不可变的抽取运行（原始请求 / 响应 / 提示词版本）；带 `page`、`char_start/char_end`、`available_at`（我方入库时间）与 `code_version`；每次发布留一份不可变的发布快照（§4.8）；引用跨度必须在页文本中逐字命中（§7.1 R1），否则不发布。
@@ -37,10 +37,11 @@
 
 ### 1.2 本规格之外（含明示的总纲偏差）
 
+- **清除偏差（Commander 2026-11-06，P-R6-01..04）**：撤回立即隐藏；`purge:false` 保留产物与模型请求 / 响应，不触发删除。清除先持久化 `purge_requested_at` / `purge_requested_by`，再取租约及执行步骤；清除是尽力而为并持续每日对账。已知路径删除完成即可记录 `purged_at`，但任何未对账写入仍留在对账集合。未确认完成的 pending 写入不因超时、行龄或 worker 终止而结束，每日重复幂等删除；只有确认成功（或确认失败且未发送字节）后 `finishWrite`，且在 `finished_at` 后至少删除一次，才可 reconciled。清除后的迟到写入在落地后的下一次每日运行删除；存储失败保留任务并指数退避（上限一天）。不承诺有限完成上界；当前没有存储侧生命周期规则，owner 可日后另行添加。
 - 任何自动抓取（券商门户、终端、对方网站、邮件附件自动导入）。本模块的唯一入口是管理员手工上传。
 - 对外提供 PDF 下载、全文检索、页面图像、表格数据（包括登录用户）。
 - 盈利预测表（EPS / 营收 / 净利预测）的结构化抽取（§16 问题 3）。
-- **总纲偏差（记录）**：总纲 §3.3"报告与事实对账"本期不做。原因：本期不抽取报告正文中的历史财务数字，没有可对账的左值；规格二 `financial_facts` 尚未落地。恢复条件：预测 / 历史数字表抽取入范围且规格二落地。owner 在 D1 评审时一并知悉。
+- **总纲偏差（记录）**：总纲 §3.3"报告与事实对账"本期不做。原因：本期不抽取报告正文中的历史财务数字，没有可对账的左值（规格二 `financial_facts` 已落地，右值存在，但左值不在本期范围）。恢复条件：预测 / 历史数字表抽取入范围。owner 在 D1 评审时一并知悉。
 - 详情页"最新价 / 与目标价的当前距离"：现有 `/api/quote` 是多提供商级联的实时头条价，无留存快照与代码谱系，不满足约束 2；本期不显示（§16 问题 7）。
 - `/stock/[ticker]` 的 `broker_reports` mock 数据与 `/api/consensus/[ticker]` 的 mock 回退：**不**作为可选项——它们是占位数据（总纲约束 4）。FR-3 的同一变更中隐藏 mock 研报块、`/api/consensus` 的 mock 分支改为返回 `{source:'none'}`（§9.4）；旧表 `broker_reports` 与两个 watchlist 函数不动（§16 问题 5）。
 - 把摘要镜像进 owner 的 Research OS：不做。
@@ -60,15 +61,15 @@
 | 3. 共识接口 | `src/app/api/consensus/[ticker]/route.ts`：A 股 + `TUSHARE_TOKEN` → `fetchTushareReportRc`（`src/lib/data/sources/tushare.ts` 553–602 行；仓库注释称需 5000 积分，未独立核实）→ `deriveConsensus`；否则 mock 回退 | mock 回退改为 `{source:'none'}`（§9.4）；`report_rc` 定位见 §6.6 |
 | 4. 文档摄入 | `src/lib/research/ingest/collectors/*`：公开披露采集；`sources.ts::ingestSource(ctx, input)` 写 `research_source_documents`（租户表、`raw_text` 不可变、`(user_id, content_hash)` 唯一） | 不把研报写进 `research_source_documents` |
 | 5. 发行人解析 | `src/lib/entities/resolve.ts::resolveIssuer(client, {ticker\|cik\|lei\|isin}, {today})`，每次一个标识符，返回 `issuer_id`，无 provenance；`tickerCandidates` 模块私有；`issuers`、`issuer_securities(ticker, valid_from, valid_to, is_primary)` | 本模块自带 `parseBrokerTicker`（§5.4）；解析快照（所用 `issuer_securities` 行与 `today`）写 `targets.resolution` |
-| 6. 质量设施 | `startBatch(client, input)/finishBatch(client, …)`；`batchStatusFromCounts`：`fetched>0` 且无结果 → `failed`；`failed>0` 或任一非信息错误 → 有落地则 `partial` 否则 `failed`；`quarantined` 计入"落地"；`INFO_CODES=['skipped_summary','relink']`；`quarantine(client, input)`（同键 open 唯一）；`recordAttempt(client, dataset, …)`（最后写入者胜，假定单生产者） | 复用；dataset `broker_research`；批次计数见 §6.2；新增信息码见 §7.4 |
+| 6. 质量设施 | `startBatch(client, input)/finishBatch(client, …)`；`batchStatusFromCounts`：`fetched>0` 且无结果 → `failed`；`failed>0` 或任一非信息错误 → 有落地则 `partial` 否则 `failed`；`quarantined` 计入"落地"；`INFO_CODES=['skipped_summary','relink','rule_warning_summary','coverage_summary','deadline_hit']`（计划二落地后五项）；`quarantine(client, input)`（同键 open 唯一）；`recordAttempt(client, dataset, …)`（最后写入者胜，假定单生产者） | 复用；dataset `broker_research`；批次计数见 §6.2；新增信息码见 §7.4 |
 | 7. 隔离处理 | `POST /api/admin/dq/quarantine/[id]`：`requireAdminUser`、Content-Type 与 Origin 校验、`resolveQuarantine`、`research_audit_log` | 同模式；钩子只写覆盖表（§7.3） |
 | 8. 管理员 | `requireAdminUser()`（`profiles.role='admin'`）；`/admin/{dq,securities,usage}` 页面模式 | 新页 `/admin/broker-research` 同模式 |
 | 9. 存储 | 私有桶 `security-snapshots`（`insert into storage.buckets … on conflict do update`，`public=false`，`file_size_limit=52428800`=50 MiB）；`src`、`scripts` 内**没有**签名 URL 调用 | 新桶同法；签名上传 / 读取 URL 与 `move` 首次引入，本地栈验证（§12.3） |
 | 10. 前向评分 | `src/lib/scoring/forward.ts::scoreForward(call, bars)`：基准为调用时刻所在交易所日期**当日或之后**的首根 K 线收盘；5/20/60 交易日；`ForwardCall{market, action, at, confidence}`；`src/lib/analyst/score-store.ts` 有"基准 K 线超出取数窗口则不评分"的截断保护；K 线来自 `fetchEastmoneyKline`（东方财富适配器，支持 `qfq/hfq/none`） | §10.3 |
 | 11. LLM | `resolvePlatformLlm()` 只解析配置；注册表快照 `src/lib/llm/registry/{models,providers}.json`；`ajv@8.20.0`；**没有** PDF 解析依赖 | 原始请求 / 响应由本模块留存（§4.3） |
-| 12. cron | `vercel.json` 六个 cron；`CRON_SECRET` Bearer + `timingSafeEqual`；`maxDuration=300`；hnd1 | 新增每日核验 cron 与 outbox 投递 cron（§8.3） |
+| 12. cron | `vercel.json` 七个 cron（含计划二的 `/api/cron/facts-sync?market=US`，新增时保留）；`CRON_SECRET` Bearer + `timingSafeEqual`；`maxDuration=300`；hnd1 | 新增每日核验 cron 与 outbox 投递 cron（§8.3） |
 | 13. 测试门禁 | `criticalSuites` 精确清单；`scripts/ci/research-db.ts` 起隔离 PostgreSQL；`scripts/s4/local-db.ts` 只建 `storage.buckets` 桩表 | SQL 集成套件进 critical；存储 HTTP 套件另设 `test:storage` |
-| 14. 迁移 | 最新已锁 `20261105091000_issuers.sql`；规格二预定 `20261106090000`；`database.types.ts` 手工维护 | 本规格迁移 `20261107090000_broker_research.sql`（撞号则顺延并记入 §17） |
+| 14. 迁移 | 最新已锁 `20261106090000_financial_facts.sql`（计划二）；并行模块已占 `20261107…`–`20261111…`；`database.types.ts` 手工维护 | 本规格迁移 `20261202090000_broker_research.sql`（本模块只用 `20261125HHMMSS_*`；锁文件只追加） |
 | 15. i18n | `messages/{zh,en}/*.json` + parity 测试 | 新增 `intel.foreignResearch.*`、`admin.brokerResearch.*` |
 | 16. 对方页面 | `REPORT.md` 第 58 行；总纲 §3.1：301 篇一页纸（机构、行业、评级、中英标题、当前价 / 目标价 / 空间、报告定位、核心结论、方法论、风险、代码与日期、分类计数）；交互未验证 | 只作功能参考；§3 逐项分类；不导入任何数据 |
 
@@ -97,7 +98,7 @@
 
 ## 4. 数据模型
 
-迁移 `supabase/migrations/20261107090000_broker_research.sql`，可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
+迁移 `supabase/migrations/20261202090000_broker_research.sql`（如需拆分，同日 `20261125HHMMSS_*`），可重放。**所有基表只授 service_role；公开读一律经 §4.11 视图**；对每个视图与函数先 `revoke all … from public, anon, authenticated` 再按需 `grant`。视图**不调用任何函数**（视图里引用的函数需调用者有 EXECUTE 权；许可谓词内联为 SQL 表达式）。`database.types.ts` 手工补齐。
 
 表清单（21 张）：`broker_research_settings`、`broker_report_licences`、`broker_report_upload_intents`、`broker_report_documents`、`broker_report_runs`、`broker_research_reports`、`broker_report_targets`、`broker_report_target_overrides`、`broker_report_fields`、`broker_report_snippets`、`broker_report_summaries`、`broker_report_publications`、`broker_report_rule_receipts`、`broker_purge_steps`、`research_institutions`、`research_rating_scales`、`research_analysts`、`broker_report_analysts`、`broker_report_access_log`、`broker_eval_receipts`、`broker_outbox`。
 
@@ -310,6 +311,7 @@ where s.public_enabled and r.status = 'published' and r.evidence_ok and r.disclo
 |---|---|---|
 | `broker_reports_public_v` | `visible_reports` | `report_id, revision, scope, institution_id, title = coalesce(title_public, title_original), title_is_rewritten = (title_public is not null), title_zh, title_en, title_is_translation, published_date, price_as_of_date, report_type, sector_as_stated, primary_target_key, available_at, code_version, published_at, supersedes_report_id, page_count, snippet_max_chars, target_price_public, summary_public` |
 | `broker_report_targets_public_v` | join | `report_id, publication_id = r.current_publication_id, target_key, ticker_as_stated, security_ticker, issuer_id, rating_raw, rating_normalized, scale_id, target_price = case when allows_public_target_price then … end`（同 `target_currency, target_horizon_months, upside_pct`）, `target_price_public = allows_public_target_price, price_at_report, price_currency, price_as_of_date, upside_formula_version`；不含 `resolution, input_hash` |
+| `broker_spread_latest_v` | 同一 visible_reports CTE + public targets | `report_id, published_date, institution_id, security_ticker, issuer_id, currency`；currency = 有公开目标价时 target_currency，否则有报告时价格时 price_currency，否则 null。按 `(security_ticker,currency,institution_id)` 取 `published_date desc, report_id desc` 最新匹配报告；reader 再筛 issuer / 时间窗口。无目标价值、证据或原始模型字段；`revoke all from public, anon, authenticated; grant select to anon, authenticated`（同节 owner/security 设置）。 |
 | `broker_report_citations_v` | `fields where status in ('confirmed','corrected','absent')` join；排除 `field in ('target_price','target_currency','target_horizon','upside_stated') and not allows_public_target_price`；排除 `field='analyst'` 除非 `exists (broker_report_analysts a join research_analysts ra … where a.field_id = fields.field_id and ra.public_display)`；排除 `field='title' and r.title_restricted` | `report_id, target_key, field, occurrence, page, value_text/num/currency/unit/date（生效值，内联 `case` 表达式）, status, extractor_kind` |
 | `broker_report_snippets_public_v` | `status='approved' and allows_public_snippets and length(text) <= snippet_max_chars` | `snippet_id, report_id, target_key, purpose, page, text, field_id` |
 | `broker_report_summaries_public_v` | `status='approved' and allows_public_summary` | `summary_id, report_id, lang, kind, model_id, registry_hash, prompt_version, input_hash, summary_md, generated_at` |
@@ -511,7 +513,7 @@ export interface BrokerResearchDb {
 
 ### 7.4 批次信息码
 
-新增 `INFO_CODES`：`rule_warning_summary`、`eval_receipt_absent`。非信息码：`f3_failed`、`f3_timeout`、`lease_lost`、`lease_expired`、`llm_unavailable`、`llm_quota`、`llm_schema_invalid`、`span_unverified_summary`。
+`INFO_CODES` 已含 `skipped_summary`、`relink`、`rule_warning_summary`、`coverage_summary`、`deadline_hit`；本模块只追加 `eval_receipt_absent`（保留既有项）。`span_unverified_summary`、`rules_failed_summary` 保持非信息码。非信息码：`f3_failed`、`f3_timeout`、`lease_lost`、`lease_expired`、`llm_unavailable`、`llm_quota`、`llm_schema_invalid`、`span_unverified_summary`。
 
 ---
 
@@ -826,7 +828,88 @@ Codex 两轮 + 处置（本目录）；每日核验（漂移即隐藏）；规�
 
 ## 17. 实施记录与偏差
 
-（落地后补记，格式同规格一 §14。）
+**清除偏差（Commander 2026-11-06，P-R6-01..04）**：撤回立即隐藏；`purge:false` 保留产物与模型请求 / 响应，不触发删除。撤回请求携带 purge 时，单一数据库语句 / 事务原子设置 status=withdrawn、withdrawn_at/reason 与 `purge_requested_at` / `purge_requested_by`，再取租约及执行步骤；清除是尽力而为并持续每日对账。已知路径删除完成即可记录 `purged_at`，但任何未对账写入仍留在对账集合。未确认完成的 pending 写入不因超时、行龄或 worker 终止而结束，每日重复幂等删除；只有确认成功后 `finishWrite`；purge 与每日对账均仅在 done 行的路径删除完成时间不早于 `finished_at` 时标记 reconciled，pending 仍保留。发送前围栏失败且 worker 确认尚未调用 upload/F3 时标记 abandoned（finished_at 为空，不计成功，排除对账）。F3Port 必须等全部写入 settled 才 resolve；resolve 后再次核验未撤回及持有租约，失败保持 pending。清除后的迟到写入在落地后的下一次每日运行删除；存储失败保留任务并指数退避（上限一天）。不承诺有限完成上界；当前没有存储侧生命周期规则，owner 可日后另行添加。
+
+核验预算按剩余时间明确划分：不足 10 秒跳过清除，否则清除占 min(60 秒, 剩余时间的 25%)，证据核验使用其余预算。超时仅保证调用方继续前进，不取消 Supabase Storage 请求；未确认写入保持待对账。每个公开 target DTO 增加 `currency`（与 facets 和 spread 相同的生效币种规则），包括价格为空而币种列非空的情况。
+
+此决定覆盖 §1.2 与 §6.5 中对清除完成的理解：步骤成功不代表所有远端写入已停止；每日对账只选择明确请求清除的文档。实现尚未开始，SQL 与运行回归待实施验证。
+
+### 17.1 实施记录（2026-11-17）
+
+实施：计划 `docs/superpowers/plans/2026-11-06-foreign-research.md`，分支 `claude/foreign-research-f63683`，提交 `9e0d9d7c..2a1825a9`（2026-11-06 至 2026-11-17），期间三次合并 `origin/main`（最近一次合并到 `d67bca52`）。逐任务记录见 `docs/audits/2026-11-06-foreign-research/10-implementation-log.md`。上文"实现尚未开始"一句写于实施前；清除与对账的 SQL 和运行回归现已随 A1–A5、C1–C8、E1 落地并由 PG17 套件覆盖。
+
+**状态**：FR-0–FR-5 代码完成；FR-6（对外发布）未执行，`broker_research_settings.public_enabled=false`；FR-7 只有关闭的 F4 端口。生产端口默认关闭：`BROKER_RESEARCH_F3_ENABLED`、`BROKER_RESEARCH_LLM_ENABLED`、`BROKER_RESEARCH_F4_URL` 未设。三份迁移未应用到生产，本模块未做任何部署。
+
+**Owner 默认值（未答复，按 §15.2 / §15.3 默认实施）**：D1 许可未确认 → 对外开关保持关闭；D2 片段硬上限 500；D3 目标价默认不公开；D4 分析师姓名默认不公开；D5 平台 LLM、分块 8 页 / 60%；D6、D7 提案值原样；O11 清除时保留摘要文本；O14 未批准黄金集 → 含 LLM 字段的报告恒阻断 `eval_receipt_missing`。
+
+**偏差**：
+
+| # | 偏差 | 规格条目 | 原因 / 恢复条件 |
+|---|---|---|---|
+| A1 | 阻断第 11 条 `materialize_stale` 比较"已存的 `effective_hash/rules_input_hash/summary_input_digest` vs 实时重算（`broker_report_live_digests`）"，不是 `materialized_hash <> effective_hash` | §4.4 第 11 条 | 两列由物化同时写入，字面条件恒为假；按意图实施（A2） |
+| A2 | 阻断第 7 条 `field_pending` 不计已有生效行的身份 `(target_key,field,occurrence)`，也不计已取代候选 | §4.4 第 7 条 | 生效行已覆盖该身份，候选只是历史（A2） |
+| A3 | 评测阻断只认 `corpus_kind='gold'`；只有含 LLM 生效行的报告受阻断，此时覆盖要求是全部生效字段（见 R1-6）；全人工报告不受评测阻断 | §4.4 第 13 条 | 人工报告不依赖模型行为（A2） |
+| A4 | `unpublish` 把 `review_status` 置回 `in_review`（并 `revision+1`） | §6.5 | 重新编辑后必须重新复核（A2） |
+| A5 | 阻断第 15 条：非空标题面"未检查"也按不通过阻断（`title_original` 只在 `title_public` 为空时阻断） | §4.4 第 15 条 | 保守失败（A2） |
+| A6 | 标题披露结果存于规则回执：每个非空标题面一条 `{rule:'disclosure',blocking:false,detail:{surface,hits}}`（C5 `applyRules` 写），发布函数据此写 `title_restricted`；不新增报告列，`publish(reportId,by)` 签名不变 | §4.4 第 15 条、§5.5 | SQL 无法跑 TS 的披露检查；回执与 `rules_input_hash` 绑定（A2、C5） |
+| A7 | outbox 载荷与发布快照中的金额（`claim.target_price`、`reference_price`）是十进制字符串 | §10.2 示例 | 金额不经 JS number（契约"数值"）；F4 消费端按字符串解析（A2、E1） |
+| A8 | 片段 / 摘要回草稿原因存于新列 `draft_reason`（`licence_version`/`analyst_disclosure`/`disclosure_inputs`/`summary_stale`），契约行类型带该列 | §4.1、§4.9 写 `detail.reason` | 两表无 `detail` 列（A1） |
+| A9 | 解析运行插入时 `extractor_version` 可为空，收尾 `finishRun` 写入（只在为空时）；成功的解析运行必须有值 | §4.3 | F3 返回后才知道版本（A1、C4） |
+| A10 | 规格 §12.4 pipeline 测试改为在**测试库**插入 `gold` 回执并设置 `approved_gold_corpus_hash`，不用 `synthetic` 回执、无会话 GUC 旁路 | §12.4 vs §4.4 第 13 条 | 两条规格互相矛盾，以阻断不变量为准（C8） |
+| A11 | 评级映射比较键统一为 `lower(btrim(raw_label))`（唯一索引、物化、隔离钩子、B4 R5） | §4.5、§7.1 R5 | 规格未定比较键；TS 与 SQL 必须一致（A1、A2、B4） |
+| C1 | F3 / LLM 端口不可用时**不建运行行**：只记 `failed` 批次（非信息码 `f3_unavailable` / `llm_unavailable`）并答 503 | §13 写"运行 failed" | 运行行要求 lineage 列（`model_id`/`registry_hash`），端口不可用时无从填写（C4、C5） |
+| C2 | §7.4 登记的非信息码新增：`f3_unavailable`、`llm_unavailable`、`extract_deadline`、`llm_failed`、`storage_failed`、`rules_error`、`document_insert_lost`；`INFO_CODES` 只追加 `eval_receipt_absent` | §7.4 | 这些都使批次 `partial/failed`，不能是信息码（C3–C6） |
+| C3 | 批次 producer 新增 `broker-research-review`（复核动作触发规则与隔离，需要 `batch_id`） | §6.2 producer 清单 | 骨架只列了四个 producer（C6） |
+| C4 | 解析产物 `reports/{sha}.extract.{run_id}.json` 由 `parse.ts` 写入（`artifact_hash` = 所写字节），F3 只写页图 | §11.1、§4.12 | 待 F3 作者确认（C4） |
+| C5 | 框选确认的证据行 `detail.framed=true`（`broker_field_review` 合并载荷 `detail`），回放据此豁免 `candidate_missing` | §6.3、§8.4 | 人工框选的跨度不必由候选重现（C6、C8） |
+| D1 | i18n 命名空间改为独立域 `foreign-research`（`.public.*`、`.admin.*`、`.rating.*`、`.fields.*`），不用 `intel.foreignResearch.*` / `admin.brokerResearch.*` / `common.rating.*`；parity 由本模块自带测试覆盖 | §9.7 | 不改共享 `intel/admin/common.json`，避免并行模块合并冲突 |
+| D2 | 两条 cron（核验、outbox）路由已交付但**未登记** `vercel.json` | §8.3、§14 FR-5 | 首篇发布前无可核验内容；F4 消费端点未上线（F4 规格 §12.3）。登记片段见 `docs/runbooks/broker-research.md` §3，owner 合并后执行 |
+| D3 | `test:storage` 只交付脚本与 npm 脚本，未运行 | §12.3 | 需要本地 Supabase 栈；FR-6 前人工门禁，回执提交到审计目录 |
+| D4 | 公开列表无筛选且 0 行 → `404 not_found`；列表页对此显示"空馆藏"态而不是 404 页 | §8.1、§9.1、§9.2 | 匿名角色无法区分"开关关闭"与"空馆藏"（视图设计如此）；详情页与机构页照规格 404 |
+| D5 | 公开响应在 §8.1 字段外多 `targets[].publicationId`、`targets[].currency`（生效币种） 、`primaryTargetKey`、`rulesVersion`、`title.modelId`、`citations[].fieldId`、`snippets[].fieldId`、`summaries.*.groundingAssertions`、机构 `reportCount/lastPublishedDate/lastAvailableAt` | §8.1 | 来源抽屉（快照 id、规则版本、译名模型）、片段↔引用关联、摘要数字出处、机构计数；均来自视图补充列，不含 `field_id` 以外的内部 id 或跨度 |
+| D6 | 事实区标题"事实"改为"报告所载"，评级 / 目标价 / 空间 / 历史 / 分歧标"第三方判断（未结算）"，报告时价格与方法论参数标"第三方假设 · 文件所载" | §9.3、画板 Detail | F4 规格 §3、§12.3：登记为判断前不得以事实样式展示 |
+| D7 | 机构页"馆藏样本表现"只显示 n（无命中率） | 画板 Institution | 命中率在 F4 结算后 |
+| D8 | 管理员总览的"打开对外"恒禁用，三项门禁只读；只提供"关闭对外" | §9.5 | `test:storage` 回执在线上不可核对；FR-6 由 owner 按 runbook 操作 |
+| D9 | 管理员总览增加"复核队列""最近文档"两表作为文档页 / 复核页入口；无独立文档列表页 | §9.1 | 画板侧栏"文档 / 复核"无列表画板 |
+| D10 | 管理员机构维护页 `/admin/broker-research/institutions` 与 `institutions/**` 路由（D6）规格 §8.2 未列 | §8.2、§9.1、§14 FR-4 | FR-4 需要机构 / 评级映射 / 分析师（含 `public_display`）的维护入口 |
+| D11 | 预览页不含历史与跨机构分歧；预览不写访问日志；预览的 `rules_version` 恒为空（发布前无发布回执） | §9.1 | 二者只来自公开视图；预览不返回全文 / 跨度 |
+| D12 | 新增单文档核验路由 `POST /api/admin/broker-research/documents/[documentId]/verify` | §8.2 未列、§8.3 提到"重跑核验" | 规格 §8.3 要求的管理员恢复路径 |
+| D13 | 核验预算用尽时写 plan 1 既有信息码 `deadline_hit`（不新增信息码）；`span_drift` / `artifact_unreadable` / `verify_error` 是非信息码 | §8.3、§7.4 | 未核验的文档留到下一次，批次不因预算降级 |
+| D14 | `/api/consensus/[ticker]` 删除 mock 回退后，非 A 股与无 Tushare 覆盖一律 `source:'none'`；`/stock` 的 Tushare 共识卡保留 | §9.4 | 与规格一致；记录以便核对 |
+| D15 | 三级文字色用既有 `--text-muted`（`#52525b`），未采用画布的 `#8b8b94` | 画布约定 | 偏差待 owner 确认，未新增 token |
+| D16 | 管理员 API 动态段统一命名 `[licenceId]` / `[documentId]` / `[reportId]` / `[snippetId]` / `[summaryId]` / `[fieldId]` / `[publicationId]` / `[institutionId]` / `[scaleId]`（规格 §8.2 写 `[id]`） | §8.2 | Next 不允许同级不同 slug 名；路径值不变 |
+| R1-1 | 片段 / 摘要批准绑定当前披露输入：批准触发器写 `disclosure_check.db_digest = broker_report_disclosure_digest(report)`，提供的过期摘要值 → `disclosure_inputs_changed`；分析师绑定的任何增删改把已批准文本回 `draft`（`analyst_disclosure`）；阻断第 15 条也检查摘要值 | §4.4 第 15 条、§4.7、§4.9 | 规格只在分析师行变化时回草稿；新绑定同样改变披露输入（Codex 计划审计 P-R1-04；A2、C7） |
+| R1-2 | 管理员"重跑披露检查"实现为 `broker_report_disclosure_recheck`（TS 计算检查，SQL 在行锁下核对输入摘要并恢复 `disclosure_ok`）+ 路由 `reports/[reportId]/disclosure-recheck`；已发布报告恢复后不会重新登记已撤回的 claim（需要 unpublish + publish 才有新 `publication_id`） | §4.11 重跑规则、§10.2 | 规格只描述了规则，没有落点（P-R1-08；A2、C6、D5） |
+| R1-3 | 发布快照的每个证据行另外冻结 `value_source_text`、`value_source_sha256`、`framed`、`extracted`；回放只读快照，不读活的证据行 | §4.8、§5.5 | 取消发布后证据行仍可编辑，回放必须与之无关（P-R1-10；A2、C8） |
+| R1-4 | 意向允许 `validating → open`（暂存对象尚未上传：可重试的 `intent_not_uploaded`） | §6.1 状态表 | 规格的状态表没有这条回退边，C3 的恢复路径需要它（P-R1-07；A1） |
+| R1-5 | 摘要与标题翻译的结果在一个带租约围栏的事务里写入并收尾运行（`broker_summary_commit` / `broker_title_commit`），租约丢失时什么都不写 | §6.4、§4.2 | P-R1-09（A2、C7） |
+| R1-6 | 阻断第 13 条的覆盖要求扩大为"报告一旦含 LLM 生效行，所有生效字段"（含人工行），取代 A 的"只要求 LLM 字段" | §4.4 第 13 条 | 回到规格字面（P-R1-12；替换 A 部分的对应偏差） |
+| R1-7 | 黄金集评测：每篇文档先过与 `claimForProcessing` 相同的处理授权检查再外发，记录授权的许可版本；`--dry-run` 不调用 LLM；类型化值逐分量比较 | §11.3、§4.1 | P-R1-01、P-R1-11（C8） |
+| R4-1 | 撤回立即隐藏；清除先持久化 purge_requested_at/by，再取租约并删除已知路径，步骤完成可写 purged_at。每日对账只处理清除意向文档，pending 永久保持可扫；仅确认完成且 finished_at 后删除成功才 reconciled。持久重试调度与每调用截止保护核验预算。迟到对象落地后的下一次每日运行继续删除（存储故障时退避重试），没有有限时间界或存储生命周期规则；owner 可另行配置 | §1.2、§6.5、§8.3、§17 | Commander 第六轮设计决定；A1/A4/A5/C1/C4/C7/C8/E1 |
+| N1 | 三份迁移最终编号 `20261202090000/091000/092000`（实施中依次用过 `20261113*`、`20261117*`、`20261119*`、`20261125*`、`20261201*`；最后一次因与 `20261201090000_facts_read_batch.sql` 撞号改为 `20261202*`），合并前不进 `supabase/migrations.lock.json` | §3、§14 | 排在 main 已锁定的最新迁移之后；合并并在生产应用后由 owner 加锁 |
+| N2 | 本模块的数据库类型放在 `src/lib/broker-research/database-types.ts`（`BrokerDatabase`），不改 `src/lib/supabase/database.types.ts` | §3 | 该文件在 `macro_regime@v2` 公式哈希闭包内，必须与 main 字节一致 |
+| N3 | 客户端组件只能引用 `src/lib/broker-research/public-types.ts`；`client-boundary.test.ts` 覆盖公开页、个股页与管理员页 | §9 | `public-read.ts` 等含 `node:crypto` 与 service_role 读取，不能进客户端包 |
+| N4 | 个股页"馆藏研报"块挂在 main 的新外壳 `CompanyPage.tsx` 概览视图下方（非历史回放时），不在 `page.tsx` | §9.4 | main 重写了个股页外壳；合并规则是共享文件以 main 为准 |
+| N5 | 管理员入口链接加在既有 `AdminUsageClient` / `AdminSecuritiesClient` 的页内导航 | §9.1 | 仓库没有统一的管理员侧栏注册表 |
+
+**未关闭的遗留项**（`C-verify-disposition.md` 中标为 Open 的行，逐条原文见该文件；不阻塞合并，但 FR-6 前 owner 需要知情并决定是否先修）：
+
+| 组 | 审计条目 | 现状 |
+|---|---|---|
+| 非原子的多步写入 | C3-AUD-02、C5-R8、C6-009、C6-012、C7-04、C7-05、C7-06 | 许可在提交读取与晋级之间可能变化；候选提交与范围更新、绑定、取消发布后的审计写入、标题后续、摘要批准切换都是分开的调用。合成一个 RPC 需要新迁移 |
+| 模型原始请求 / 响应的持久性 | C5-R3、C5-R4、C5-R13、C7-02 | 调用记录先在内存累积，抽取 / 调用结束后才写入；中途崩溃会留下不完整的原始 I/O |
+| 规则失败后的残留 | C5-R5、C6-018–C6-021 | 规则失败时运行标记 failed，但草稿候选留下；裁决后的规则运行在查询 / 物化之后才开批次，事后不再比较回执哈希 |
+| 端口与上下文 | C4-001、C5-R10、C5-R11 | F3 适配器可以忽略截止时间（当前生产端口为"不可用"）；重试反馈不计入上下文预算，单页超限没有定义的处理策略 |
+| 评测与回放 | C8-05/09/10/21/35/36、C8-11/38、C8-15–17、C8-24/25、C8-28–30 | 评测调用没有不可变运行行，部分评测可能留下无回执的对象；独立调用 `evalStats` 不校验文档缺失 / 重复；回放不校验 SQL 快照哈希（`jsonb::text` 在 TS 侧无法重现，需要一个数据库校验接口） |
+| 集成覆盖 | C8-31–C8-34 | PG17 套件伪造评测回执，没有覆盖全部开关 / 取值组合 |
+
+另外：D1–D3 三个任务的 MiniMax 审计输出（`D1-mmx.md`–`D3-mmx.md`）没有逐条处置——owner 在 2026-11-16 取消了独立审计步骤，这三份留档备查；D4–E1 没有独立审计。
+
+**工具与流程变更**：A1–A5 由 Codex `gpt-6-sol` 实现、MiniMax（`mmx`）审计、Opus 校准前两个任务；B1–D3 同一实现者加 `mmx` 审计；2026-11-16 起 owner 改为 Fable 5.2 指挥、Codex `gpt-6.1-sol` 写全部代码、取消独立审计，保留"先写失败测试、typecheck、lint、build、受影响的单元与 PG17 套件、CI、指挥方逐个审 diff"。D4、D5、D6、E1 在四个并行 worktree 里实现，共享文件由指挥方统一整合。
+
+**门禁结果**（2026-11-17，提交 `2a1825a9`）：`npm run typecheck` ✓；`npm run lint` ✓；`npm test` ✓（827 文件 / 9406 用例通过，55 文件 / 908 用例因未设 `S4_TEST_STATE` 跳过，无 flake）；`npm run build` ✓；`npm run test:migrations` ✓（PG17，全新库与升级库一致）；PG17 上本模块两个套件 ✓（`pipeline.integration.test.ts` 10/10、`broker-research.integration.test.ts` 68/68）；`scripts/ci/research-checks.ts` ✓。未在本机运行：全量 `npm run test:db`（其余模块的套件交给 PR 的 CI；本机 16 GB 内存一次只跑一个重任务）；`npm run check:migration-history`（需要生产库导出）；`test:storage`（FR-6 前人工门禁）。本地走查受限：本机没有 Supabase 栈，只确认了 `/intel/foreign-research` 在读取失败时显示"加载失败，不显示示例数据"、公开 API 返回 500 `internal`、`/admin/broker-research` 未登录跳登录页；有数据的页面流程只由组件测试与 PG17 套件覆盖，未在浏览器里看过。
+
+**合并后 owner 事项**：生产迁移三份（`20261202090000/091000/092000`）与建私有桶，应用后加锁；D1 许可确认；O13 与 F3 作者确认解析产物归属；O14 黄金集批准与 `eval-gold.ts` 回执；本地 Supabase 栈跑 `npm run test:storage` 并把回执提交到审计目录；首篇发布后登记核验 cron，F4 上线后登记 outbox cron（`docs/runbooks/broker-research.md` §3）；FR-6 开关（runbook §2）。
 
 ---
 

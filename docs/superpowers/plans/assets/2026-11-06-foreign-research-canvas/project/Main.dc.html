@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>外资研报 列表</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/8cf6d6934bd239213413ea9e3d948511">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#0a0a0b}</style>
+</helmet>
+<div class="oa" style="width: 100%; min-height: 1400px; padding-bottom: 48px">
+  <header class="top">
+    <div class="wrap" style="display: flex; align-items: center; gap: 28px; height: 56px">
+      <span class="brand">OsbornAlpha</span>
+      <nav class="topnav"><a href="#">首页</a><a href="#">自选</a><a href="#">雷达</a><a class="on" href="#">研究</a><a href="#">回测</a><a href="#">设置</a></nav>
+      <div class="seg" style="margin-left: auto"><button class="on">中</button><button>EN</button></div>
+    </div>
+  </header>
+  <main class="wrap" style="display: flex; flex-direction: column; gap: 16px; padding-top: 24px">
+    <div class="tiny"><a href="#">研究</a> / 外资研报</div>
+    <div style="display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap">
+      <div>
+        <h1 class="h1">外资研报 <span class="en" style="font-size: 16px">Foreign broker research</span></h1>
+        <p class="cap" style="margin: 6px 0 0; max-width: 70ch">私有馆藏的结构化元数据。原文不对外提供；摘要为 OsbornAlpha 独立生成。Metadata from a private library; originals are never distributed.</p>
+      </div>
+      <div class="row" style="margin-left: auto; gap: 20px">
+        <div><div class="ml">馆藏 Reports</div><div class="m" style="font-size: 20px">186</div></div>
+        <div><div class="ml">机构 Institutions</div><div class="m" style="font-size: 20px">14</div></div>
+        <div><div class="ml">最近入库 Last added</div><div class="m" style="font-size: 20px">2026-11-01</div></div>
+      </div>
+    </div>
+
+    <div class="card" style="padding: 12px 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end">
+      <div class="field" style="width: 220px"><label for="tk">标的 Security</label><input id="tk" class="inp" placeholder="代码或名称"></div>
+      <div class="field"><label>机构 Institution</label><button class="sel">全部 ▾</button></div>
+      <div class="field"><label>标准化评级 Normalized rating</label><div class="seg"><button class="on">全部</button><button>买入</button><button>持有</button><button>卖出</button><button>未评级</button></div></div>
+      <div class="field"><label>发布日期 Published</label><button class="sel m">2026-05-01 → 2026-11-04 ▾</button></div>
+      <label class="row cap" style="gap: 6px; height: 36px"><input type="checkbox" style="accent-color: #ca8a04; width: 16px; height: 16px"> 只看有摘要</label>
+    </div>
+
+    <section class="card" style="padding: 0">
+      <table class="t">
+        <thead><tr>
+          <th style="padding-left: 16px">机构<span class="en">Institution</span></th><th>标的<span class="en">Security</span></th><th>标题<span class="en">Title</span></th><th>日期<span class="en">Published</span></th><th>评级 原文 / 标准化<span class="en">Rating stated / normalized</span></th><th class="n">目标价<span class="en">Target</span></th><th class="n">空间<span class="en">Upside · 派生</span></th><th style="padding-right: 16px">摘要<span class="en">Summary</span></th>
+        </tr></thead>
+        <tbody>
+          <sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+            <tr>
+              <td style="padding-left: 16px"><a href="Institution.dc.html" style="color: #fafafa">{{r.inst}}</a></td>
+              <td><span class="m">{{r.tk}}</span> <span class="cap">{{r.nm}}</span></td>
+              <td style="max-width: 360px; white-space: normal"><a href="Detail.dc.html" style="color: #fafafa">{{r.title}}</a><sc-if value="{{r.tr}}" hint-placeholder-val="{{false}}"><span class="tag" style="margin-left: 6px">译</span></sc-if></td>
+              <td class="m dim">{{r.date}}</td>
+              <td><span class="cap">{{r.rs}}</span> <span class="chip sq">{{r.rn}}</span></td>
+              <td class="n"><sc-if value="{{r.tpok}}" hint-placeholder-val="{{true}}"><button class="src">{{r.tp}}</button></sc-if><sc-if value="{{r.tpno}}" hint-placeholder-val="{{false}}"><span class="wh">{{r.tp}}</span></sc-if></td>
+              <td class="n m dim">{{r.up}}</td>
+              <td style="padding-right: 16px"><sc-if value="{{r.sum}}" hint-placeholder-val="{{true}}"><span class="chip">有 AI 摘要</span></sc-if><sc-if value="{{r.nosum}}" hint-placeholder-val="{{false}}"><span class="tiny">—</span></sc-if></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      <div class="row" style="padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.06)"><span class="tiny">空间 = 目标价 / 报告时价格 − 1（派生 · upside/1，同币种）。不显示最新价。</span><div class="row" style="margin-left: auto"><button class="btn sm dis">上一页</button><button class="btn sm">下一页 →</button></div></div>
+    </section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var d = [
+      ["Goldman Sachs","600519.SH","贵州茅台","Margin resilience through the cycle","2026-11-01","Buy","买入","CNY 1,980","+34.9%",true,false],
+      ["Morgan Stanley","00700.HK","腾讯控股","Games pipeline and ad load: 2027 setup","2026-10-30","Overweight","买入","HKD 720","+19.4%",true,false],
+      ["UBS","300750.SZ","宁德时代","储能出货与海外产能（译）","2026-10-28","Neutral","持有","—（许可不允许公开）","—",false,true],
+      ["J.P. Morgan","AAPL","Apple","Services mix offsets hardware softness","2026-10-27","Neutral","持有","USD 245","+3.1%",true,false],
+      ["HSBC","601318.SH","中国平安","Value of new business recovery","2026-10-24","Buy","买入","CNY 66","+21.8%",false,false],
+      ["Bernstein","NVDA","NVIDIA","Supply chain read-across for 2027","2026-10-22","Outperform","买入","USD 225","+18.0%",true,false],
+      ["Citi","09988.HK","阿里巴巴","Cloud growth vs. commerce take rate","2026-10-21","Buy","买入","HKD 182","+26.2%",true,false],
+      ["Jefferies","002594.SZ","比亚迪","Overseas volumes: pricing check","2026-10-18","Hold","持有","CNY 360","+4.6%",false,false],
+      ["UBS","600036.SH","招商银行","NIM trough timing","2026-10-15","Sell","卖出","CNY 34","−9.3%",true,false],
+      ["Morgan Stanley","MSFT","Microsoft","Initiation: not rated pending coverage","2026-10-12","Not Rated","未评级","—（报告未给出）","—",false,false]
+    ];
+    var rows = d.map(function (r) {
+      var no = r[7].indexOf("—") === 0;
+      return { inst: r[0], tk: r[1], nm: r[2], title: r[3], date: r[4], rs: r[5], rn: r[6], tp: r[7], up: r[8], sum: r[9], nosum: !r[9], tr: r[10], tpok: !no, tpno: no };
+    });
+    return { rows: rows };
+  }
+}
+</script>
+</body>
+</html>
