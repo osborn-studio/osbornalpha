@@ -26,7 +26,7 @@ import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {computeFreshness} from '../dq/freshness';
 import type {Cadence} from '../dq/freshness';
-import {F4_CLAIM_LOCK,methodologyFixture,judgmentFixture} from '../judgments/db-contract';
+import {F4_CLAIM_LOCK} from '../judgments/db-contract';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261114090000_macro_workbench.sql';
@@ -173,38 +173,6 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  afterAll(async()=>{
   try{if(publishStateLock)await publishStateLock.query('select pg_advisory_unlock($1)',[F4_CLAIM_LOCK]);}
   finally{publishStateLock?.release();await admin?.end();}
- });
-
- it('WP-D admits BIS evidence, rejects bogus adapters, preserves path checks and replays twice',async()=>{
-  const migration=readFileSync('supabase/migrations/20261128090000_macro_wpd_v3.sql','utf8');
-  await replayMigration(admin,migration);
-  const checks=()=>q(`select conname,pg_get_constraintdef(oid) definition from pg_constraint where conrelid='public.macro_evidence_objects'::regclass and contype='c' order by conname`);
-  const before=await checks();await replayMigration(admin,migration);expect(await checks()).toEqual(before);
-  const b=await batch('macro.bis'),h=sha(randomUUID());
-  const put=(adapter:string,path=`${adapter}/${h}.csv`)=>one(`select public.macro_put_retrieval($1,$2,$3,'text/csv',10,'https://stats.bis.org/data','stats.bis.org',200,$4,$5,'{}'::jsonb) v`,[h,path,adapter,T1,b]);
-  expect(typeof await put('bis_sdmx_csv')).toBe('string');
-  const bogus=sha(randomUUID());
-  expect((await fails(q(`insert into public.macro_evidence_objects(sha256,object_path,adapter,content_type,byte_length) values($1,$2,'bogus','text/csv',1)`,[bogus,`bogus/${bogus}.csv`]))).code).toBe('23514');
-  const bad=sha(randomUUID());
-  expect((await fails(q(`insert into public.macro_evidence_objects(sha256,object_path,adapter,content_type,byte_length) values($1,$2,'bis_sdmx_csv','text/csv',1)`,[bad,`fred_csv/${bad}.csv`]))).message).toMatch(/macro_evidence_path/);
-  expect(await one(`select count(*)::int v from pg_constraint where conrelid='public.macro_evidence_objects'::regclass and contype='c' and conname<>'macro_evidence_path' and pg_get_constraintdef(oid) ~ '(^|[^a-z_])adapter([^a-z_]|$)'`)).toBe(1);
- });
- it('WP-D retires a methodology exactly once and blocks subsequent registration',async()=>{
-  const m=methodologyFixture();
-  await one(`select public.sync_methodology($1::jsonb,'script','test registration') v`,[JSON.stringify(m)]);
-  const call=(id=m.methodology_id,reason='superseded',actor='script')=>one(`select public.retire_methodology($1,$2,$3,$4) v`,[id,m.version,actor,reason]);
-  expect((await fails(call(m.methodology_id,''))).code).toBe('22023');
-  expect((await fails(call(m.methodology_id,'superseded','invalid'))).code).toBe('23514');
-  expect(await call()).toEqual({changed:true,seq:2});expect(await call()).toEqual({changed:false});
-  expect(await q(`select status,publishable,formula_hash,code_version,actor,reason,seq,event from public.judgment_methodology_events where methodology_id=$1 and version=$2 order by seq`,[m.methodology_id,m.version])).toEqual([
-   expect.objectContaining({seq:1,event:'registered'}),{status:'retired',publishable:m.publishable,formula_hash:m.formula_hash,code_version:m.code_version,actor:'script',reason:'superseded',seq:2,event:'status_changed'}]);
-  expect(await one(`select status v from public.judgment_methodologies where methodology_id=$1 and version=$2`,[m.methodology_id,m.version])).toBe('retired');
-  expect(await fails(call('missing'))).toMatchObject({code:'P0001',message:'methodology_unavailable'});
-  const f=judgmentFixture(m,await batch());
-  expect((await fails(one(`select public.register_judgment($1::jsonb,$2::jsonb) v`,[JSON.stringify(f.row),JSON.stringify(f.queue)]))).message).toMatch(/methodology_unavailable/);
-  const fn='public.retire_methodology(text,text,text,text)';
-  for(const role of ['anon','authenticated'])expect(await one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,fn])).toBe(false);
-  expect(await one(`select has_function_privilege('service_role',$1,'EXECUTE') v`,[fn])).toBe(true);
  });
 
  it('creates twelve RLS tables, the private macro-raw bucket, seeded publish state, select-only grants, service-only RPCs, and replays twice',async()=>{

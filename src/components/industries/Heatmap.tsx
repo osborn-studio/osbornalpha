@@ -8,7 +8,8 @@ import type {CSSProperties} from 'react';
 import Link from 'next/link';
 import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
-import type {AggMetric,Scheme} from '@/lib/industry/types';
+import type {AggMetric,Scheme} from '@/lib/industry/types-us';
+import {orderSicRows} from './row-model';
 import {CoverageCell} from './CoverageCell';
 import {cellText} from './cell-text';
 import type {Translate} from './cell-text';
@@ -17,6 +18,7 @@ import {brassBackground,heatmapModel,ALPHA_MAX,ALPHA_MIN} from './heatmap-model'
 import {industryPath,nodeName} from './hrefs';
 
 export function Heatmap({scheme,nodes,periodEnds,cells,metric,header,preview,tableHref}:{scheme:Scheme;nodes:NodeView[];periodEnds:string[];cells:PublicCell[];metric:AggMetric;header:RunHeader;preview:boolean;tableHref:string}){
+  nodes=scheme==='sic'?orderSicRows(nodes,cells):nodes;
   const t=useTranslations('industries');
   const locale=useLocale()==='en'?'en':'zh';
   const rows=heatmapModel(nodes,periodEnds,cells,metric,locale);
@@ -38,7 +40,7 @@ export function Heatmap({scheme,nodes,periodEnds,cells,metric,header,preview,tab
       <div className={grid} style={style}>
         <div className="pl-1 text-[10px] uppercase tracking-wide text-text-dim">{t('heatmap.industry')}</div>
         {periodEnds.map((pe,i)=>(
-          <div key={pe} className={`text-center font-mono text-[11px] tabular-nums text-text-dim ${i<cols-mcols?'hidden sm:block':''}`}>{pe.endsWith('-12-31')?pe.slice(0,4):pe.slice(0,7)}</div>
+          <div key={pe} title={scheme==='sic'?t('periods.fiscalTitle',{year:pe.slice(0,4)}):undefined} className={`text-center font-mono text-[11px] tabular-nums text-text-dim ${i<cols-mcols?'hidden sm:block':''}`}>{scheme==='sic'?`FY${pe.slice(0,4)}`:pe.endsWith('-12-31')?pe.slice(0,4):pe.slice(0,7)}</div>
         ))}
       </div>
       <div className="mt-1.5 flex flex-col gap-[3px]">

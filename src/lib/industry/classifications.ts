@@ -18,7 +18,7 @@ import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
 import {errorMessage,loaderOutcome,parkConflict,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
-import type {ClassificationRow,IndustryDeps} from './types';
+import type {ClassificationRow,IndustryDeps} from './types-us';
 import type {IndexClassifyRow,RowLocator,SnapshotCapture,TusharePage} from './providers/tushare-industry';
 import {defaultTushareCall,fetchIndexClassify,locatorOf} from './providers/tushare-industry';
 

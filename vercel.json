@@ -63,6 +63,10 @@
       "schedule": "0 6 3 * *"
     },
     {
+      "path": "/api/cron/macro-strategy-warm",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/documents-sync?source=hkexnews",
       "schedule": "0 16 * * *"
     },
@@ -85,6 +89,10 @@
     {
       "path": "/api/cron/judgments-calibrate",
       "schedule": "0 4 * * 1"
+    },
+    {
+      "path": "/api/cron/industry-sync?job=aggregate-sic",
+      "schedule": "30 4 * * 0"
     }
   ]
 }

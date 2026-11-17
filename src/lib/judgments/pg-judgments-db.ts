@@ -106,7 +106,6 @@ export function pgJudgmentsDb(pool:Pool):JudgmentsDb{
   },
   async insertCalibration(row,expectedRevision){return await first(svc(`select public.insert_calibration($1::jsonb,$2) v`,[JSON.stringify(row),expectedRevision])) as 'inserted'|'duplicate'|'stale_revision';},
   async syncMethodology(row,actor,reason){const r=await first(svc(`select public.sync_methodology($1::jsonb,$2,$3) v`,[JSON.stringify(row),actor,reason])) as {changed:boolean;seq:number};return {changed:r.changed===true,seq:Number(r.seq)};},
-  async retireMethodology(id,version,actor,reason){return await first(svc('select public.retire_methodology($1,$2,$3,$4) v',[id,version,actor,reason])) as {changed:boolean;seq?:number};},
   async listMethodologies(status){return (await pub(`select to_jsonb(t) v from public.judgment_methodologies t where ($1::text is null or t.status=$1) order by t.methodology_id, t.version`,[status??null])).map(x=>methodologyFromTable(x as Row));},
   async methodologyStateAt(id,version,cutoff){
    const r=await first(pub(`select to_jsonb(e) v from public.methodology_state_at($1,$2,$3::timestamptz) e`,[id,version,cutoff])) as Row|undefined;

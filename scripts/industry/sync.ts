@@ -11,9 +11,10 @@
  * For memberships-sw, --l1 limits source fetch only: apply loads all
  * SW2021 classifications and runs the global resolver, in separate batches, with no job deadline.
  * Its dry run plans sources from stored classifications; it does not preview the full apply scope.
- * Jobs: load-a-share | facts-scope | memberships-sw | memberships-sic | marks | aggregate, plus the
+ * Jobs: load-a-share | facts-scope | memberships-sw | memberships-sic | marks | aggregate | aggregate-sic, plus the
  * deferred official | valuation (I-3: printed as skipped deferred_i3, exit 0). --recompute-from belongs
- * to valuation only. Gates (src/lib/industry/jobs.ts::jobGate): Tushare jobs need TUSHARE_TOKEN even
+ * to valuation only. aggregate and aggregate-sic dry runs compute all cells/manifests without writes;
+ * aggregate-sic has no env gate. Gates (src/lib/industry/jobs.ts::jobGate): Tushare jobs need TUSHARE_TOKEN even
  * for a dry run; --apply of facts-scope needs FACTS_CN_INDUSTRY_UNIVERSE=1 and of aggregate needs
  * FACTS_CN_ENABLED=1 (spec §4.10 V4). --apply needs a code version (VERCEL_GIT_COMMIT_SHA or a git
  * checkout). The weekly aggregate runs here (Mac Studio launchd, spec §5.4), never concurrently with
@@ -31,7 +32,7 @@ async function main(){
  const args=parsed.args;
  if(DEFERRED_JOBS.has(args.job)){console.log(JSON.stringify({job:args.job,skipped:'deferred_i3',note:'verification items 1/2 open; see docs/runbooks/industry-research.md'},null,1));process.exit(0);}
  if(args.job==='memberships-sw'){
-  console.error(`memberships-sw operation plan: source L1=${args.l1Codes.length?args.l1Codes.join(','):'all stored L1'}; apply: classifications=all SW2021, resolver=global (including delisting reconciliation), separate stage batches; job deadline=none. --l1 is not a whole-job write bound. dry-run=source plan from stored classifications only (may fetch provider pages); does not execute or estimate the global resolver. This is not a coverage/readiness check.`);
+  console.error(`memberships-sw operation plan: source L1=${args.l1Codes.length?args.l1Codes.join(','):'all L1'}; apply: classifications=all SW2021, resolver=global (including delisting reconciliation), separate stage batches; job deadline=none. --l1 is not a whole-job write bound. dry-run=source plan with in-memory classification fetch when storage is empty (may fetch provider pages); does not execute or estimate the global resolver. This is not a coverage/readiness check.`);
  }
  const gate=jobGate(args.job,process.env,{apply:args.apply});
  if(gate){console.error(`${gate.code}: ${gate.message}`);process.exit(2);}

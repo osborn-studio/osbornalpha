@@ -1,4 +1,3 @@
-import {MACRO_METHOD} from './macro-method';
 // Server composition only: imported by macro write deps, never by snapshot/read-model core.
 // The publication is already committed. A failed hook leaves recovery to settlement compensation;
 // it must not move that scan's marker or look up a newer active snapshot.
@@ -14,7 +13,7 @@ export function productionMacroJudgmentHook(options:{codeVersion:string;triggere
  return async snapshot=>{
   // Gate again before allocating service dependencies, including direct hook callers.
   if(!macroJudgmentsEnabled())return;
-  const methodology=REGISTRY.find(m=>m.id===MACRO_METHOD.id&&m.version===MACRO_METHOD.version);
+  const methodology=REGISTRY.find(m=>m.id==='macro_regime'&&m.version==='v2');
   if(!methodology)throw new Error('macro_methodology_missing');
   const signal=AbortSignal.timeout(60_000);
   const deps=productionJudgmentDeps({...options,actor:options.triggeredBy,signal});

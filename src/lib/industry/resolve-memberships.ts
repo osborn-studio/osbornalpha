@@ -39,9 +39,9 @@ import {resolveIssuer} from '../entities/resolve';
 import type {SnapshotCapture} from './providers/tushare-industry';
 import {defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 import {errorMessage,loaderOutcome,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
-import type {DelistingRow,IndustryDeps,MembershipTarget,SourceMembershipRow} from './types';
+import type {DelistingRow,IndustryDeps,MembershipTarget,SourceMembershipRow} from './types-us';
 import {persistDelistings,scanDelistings} from './delistings';
-import {IndustryDbError} from './types';
+import {IndustryDbError} from './types-us';
 
 export const SW_MEMBERSHIPS_DATASET='industry.sw2021.memberships';
 export const SW_RESOLVE_PRODUCER='industry-sw-resolve';

@@ -20,7 +20,7 @@ import {judgmentDetailPayload} from '../detail-payload';
 import {withClaimLock} from '../db-contract';
 import {formulaHashOf} from '../formula-hash';
 import {pgJudgmentInputsDb} from '../testing/pg-inputs-db';
-import {macroRegimeV3} from '../methodologies/macro-regime.v3';
+import {macroRegimeV2} from '../methodologies/macro-regime.v2';
 import {pgJudgmentsDb} from '../pg-judgments-db';
 import {produce} from '../produce';
 import {methodologyRowOf} from '../registry';
@@ -98,10 +98,10 @@ describe.skipIf(!enabled)('macro ↔ F4 bridge on PG17',()=>{
    expect(receipt.regime).toBe('classified');
    const snapshot=(await api.snapshot(receipt.snapshot_id))!;expect(snapshot.observation_ids.length).toBeGreaterThan(0);
    const judgments=pgJudgmentsDb(pool),tables=pgTableClient(pool),inputsDb=pgJudgmentInputsDb(pool,{macro:api});
-   // The isolated registry alias shares v3's full definition and pinned formula hash; formulaHashOf includes id, so normalize only the alias when hashing.
+   // The isolated registry alias shares v2's full definition and pinned formula hash; formulaHashOf includes id, so normalize only the alias when hashing.
    // CI has no PostgREST server, and the SQL test ports exercise the same PG functions as production.
-   const method={...macroRegimeV3,id:`ztest_macro_${randomUUID().replaceAll('-','').slice(0,12)}`};
-   const hashes=formulaHashOf({...method,id:macroRegimeV3.id});expect(hashes.formula_hash).toBe('f5d2d6cb32e21cd024e8189a806507371b8e25dfdc1399007476fb44cc83732c');expect(method.gather).toBe(macroRegimeV3.gather);expect(method.compute).toBe(macroRegimeV3.compute);expect(method.condition).toBe(macroRegimeV3.condition);await judgments.syncMethodology(methodologyRowOf(method,hashes,{publishable:true,code_version:CODE}),'script','PG17 bridge test method');
+   const method={...macroRegimeV2,id:`ztest_macro_${randomUUID().replaceAll('-','').slice(0,12)}`};
+   const hashes=formulaHashOf({...method,id:macroRegimeV2.id});expect(hashes.formula_hash).toBe('dc26a628372facffa66bc51beb795f23ef755b0f51a82337b4bea17f0c2770ba');expect(method.gather).toBe(macroRegimeV2.gather);expect(method.compute).toBe(macroRegimeV2.compute);expect(method.condition).toBe(macroRegimeV2.condition);await judgments.syncMethodology(methodologyRowOf(method,hashes,{publishable:true,code_version:CODE}),'script','PG17 bridge test method');
    const {batchId}=await startBatch(tables,{producer:'ts-judgments',dataset:'judgments.produce.macro_regime'});
    const work=[{subject:{type:'macro_region' as const,key:'US'},asOf:snapshot.as_of,binding:{snapshot_id:snapshot.snapshot_id}}];
    const deps={db:judgments,inputsDb,tables,resolverOf:()=>macroRegimeReplayResolver,batchId,codeVersion:CODE};

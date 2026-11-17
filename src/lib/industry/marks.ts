@@ -36,8 +36,8 @@ import {canonicalDecimal} from '../facts/json-numbers';
 import {canonicalJson,sha256Hex} from './canonical-json';
 import {decCmp,decMul,isDecimal} from './decimal';
 import {assertDay} from './method';
-import {IndustryDbError} from './types';
-import type {IndustryDeps,MarkInput,ObservationResult} from './types';
+import {IndustryDbError} from './types-us';
+import type {IndustryDeps,MarkInput,ObservationResult} from './types-us';
 
 export const MARKS_DATASET='industry.marks';
 export const MARKS_SOURCE='tushare:daily_basic';

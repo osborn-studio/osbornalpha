@@ -20,7 +20,7 @@ import {canonicalJson,sha256Hex} from './canonical-json';
 import {decCmp,decMul} from './decimal';
 import {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE,METHOD_VERSION} from './method-constants';
 import {SW2021_CODE_ALIASES} from './sw2021';
-import type {AggDuration,AggMetric,ClassificationRow,MetricRunRow} from './types';
+import type {AggDuration,AggMetric,ClassificationRow,MetricRunRow} from './types-us';
 
 export {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE,METHOD_VERSION};
 export {FORMULA_VERSION};
@@ -61,7 +61,7 @@ export const METHOD_CONFIG={
 } as const;
 export const CONFIG_HASH=sha256Hex(canonicalJson(METHOD_CONFIG));
 
-export interface CellSpec{metric:AggMetric;duration:AggDuration;period_start:string;period_end:string;unit:'CNY'|'ratio'|'count'}
+export interface CellSpec{metric:AggMetric;duration:AggDuration;period_start:string;period_end:string;unit:'CNY'|'USD'|'ratio'|'count'}
 
 const DAY=/^\d{4}-\d{2}-\d{2}$/;
 export function assertDay(name:string,v:string):void{

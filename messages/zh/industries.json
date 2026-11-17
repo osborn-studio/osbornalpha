@@ -41,7 +41,8 @@
     "roe": "ROE（TTM）",
     "revenue_yoy": "营收同比",
     "net_income_yoy": "归母净利同比",
-    "member_count": "成分数"
+    "member_count": "成分数",
+    "net_margin": "净利率"
   },
   "durations": {
     "12M": "年度",
@@ -131,6 +132,10 @@
     "noMembers": {
       "title": "该日无已知成分",
       "body": "截至 {on} 没有按今天已知证据有效的成分。"
+    },
+    "snapshotConstituents": {
+      "title": "快照成分重建",
+      "body": "按 {date} 的当前 SIC 成分重建：汇总这些公司已披露的财年数据，不是历史成分。"
     }
   },
   "missing": {
@@ -150,7 +155,9 @@
     "read_truncated": "读取截断",
     "version_inconsistent": "版本不一致",
     "not_in_comparable_set": "不在可比集合",
-    "financial_excluded": "金融业排除"
+    "financial_excluded": "金融业排除",
+    "ambiguous_period": "财年期间不唯一",
+    "period_mismatch": "期间不一致"
   },
   "coverage": {
     "unresolved": "{n} 未解析",
@@ -159,7 +166,9 @@
     "legendHigh": "高",
     "legendInsufficient": "覆盖不足（低于 0.8）",
     "legendUnresolved": "未解析超过 5%",
-    "legendMissing": "缺失（悬停看原因）"
+    "legendMissing": "缺失（悬停看原因）",
+    "tooFewMembers": "成分不足 {n}<5",
+    "lowCoverage": "覆盖不足 {n}/{d}"
   },
   "heatmap": {
     "label": "热力图",
@@ -380,6 +389,10 @@
     "pe_ttm": "Σ 市值 / Σ ttm_net_income_parent",
     "pe_static": "Σ 市值 / Σ net_income_parent（12M）",
     "pb": "Σ 市值 / Σ equity_parent",
-    "market_cap": "Σ close × total_share"
+    "market_cap": "Σ close × total_share",
+    "net_margin": "Σ 归母净利 / Σ 营收"
+  },
+  "periods": {
+    "fiscalTitle": "财年结束于 {year} 年"
   }
 }

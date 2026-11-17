@@ -4,7 +4,7 @@ import {classifyDiffs,DEVIATION_CAP,deviationCase,HISTORY_PAGE,listDeviationCase
 import {F4Unavailable,type F4CardLite,type F4Client,type F4JudgmentDetail} from './f4-client';
 
 const o=(series_id:string,period_end:string,vintage_id:string,value=1):FrozenObs=>({series_id,period_end,vintage_id,value});
-const card=(id:string,as_of:string,over:Partial<F4CardLite>={}):F4CardLite=>({judgment_id:id,lifecycle:'settled',calibration:'insufficient',as_of,methodology:{id:'macro_regime',version:'v3'},selected:'overheat',...over});
+const card=(id:string,as_of:string,over:Partial<F4CardLite>={}):F4CardLite=>({judgment_id:id,lifecycle:'settled',calibration:'insufficient',as_of,methodology:{id:'macro_regime',version:'v2'},selected:'overheat',...over});
 const obsInput=(x:FrozenObs)=>({kind:'macro_observation',ref:{series_id:x.series_id,period_end:x.period_end,vintage_id:x.vintage_id},snapshot:{...x,unit:'pct',available_at:'2026-10-01T00:00:00Z'}});
 function detail(id:string,reg:FrozenObs[],settled:FrozenObs[]|null,over:Partial<F4JudgmentDetail['settlements'][number]>={}):F4JudgmentDetail{
  return {judgment_id:id,as_of:'2026-10-15',selected:'overheat',inputs:[{kind:'macro_snapshot',ref:{snapshot_id:'s'},snapshot:{snapshot_id:'s'}},...reg.map(obsInput)],
@@ -15,9 +15,9 @@ function detail(id:string,reg:FrozenObs[],settled:FrozenObs[]|null,over:Partial<
 describe('classifyDiffs (spec §6.4 N13, exhaustive)',()=>{
  it('revised / unchanged / dropped / newly_available(later_period | backfill | new_series) with roles',()=>{
   const reg=[o('A','2026-08-31','v1'),o('A','2026-09-30','v1'),o('B','2026-09-30','v1'),o('C','2026-09-30','v1',2)];
-  const set=[o('A','2026-08-31','v3'),o('A','2026-09-30','v1'),o('A','2026-10-31','v1'),o('C','2026-06-30','v1'),o('D','2026-09-30','v1',5)];
+  const set=[o('A','2026-08-31','v2'),o('A','2026-09-30','v1'),o('A','2026-10-31','v1'),o('C','2026-06-30','v1'),o('D','2026-09-30','v1',5)];
   expect(classifyDiffs(reg,set)).toEqual([
-   {series_id:'A',period_end:'2026-08-31',role:'comparison',kind:'revised',subkind:null,registered:{vintage_id:'v1',value:1},settled:{vintage_id:'v3',value:1}},
+   {series_id:'A',period_end:'2026-08-31',role:'comparison',kind:'revised',subkind:null,registered:{vintage_id:'v1',value:1},settled:{vintage_id:'v2',value:1}},
    {series_id:'A',period_end:'2026-09-30',role:'latest',kind:'unchanged',subkind:null,registered:{vintage_id:'v1',value:1},settled:{vintage_id:'v1',value:1}},
    {series_id:'A',period_end:'2026-10-31',role:'latest',kind:'newly_available',subkind:'later_period',registered:null,settled:{vintage_id:'v1',value:1}},
    {series_id:'B',period_end:'2026-09-30',role:'latest',kind:'dropped',subkind:null,registered:{vintage_id:'v1',value:1},settled:null},
@@ -30,9 +30,9 @@ describe('classifyDiffs (spec §6.4 N13, exhaustive)',()=>{
 
 describe('deviationCase',()=>{
  it('builds a complete case from the latest settlement (a miss) with its settlement id and realized class',()=>{
-  const c=deviationCase('US',card('j1','2026-10-15'),detail('j1',[o('A','2026-09-30','v1')],[o('A','2026-09-30','v3')]));
+  const c=deviationCase('US',card('j1','2026-10-15'),detail('j1',[o('A','2026-09-30','v1')],[o('A','2026-09-30','v2')]));
   expect(c).toEqual({judgment_id:'j1',settlement_id:'set-2',region:'US',as_of:'2026-10-15',selected:'overheat',realized:'recession',evidence_state:'complete',
-   diffs:[{series_id:'A',period_end:'2026-09-30',role:'latest',kind:'revised',subkind:null,registered:{vintage_id:'v1',value:1},settled:{vintage_id:'v3',value:1}}]});
+   diffs:[{series_id:'A',period_end:'2026-09-30',role:'latest',kind:'revised',subkind:null,registered:{vintage_id:'v1',value:1},settled:{vintage_id:'v2',value:1}}]});
  });
  it('evidence without observation_refs → evidence_incomplete, no recomputation',()=>{
   expect(deviationCase('US',card('j1','2026-10-15'),detail('j1',[o('A','2026-09-30','v1')],null))).toMatchObject({evidence_state:'evidence_incomplete',diffs:[]});
@@ -46,7 +46,7 @@ describe('deviationCase',()=>{
   const d=detail('j1',[],[]);
   expect(deviationCase('US',card('j1','x'),{...d,settlements:[{...d.settlements[1],outcome:'hit'}]})).toBeNull();
   expect(deviationCase('US',card('j1','x',{methodology:{id:'macro_regime',version:'v1'}}),d)).toBeNull();
-  expect(deviationCase('US',card('j1','x',{methodology:{id:'other',version:'v3'}}),d)).toBeNull();
+  expect(deviationCase('US',card('j1','x',{methodology:{id:'other',version:'v2'}}),d)).toBeNull();
   expect(deviationCase('US',card('j1','x',{lifecycle:'open'}),d)).toBeNull();
  });
  it('realized may be an object with selected / primary_state; numeric strings in values are accepted',()=>{

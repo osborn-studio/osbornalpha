@@ -4,7 +4,7 @@ import {deriveMetrics} from '../facts/derive';
 import type {Duration,FactRow} from '../facts/types';
 import {computeAggregateCell} from './aggregate';
 import type {AggregateCellInput,IssuerFacts} from './aggregate';
-import type {ManifestCell} from './types';
+import type {ManifestCell} from './types-us';
 
 const A='00000000-0000-4000-8000-00000000000a',B='00000000-0000-4000-8000-00000000000b',C='00000000-0000-4000-8000-00000000000c';
 let n=0;

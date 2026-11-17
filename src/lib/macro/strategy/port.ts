@@ -10,6 +10,9 @@ import type {EventInput,MacroSeriesDef,ObservationRow,PolicyEvent,Region,RulesVi
 import {macroRouteDeps} from '../route-helpers';
 import type {StrategyFixture} from './testing/fixture';
 import {macroDbStrategyPort} from './wiring';
+import {getAnonSupabase} from '@/lib/supabase/anon';
+import type {SupabaseClient} from '@supabase/supabase-js';
+import {strategyHistoriesReader} from './history-rpc';
 
 export interface StrategyReadPort{
  activeSnapshot(region:Region):Promise<SnapshotRecord|null>;
@@ -35,7 +38,7 @@ export interface StrategyReadPort{
  *  Null when the Supabase environment is missing, so the capability matrix answers 503 macro_foundation_unavailable (spec §9.1)
  *  instead of a 500. Callers invoke it after the session gate (middleware does not cover /api/*), or behind CRON_SECRET. */
 export function strategyPort():StrategyReadPort|null{
- try{return macroDbStrategyPort(macroRouteDeps().db);}
+ try{return macroDbStrategyPort(macroRouteDeps().db,{historiesReader:strategyHistoriesReader(getAnonSupabase() as unknown as SupabaseClient)});}
  catch{return null;}
 }
 
