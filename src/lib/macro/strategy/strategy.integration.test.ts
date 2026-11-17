@@ -14,14 +14,17 @@
 // every case uses its own month or random user / request ids.
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
+import {gzipSync,gunzipSync} from 'node:zlib';
+import {buildCycleTable} from './cycle-table';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
-import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {ident} from '../../db/pg-table-client';
 import {strategyDbOver} from './db';
 import type {ReadRole,SelectSpec,StrategyTransport} from './db';
 import {strategyDbContract,testManifest} from './db-contract';
 import {canonicalJson,sha256Hex} from './hash';
+import * as manifestHash from './hash';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261115090000_macro_strategy.sql';
@@ -223,7 +226,7 @@ describe.skipIf(!enabled)('macro strategy migration on real PostgreSQL',()=>{
   expect(sha256Hex(canonicalJson(rows[0].body))).toBe(hash);
   expect(await fails(rawPut({...args,p_manifest_hash:newHash(),p_kind:'review'}))).toMatchObject({code:'23514'});
   expect(await fails(rawPut({...args,p_manifest_hash:'ABC'}))).toMatchObject({code:'23514'});
-  expect(await fails(rawPut({...args,p_body:null}))).toMatchObject({code:'23502'});
+  expect(await fails(rawPut({...args,p_body:null}))).toMatchObject({code:'23514'});
   await replayMigration(admin,readFileSync('supabase/migrations/20261121090000_macro_manifest_json_transport.sql','utf8'));
   expect(await rawPut(args)).toBe(first);
  },30000);
@@ -518,6 +521,7 @@ function pgTransport(pool:Pool,sessionUser:()=>string|null):StrategyTransport{
  };
  return {
   rpc:(fn,args)=>inRole('admin',async c=>{
+   if(fn==='macro_put_manifest_gz')return (await c.query('select public.macro_put_manifest_gz($1::jsonb) v',[JSON.stringify(args)])).rows[0].v as unknown;
    const keys=Object.keys(args);
    const values=keys.map(k=>JSONB_ARGS.has(k)&&args[k]!==null&&args[k]!==undefined?JSON.stringify(args[k]):args[k]??null);
    return (await c.query(`select public.${ident(fn)}(${keys.map((k,i)=>`${ident(k)} => $${i+1}`).join(', ')}) as v`,values)).rows[0].v as unknown;
@@ -547,7 +551,7 @@ describe.skipIf(!enabled)('StrategyDb on real PostgreSQL',()=>{
 });
 
 // Incident regression: production timed out on one 22,451-input manifest. These synthetic inputs
-// exercise the full JSONB path without committing production evidence or claiming production parity.
+// exercise the full gzip path without committing production evidence or claiming production parity.
 describe.skipIf(!enabled)('large manifest persistence on real PostgreSQL',()=>{
  let pool:Pool;
  beforeAll(()=>{
@@ -557,35 +561,77 @@ describe.skipIf(!enabled)('large manifest persistence on real PostgreSQL',()=>{
  afterAll(async()=>{await pool?.end();});
  it('round-trips every input, replays concurrently and detects a conflict in the last input',async()=>{
   const body=testManifest('cycle_table');
+  body.params={...body.params,boundary:'event_day',columns:'[]'};
   body.inputs=Array.from({length:22451},(_,i)=>({series_id:'US_DGS10_D',role:'col:US_DGS10_D:history',
    observation_id:randomUUID(),period_end:'2026-11-01',value_text:`${i}.00000000001`,version:1,
    available_at:body.cutoff,source:{kind:'history' as const,as_of:body.cutoff}}));
   const canonical=canonicalJson(body),hash=sha256Hex(canonical);
   expect(Buffer.byteLength(canonical)).toBeGreaterThan(6_000_000);
   const direct=pgTransport(pool,()=>null);
-  // PostgREST 14.5's typed lateral JSON record boundary, rather than seven independently
-  // bound pg arguments. The real HTTP gateway is a separate incident benchmark.
-  const db=strategyDbOver({...direct,rpc:async(fn,args)=>{
-   expect(fn).toBe('macro_put_manifest');
-   const c=await pool.connect();
-   try{
-    await c.query('begin; set local role service_role');
-    const result=await c.query(`select public.macro_put_manifest(p_kind,p_body,p_manifest_hash,p_cutoff,
-     p_method_version,p_code_version,p_catalog_version) v from (select $1::json json_data) payload,
-     lateral (select * from json_to_record(payload.json_data) as _(p_kind text,p_body jsonb,
-      p_manifest_hash text,p_cutoff timestamptz,p_method_version text,p_code_version text,p_catalog_version text) limit 1) typed`,[JSON.stringify(args)]);
-    await c.query('commit');return result.rows[0].v;
-   }catch(e){await c.query('rollback');throw e;}finally{c.release();}
-  }});
+  const db=strategyDbOver(direct);
   const [first,second]=await Promise.all([db.putManifest(body),db.putManifest(body)]);
   expect(first).toEqual(second);expect(first.manifest_hash).toBe(hash);
   const read=await db.manifest(first.manifest_id);
   expect(read?.body.inputs).toHaveLength(22451);
   expect(canonicalJson(read!.body)).toBe(canonical);expect(sha256Hex(canonicalJson(read!.body))).toBe(hash);
   const changed=structuredClone(body);changed.inputs.at(-1)!.value_text='999999999.00000000001';
-  await expect(direct.rpc('macro_put_manifest',{p_kind:body.kind,p_body:changed,p_manifest_hash:hash,p_cutoff:body.cutoff,
-   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version})).rejects.toMatchObject({message:'payload_conflict'});
+  const blobArgs={p_kind:body.kind,p_body_gz:gzipSync(Buffer.from(canonical),{level:6}).toString('base64'),p_body_bytes:Buffer.byteLength(canonical),p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version};
+  const stored=(await pool.query('select * from public.macro_strategy_manifests where manifest_hash=$1',[hash])).rows[0];
+  expect(stored.body).toBeNull();expect(Buffer.isBuffer(stored.body_gz)).toBe(true);
+  expect((await db.manifest(first.manifest_id))!.body).toEqual(body);
+  expect(await direct.rpc('macro_put_manifest_gz',blobArgs)).toEqual({manifest_id:first.manifest_id,outcome:'replayed'});
+  for(const [key,value] of Object.entries({p_kind:'review',p_cutoff:'2026-11-04T00:00:00Z',p_method_version:'different',p_code_version:'different',p_catalog_version:'different',p_body_bytes:blobArgs.p_body_bytes+1})){
+   expect(await direct.rpc('macro_put_manifest_gz',{...blobArgs,[key]:value})).toEqual({manifest_id:first.manifest_id,outcome:'compare'});
+  }
+  expect(gunzipSync(stored.body_gz).toString()).toBe(canonical);expect(stored.body_bytes).toBe(Buffer.byteLength(canonical));
+  // Simulate a caller supplying changed evidence under the original hash. Only the hash is mocked; SQL and readback are real.
+  const forcedHash=vi.spyOn(manifestHash,'sha256Hex').mockReturnValue(hash);
+  try{await expect(db.putManifest(changed)).rejects.toMatchObject({code:'payload_conflict'});}
+  finally{forcedHash.mockRestore();}
+  expect((await pool.query('select * from public.macro_strategy_manifests where manifest_hash=$1',[hash])).rows).toEqual([stored]);
+  // Different valid gzip headers require canonical comparison, not byte equality.
+  const differentGz=Buffer.from(stored.body_gz);differentGz[9]=differentGz[9]===3?255:3;
+  expect(await direct.rpc('macro_put_manifest_gz',{...blobArgs,p_body_gz:differentGz.toString('base64')})).toEqual({manifest_id:first.manifest_id,outcome:'compare'});
+  expect((await strategyDbOver({...direct,rpc:(fn,args)=>direct.rpc(fn,{...args,p_body_gz:differentGz.toString('base64')})}).putManifest(body)).manifest_id).toBe(first.manifest_id);
+  expect(buildCycleTable(read!)).toEqual(buildCycleTable({...first,body:JSON.parse(canonical)}));
+  expect(JSON.stringify(buildCycleTable(read!))).toBe(JSON.stringify(buildCycleTable({...first,body:JSON.parse(canonical)})));
   expect(canonicalJson((await db.manifest(first.manifest_id))!.body)).toBe(canonical);
   expect((await pool.query('select count(*)::int n from public.macro_strategy_manifests where manifest_hash=$1',[hash])).rows[0].n).toBe(1);
  },30000);
+ it('gzip RPC validates keys, encoding constraints, grants, legacy compare and migration replay',async()=>{
+  const direct=pgTransport(pool,()=>null),body=testManifest('cycle_table',{salt:'legacy'.repeat(200000)});
+  body.params={...body.params,boundary:'event_day',columns:'[]'};
+  const canonical=canonicalJson(body),hash=sha256Hex(canonical);
+  const args={p_kind:body.kind,p_body_gz:gzipSync(Buffer.from(canonical),{level:6}).toString('base64'),p_body_bytes:Buffer.byteLength(canonical),p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version};
+  for(const key of Object.keys(args)){
+   const missing:Record<string,unknown>={...args};delete missing[key];
+   await expect(direct.rpc('macro_put_manifest_gz',missing)).rejects.toMatchObject({message:'invalid_argument'});
+  }
+  await expect(direct.rpc('macro_put_manifest_gz',{...args,extra:null})).rejects.toMatchObject({message:'invalid_argument'});
+  for(const role of ['anon','authenticated']){
+   expect((await pool.query("select has_function_privilege($1,'public.macro_put_manifest_gz(jsonb)','EXECUTE') v",[role])).rows[0].v).toBe(false);
+   const c=await pool.connect();
+   try{
+    await c.query(`begin; set local role ${role}`);
+    await expect(c.query('select public.macro_put_manifest_gz($1::jsonb)',[JSON.stringify(args)])).rejects.toMatchObject({code:'42501'});
+   }finally{await c.query('rollback');c.release();}
+  }
+  expect((await pool.query("select proargnames is null v from pg_proc where oid='public.macro_put_manifest_gz(jsonb)'::regprocedure")).rows[0].v).toBe(true);
+  const legacy=await direct.rpc('macro_put_manifest',{p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version});
+  expect(await direct.rpc('macro_put_manifest_gz',args)).toEqual({manifest_id:legacy,outcome:'compare'});
+  const db=strategyDbOver(direct),read=await db.manifest(String(legacy));
+  const stored=await db.putManifest(body);expect(stored.manifest_id).toBe(legacy);expect(stored.manifest_hash).toBe(hash);
+  expect(JSON.stringify(buildCycleTable(stored))).toBe(JSON.stringify(buildCycleTable(read!)));
+  for(const [json,gz,bytes] of [[body,Buffer.from(args.p_body_gz,'base64'),args.p_body_bytes],[null,null,null],[null,Buffer.alloc(20),20],[null,Buffer.from(args.p_body_gz,'base64'),null],[null,Buffer.from(args.p_body_gz,'base64'),134217729]]){
+   await expect(pool.query(`insert into public.macro_strategy_manifests(kind,body,body_gz,body_bytes,manifest_hash,cutoff,method_version,code_version,catalog_version)
+    values('cycle_table',$1,$2,$3,$4,now(),'m','c','k')`,[json,gz,bytes,randomUUID().replaceAll('-','').padEnd(64,'0')])).rejects.toMatchObject({code:'23514'});
+  }
+  const source=(await pool.query("select prosrc from pg_proc where oid='public.macro_put_manifest(text,jsonb,text,timestamptz,text,text,text)'::regprocedure")).rows;
+  await pool.query(readFileSync('supabase/migrations/20261126090000_macro_manifest_blob.sql','utf8'));
+  expect((await pool.query("select prosrc from pg_proc where oid='public.macro_put_manifest(text,jsonb,text,timestamptz,text,text,text)'::regprocedure")).rows).toEqual(source);
+  expect((await db.manifest(String(legacy)))!.body).toEqual(body);
+ },30000);
+
 });
