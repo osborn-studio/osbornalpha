@@ -10,6 +10,7 @@ import type {CSSProperties,ReactNode} from 'react';
 import {useLocale,useTranslations} from 'next-intl';
 import {formatMetricValue,formatMoney,formatValuation} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
+import {StateNotice} from './StateNotice';
 import {HistoryClassBadge} from './HistoryClassBadge';
 import {nodeName} from './hrefs';
 import {coverageOf,diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,presentModal,replayUrl,roleSummary,short,valuationReplayUrl} from './drawer-model';
@@ -108,7 +109,7 @@ function Heading({payload}:{payload:DrawerPayload}){
   const t=useTranslations('industries');
   const locale:Locale=useLocale()==='en'?'en':'zh';
   let title='',big='';
-  if(payload.kind==='aggregate'){title=`${payload.nodeName} · ${t(`metrics.${payload.cell.metric}`)} · ${payload.cell.periodEnd}`;big=payload.cell.value!==null?formatMetricValue(payload.cell.metric,payload.cell.value,locale):'—';}
+  if(payload.kind==='aggregate'){title=`${payload.nodeName} · ${t(`metrics.${payload.cell.metric}`)} · ${payload.cell.periodEnd}`;big=payload.cell.value!==null?formatMetricValue(payload.cell.metric,payload.cell.value,locale,payload.cell.unit):'—';}
   if(payload.kind==='valuation'){title=`${payload.nodeName} · ${payload.cell.metric==='pe_ttm'?t('valuation.pe'):payload.cell.metric==='pb'?t('valuation.pb'):payload.cell.metric} · ${payload.cell.tradeDate}`;big=formatValuation(payload.cell.metric,payload.cell.value,locale);}
   if(payload.kind==='fact'){title=`${payload.issuerName} · ${payload.fact.concept} · ${payload.fact.periodEnd}`;big=formatMoney(payload.fact.value,payload.fact.unit,locale);}
   if(payload.kind==='membership'){title=`${payload.ticker??''} ${payload.issuerName} ∈ ${payload.nodeName}`;big='';}
@@ -132,6 +133,7 @@ function AggregateBody({p}:{p:AggregatePayload}){
   const inputs=replay.data?inputRows(replay.data.manifest,5):null;
   return (
     <>
+      {p.header.membershipOn&&<StateNotice kind="snapshotConstituents" values={{date:p.header.membershipOn}} />}
       <Section title={`1 · ${t('drawer.sections.value')}`}>
         <dl className={dl}>
           <Row label={t('drawer.formula')}>{t(`formulas.${c.metric}`)}</Row>
@@ -181,7 +183,7 @@ function AggregateBody({p}:{p:AggregatePayload}){
               </tbody>
             </table>
           )}
-          {!p.preview&&(
+          {replayUrl(p,'recompute')&&(
             <div className="mt-2">
               <button type="button" onClick={()=>setRecomputeOn(true)} disabled={recomputeOn} className="rounded-md border border-border px-3 py-1.5 text-xs text-text-dim hover:border-[var(--border-active)] hover:text-text disabled:opacity-60">{t('drawer.recompute')}</button>
               {recompute.status==='error'&&<p role="alert" className="mt-1 text-xs text-danger">{t('drawer.replayFailed',{code:recompute.code??''})}</p>}

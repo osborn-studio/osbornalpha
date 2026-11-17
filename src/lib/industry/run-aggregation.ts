@@ -25,6 +25,7 @@
 //     dependencies_incomplete → failRun with that code;
 //  6. any other error after the run exists → failRun(<code>) (rows stay, invisible);
 //  7. recordAttempt(industry.agg.<scheme>, weekly) and finishBatch.
+// dryRun bypasses reuse, computes/self-checks all groups, and skips every mutation (including batches).
 // Reuse conditions (all): previous active run has the same facts_as_of, knowledge_date,
 // history_class, method_version, config_hash, formula_version; its rows of the group carry exactly one
 // manifest hash and no manifest_mismatch; the manifest's members and unresolved records equal the
@@ -40,6 +41,8 @@ import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {FORMULA_VERSION,deriveMetrics} from '../facts/derive';
 import type {FactsDb,FilingRow,ScopeRow} from '../facts/types';
+import {memberOf,rowOf,aggregationPreview} from './aggregation-common';
+import type {AggregationPreview} from './aggregation-common';
 import {computeAggregateCell} from './aggregate';
 import type {IssuerFacts} from './aggregate';
 import {canonicalJson} from './canonical-json';
@@ -49,20 +52,22 @@ import {membersAtPure} from './memberships';
 import {AGG_CONCEPTS,CONFIG_HASH,DEFAULT_HISTORY_START,METHOD_VERSION,READINESS_MIN_PERCENT,assertDay,cellKey,expectedGrid,isFinancialNode} from './method';
 import {replayFromManifest} from './replay';
 import type {ReplayResult} from './replay';
-import {IndustryDbError} from './types';
-import type {AggregateManifest,HistoryClass,IndustryDb,IndustryDeps,ManifestMember,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,RunDependency,Scheme,SchemeVersion,SourceMembershipRow,StagedMetricCell} from './types';
+import {IndustryDbError} from './types-us';
+import type {AggregateManifest,HistoryClass,IndustryDb,IndustryDeps,ManifestMember,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,RunDependency,Scheme,SchemeVersion,SourceMembershipRow,StagedMetricCell} from './types-us';
 
 export interface AggregationOptions{
  scheme:Extract<Scheme,'sw2021'>;version:Extract<SchemeVersion,'2021'>;level:number;factsAsOf:string;
- historyStart?:string;
+ historyStart?:string;dryRun?:boolean;
  /** Codes whose groups are always recomputed; every other group is reused when possible, else recomputed. The published grid is always every code at `level` (a filtered run never shrinks the active dataset). */
  codes?:string[];
  triggeredBy?:TriggeredBy;
 }
+export type AggregationTimings=Record<'members'|'envelopes'|'filings'|'compute'|'manifests'|'stage'|'activate'|'total',number>;
 export interface AggregationReceipt{
- status:'active'|'failed'|'rejected';code?:string;
+ timings?:AggregationTimings;
+ status:'active'|'failed'|'rejected'|'dry_run';code?:string;
  batchId:string|null;batchStatus:BatchStatus|null;runId:string|null;generation:number|null;activatedAt:string|null;
- historyClass:HistoryClass|null;groups:number;reusedGroups:number;cells:{ok:number;missing:number};manifestMismatches:number;truncatedIssuers:string[];
+ preview?:AggregationPreview;historyClass:HistoryClass|null;groups:number;reusedGroups:number;cells:{ok:number;missing:number};manifestMismatches:number;truncatedIssuers:string[];
 }
 /** Test seam: replaces the manifest self-check (default replayFromManifest). */
 export interface AggregationHooks{replay?:(m:AggregateManifest)=>ReplayResult}
@@ -78,11 +83,6 @@ const errMsg=(e:unknown)=>(e instanceof Error?e.message:String(e)).slice(0,300);
 interface Group{code:string;period_end:string;key:string;members:ManifestMember[];memberRows:MembershipRow[];unresolved:ManifestUnresolved[];financial:boolean}
 interface Reuse{hash:string;manifest:AggregateManifest}
 
-function memberOf(row:MembershipRow,src:SourceMembershipRow|undefined):ManifestMember{
- const p=row.provenance;
- return {issuer_id:row.issuer_id,ticker:src?.ts_code??null,valid_from:row.valid_from,valid_to:row.valid_to,available_date:row.available_date,valid_to_available_date:row.valid_to_available_date,
-  source_membership_id:row.source_membership_id,raw_hash:typeof p.raw_hash==='string'?p.raw_hash:null,locator:p.locator&&typeof p.locator==='object'?structuredClone(p.locator as Record<string,unknown>):null,resolution_method:src?.resolution.method??null};
-}
 const sortMembers=(xs:ManifestMember[])=>[...xs].sort((a,b)=>cmp(a.issuer_id,b.issuer_id)||cmp(a.valid_from,b.valid_from));
 const sortUnresolved=(xs:ManifestUnresolved[])=>[...xs].sort((a,b)=>cmp(a.ts_code,b.ts_code)||cmp(a.in_date,b.in_date)||cmp(a.source_membership_id,b.source_membership_id));
 
@@ -153,9 +153,7 @@ function reusable(prev:MetricRunRow,header:{facts_as_of:string;history_class:His
  if(hashes.size!==1)return null;
  const [h]=[...hashes];return h??null;
 }
-const rowOf=(code:string,periodEnd:string,c:AggregateManifest['cells'][number],hash:string|null):StagedMetricCell=>({
- code,metric:c.metric,period_start:c.period_start,period_end:periodEnd,duration:c.duration,status:c.status,missing_reason:c.status==='missing'?c.missing_reason??null:null,
- value:c.status==='ok'?c.value_text??null:null,unit:c.unit,n_members:c.n_members,n_with_data:c.n_with_data,n_unresolved:c.n_unresolved,manifest_hash:c.status==='ok'?hash:null});
+
 
 /** `factsUniverse` replaces the readiness denominator (default: the database-global computation of `factsUniverse()`); tests that share a database with other suites inject their own issuers. */
 export type AggregationDeps=IndustryDeps&{factsUniverse?:()=>Promise<Set<string>>};
@@ -167,7 +165,7 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
  if(!deps.codeVersion)return {...receipt,code:'code_version_missing'};
  const {tables,db,facts,manifests}=deps;const codeVersion=deps.codeVersion;
  const dataset=`industry.agg.${opts.scheme}`;
- const {batchId}=await startBatch(tables,{producer:'industry-agg',dataset,toolVersions:{method:METHOD_VERSION,config:CONFIG_HASH,formula:FORMULA_VERSION},codeVersion,triggeredBy:opts.triggeredBy??'script'});
+ const {batchId}=opts.dryRun?{batchId:null}:await startBatch(tables,{producer:'industry-agg',dataset,toolVersions:{method:METHOD_VERSION,config:CONFIG_HASH,formula:FORMULA_VERSION},codeVersion,triggeredBy:opts.triggeredBy??'script'});
  receipt.batchId=batchId;
  const errors:BatchError[]=[];let counts:BatchCounts=emptyCounts();
  let runId:string|null=null;let ok=false;
@@ -199,7 +197,7 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
   const scopeOf=new Map<string,ScopeRow>(scope.map(s=>[s.issuer_id,s]));
   const revOf=(id:string)=>scopeOf.get(id)?.state_rev??0;
   const reuse=new Map<string,Reuse>();
-  if(prev){
+  if(prev&&!opts.dryRun){
    const prevRows=new Map<string,MetricCellRow[]>();
    for(const r of await db.metricRowsOfRun(prev.run_id,{codes:grid.codes,periodEnds:grid.period_ends})){const k=cellKey(r.code,r.period_end);const l=prevRows.get(k);if(l)l.push(r);else prevRows.set(k,[r]);}
    const loaded=new Map<string,AggregateManifest|null>();
@@ -217,16 +215,16 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
    }
   }
   receipt.reusedGroups=reuse.size;
-  const run=await db.createMetricRun({scheme:opts.scheme,version:opts.version,level:opts.level,facts_as_of:opts.factsAsOf,knowledge_date:opts.factsAsOf,history_class:historyClass,
+  const run=opts.dryRun?{runId:'dry-run',generation:0}:await db.createMetricRun({scheme:opts.scheme,version:opts.version,level:opts.level,facts_as_of:opts.factsAsOf,knowledge_date:opts.factsAsOf,history_class:historyClass,
    method_version:METHOD_VERSION,config_hash:CONFIG_HASH,formula_version:FORMULA_VERSION,code_version:codeVersion,expected_grid:grid,fingerprint_at:fingerprintAt,
-   reused_from_run:reuse.size>0&&prev?prev.run_id:null,batch_id:batchId});
-  runId=run.runId;receipt.runId=run.runId;receipt.generation=run.generation;
+   reused_from_run:reuse.size>0&&prev?prev.run_id:null,batch_id:batchId!});
+  if(!opts.dryRun){runId=run.runId;receipt.runId=run.runId;receipt.generation=run.generation;}
   // ---- 3. readiness gate ----
   const universe=deps.factsUniverse?[...await deps.factsUniverse()].sort(cmp):await factsUniverse(tables,db,deps.now().toISOString().slice(0,10),allMembers.map(r=>r.issuer_id));
   const readyN=universe.filter(id=>scopeOf.get(id)?.last_success_at!=null).length;
   const ready=universe.length>0&&readyN*100>=READINESS_MIN_PERCENT*universe.length;
   if(!ready){
-   await db.setMetricRunCoverage(run.runId,{facts_scope_ready:false,universe:universe.length,ready:readyN,min_percent:READINESS_MIN_PERCENT});
+   if(!opts.dryRun)await db.setMetricRunCoverage(run.runId,{facts_scope_ready:false,universe:universe.length,ready:readyN,min_percent:READINESS_MIN_PERCENT});
    throw new AggregationError('facts_scope_not_ready',`${readyN}/${universe.length}`);
   }
   // ---- 4. cells ----
@@ -275,14 +273,14 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
     }
     let hash:string|null=null;
     if(manifest.cells.some(c=>c.status==='ok'&&!bad.has(`${c.metric}:${c.duration}:${c.period_start}`))){
-     try{hash=(await manifests.put('aggregate',encodeManifest(manifest).canonical)).hash;}
+     try{const encoded=encodeManifest(manifest);hash=opts.dryRun?encoded.hash:(await manifests.put('aggregate',encoded.canonical)).hash;}
      catch(e){throw new AggregationError('manifest_upload_failed',errMsg(e));}
     }
     for(const c of manifest.cells){
      const id=`${c.metric}:${c.duration}:${c.period_start}`;
      if(bad.has(id)){
       staged.push({...rowOf(g.code,g.period_end,c,null),status:'missing',missing_reason:'manifest_mismatch',value:null,manifest_hash:null});
-      await quarantine(tables,{dataset,table:'industry_metrics',naturalKey:`${run.runId}:${g.code}:${g.period_end}:${id}`,reasonCode:'manifest_mismatch',detail:{run_id:run.runId,code:g.code,period_end:g.period_end,cell:id},batchId});
+      if(!opts.dryRun)await quarantine(tables,{dataset,table:'industry_metrics',naturalKey:`${run.runId}:${g.code}:${g.period_end}:${id}`,reasonCode:'manifest_mismatch',detail:{run_id:run.runId,code:g.code,period_end:g.period_end,cell:id},batchId:batchId!});
       counts.quarantined++;receipt.manifestMismatches++;
      }else{staged.push(rowOf(g.code,g.period_end,c,hash));counts.inserted++;}
     }
@@ -293,6 +291,7 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
   counts.fetched=staged.length;
   receipt.cells={ok:staged.filter(r=>r.status==='ok').length,missing:staged.filter(r=>r.status==='missing').length};
   receipt.truncatedIssuers=[...truncated].sort(cmp);
+  if(opts.dryRun){receipt.status='dry_run';receipt.preview=aggregationPreview(staged);return receipt;}
   // ---- 5. coverage, stage, activate ----
   const summary={facts_scope_ready:true,universe:universe.length,ready:readyN,history_class:historyClass,groups:groups.length,reused_groups:reuse.size,cells_ok:receipt.cells.ok,cells_missing:receipt.cells.missing,
    manifest_mismatch:receipt.manifestMismatches,read_truncated:receipt.truncatedIssuers.slice(0,100),read_truncated_count:truncated.size};
@@ -320,9 +319,11 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
   errors.push({code,key:runId??undefined,message:errMsg(e)});
   counts={...emptyCounts(),failed:1};
  }finally{
-  try{await recordAttempt(tables,dataset,{ok,cadence:'weekly',now:deps.now(),detail:{run_id:runId,status:receipt.status,code:receipt.code??null,cells:receipt.cells,reused_groups:receipt.reusedGroups}});}
-  catch(e){errors.push({code:'freshness_failed',message:errMsg(e)});}
-  receipt.batchStatus=await finishBatch(tables,batchId,{counts,errors},deps.now());
+  if(!opts.dryRun&&batchId!==null){
+   try{await recordAttempt(tables,dataset,{ok,cadence:'weekly',now:deps.now(),detail:{run_id:runId,status:receipt.status,code:receipt.code??null,cells:receipt.cells,reused_groups:receipt.reusedGroups}});}
+   catch(e){errors.push({code:'freshness_failed',message:errMsg(e)});}
+   receipt.batchStatus=await finishBatch(tables,batchId,{counts,errors},deps.now());
+  }
  }
  return receipt;
 }

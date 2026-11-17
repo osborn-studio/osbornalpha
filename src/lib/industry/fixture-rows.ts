@@ -2,9 +2,11 @@
 // Row builders and an in-memory read-side IndustryDb shared by the read-side unit tests (Task 15–19)
 // and the E2E fixture mode (Task 20). All values are synthetic layout data; production reads never
 // use this module (public-deps.ts only reaches it under INDUSTRY_E2E_FIXTURES=1 outside production).
+import {withUsIndustryTypes} from './types-us';
+import type {IndustryMetricReaderBoundary} from './types-us';
 import type {FactRow} from '../facts/types';
 import type {ReadDb,ReadDeps} from './read';
-import type {AggregateManifest,ClassificationRow,FreshnessRow,MembershipRow,MetricCellRow,MetricRunRow,ValuationCellRow,ValuationRunRow} from './types';
+import type {AggregateManifest,ClassificationRow,FreshnessRow,MembershipRow,MetricCellRow,MetricRunRow,ValuationCellRow,ValuationRunRow} from './types-us';
 
 export const RUN_ID='11111111-1111-4111-8111-111111111111';
 export const ISSUER_A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -80,7 +82,7 @@ export const manifestOf=(p:Partial<AggregateManifest>={}):AggregateManifest=>({
 
 export interface StubData{public?:ReadonlySet<string>;tree?:ClassificationRow[];runs?:MetricRunRow[];cells?:MetricCellRow[];memberships?:MembershipRow[];freshness?:FreshnessRow[];valuationRuns?:ValuationRunRow[];valuations?:ValuationCellRow[]}
 /** Read-side IndustryDb over arrays; `public` plays the RLS licence gate (default: both schemes public). */
-export function stubIndustryDb(d:StubData):ReadDb{
+export function stubIndustryDb(d:StubData):ReadDb&IndustryMetricReaderBoundary{
  const pub=d.public??new Set(['scheme:sw2021:2021','scheme:sic:sec-current']);
  const runs=d.runs??[],cells=d.cells??[],members=d.memberships??[];
  const db:ReadDb={
@@ -96,7 +98,7 @@ export function stubIndustryDb(d:StubData):ReadDb{
   membershipCandidates:async q=>members.filter(m=>m.scheme===q.scheme&&m.version===q.version&&m.code===q.code&&m.level===q.level&&m.valid_from<=q.on),
   membershipsOfIssuer:async(i,q)=>members.filter(m=>m.issuer_id===i&&(!q.scheme||m.scheme===q.scheme)&&(!q.on||m.valid_from<=q.on)),
  };
- return db;
+ return withUsIndustryTypes(db);
 }
 
 /** ReadDeps around a stub db; unresolved counts, issuer cards and facts are overridable. */

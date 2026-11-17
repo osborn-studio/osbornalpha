@@ -106,12 +106,13 @@ Restricted series (VIX, SP500 / NASDAQ / DJIA, CSI 300) stay `restricted` until 
 
 ## 6. Troubleshooting
 
-- Manifest persistence: private `[macro-manifest]` phase logs share an `operation_id`. A failed `rpc` phase may include `upstream_request_id`, captured from the unsuccessful manifest POST's UUID-shaped `sb-request-id` response header. Use that exact value to look up the gateway `requestId`; it is not a backend PID/session join. Missing/invalid headers, network failures, successful responses and readback failures omit it. Default strategy route/cron clients capture it; injected clients need the macro `manifestFetch` hook to supply it. Timings include client/network/gateway/SQL and do not locate database time consumption. Historical statement-timeout events remain unexplained; this correlation field does not establish their effective budget or repair the timeout. Do not replay a writer to generate diagnostic evidence.
+- Manifest persistence: private `[macro-manifest]` phase logs share an `operation_id`. A failed `rpc` phase may include `upstream_request_id`, captured from the unsuccessful manifest POST's UUID-shaped `sb-request-id` response header. Use that exact value to look up the gateway `requestId`; it is not a backend PID/session join. Missing/invalid headers, network failures, successful responses and readback failures omit it. Default strategy route/cron clients capture it; injected clients need the macro `manifestFetch` hook to supply it. Timings include client/network/gateway/SQL and do not locate database time consumption. The correlation field alone does not establish the effective statement budget or repair the timeout. Do not replay a writer to generate diagnostic evidence.
 - Every fact route 503 `macro_foundation_unavailable`: `strategyPort()` returned `null`, i.e. `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `NEXT_PUBLIC_SUPABASE_ANON_KEY` is missing in that deployment.
 - Transmission 404 `no_published_snapshot`: neither region has an active P1 snapshot (run the checks of section 8.1 and 8.2).
 - A fact route 500 right after enabling: read the function log; a `truncated` thrown outside the routes' own handling means a bounded read ran past its cap (`snapshotsSince` paging in `wiring.ts`, or `HISTORY_MAX_ROWS`).
 - A matrix or history column all `missing (history_truncated)`: the history read exceeded `HISTORY_MAX_ROWS`; check P1 observation counts.
 - `judgment_status: 'unavailable'` while F4 is up: check `NEXT_PUBLIC_SITE_URL` and that `/api/judgments` answers JSON within 3 s.
+- Manifest storage: canonical UTF-8 bodies over 1,000,000 bytes use gzip level 6 through `macro_put_manifest_gz(jsonb)`; smaller bodies keep `macro_put_manifest_json`. Apply `20261126090000_macro_manifest_blob.sql` before deploying the writer. The hash remains SHA-256 of the uncompressed canonical JSON. Blob reads verify decompressed byte length and SHA-256 before parsing; `rpc_failed` with private message `manifest_blob_corrupt` means stored evidence failed verification. Preserve the row for investigation. A gzip RPC `compare` result causes an admin full-row read and canonical comparison (including legacy JSONB rows); different canonical evidence raises `payload_conflict`. Inserted and byte-identical replays still read metadata only. Failed POST request-id correlation covers both endpoints. See [the diagnosis](../audits/2026-11-16-macro-manifest/01-diagnosis.md) for the large-JSON timeout evidence; this stage changes no timeouts, retries or caches.
 - Manifests: `GET /api/macro/strategy/manifests/<id>` returns the full frozen input set of any view (ids in each view's `manifest_id`).
 
 ## 7. Verification gate
@@ -227,3 +228,35 @@ console.log((await fetch('/api/macro/strategy/deviations?region=US')).status);  
 1. Unset the flag and redeploy: `vercel env rm MACRO_STRATEGY_ENABLED production` then the 8.3 deploy. Pages, fact routes, explanations and the review cron answer 404 again; the six P3 tables and any published reviews stay (inert and read-only through the RPCs; never drop them).
 2. A bad published review: rerun that month after the fix (the pointer only moves forward, section 3); do not edit rows.
 3. Data problems are P1 problems: roll the snapshot back with macro-sync §8 / §13.6. Record every rollback in `docs/audits/`.
+
+## Persisted fact views (B2)
+
+`macro_strategy_views` stores only the whole pure fact value (including its `manifest_id`), as UTF-8 JSON text and a SHA-256 checksum. The key hashes the existing schema-namespaced memo identity: kind, params, both active snapshots' id/revision/created_at, each region's publish revision and input_revision, catalog version and deploy code version. Rows are immutable; an RPC replay compares checksums and a conflict never overwrites evidence. Only service_role can select or execute `macro_put_strategy_view(jsonb)`; anon/authenticated have no access. Judgments, sessions, explanations and quota data are never stored. Missing revision evidence bypasses the view store and both cache layers.
+
+A cold request reads one view row after the existing live identity checks. A miss builds and persists a manifest, evaluates the facts and serializes the whole fact value once for storage and response replay. Store failures/conflicts log fixed labels and serve the fresh build. A corrupt row is a miss. `X-Macro-Strategy-View: stored|built` reports the origin of the cached fact value; `X-Macro-Strategy-Memo: hit|miss|coalesced` keeps its process-cache meaning.
+
+Release order: apply migrations `20261126090000` (gzip manifests), `20261126100000` (history RPC), then `20261126110000` (views), and confirm the PostgREST schema reload **before deploying the app revision**. The migrations notify PostgREST to reload; confirm the new RPCs are discoverable with the service role. Migration locks are recorded only after production apply.
+
+Call the warmer **once right after every deploy** (the code version changes every view key):
+
+```sh
+curl -fsS -H "Authorization: Bearer $CRON_SECRET" "$SITE/api/cron/macro-strategy-warm"
+```
+
+The authenticated GET has a 60-second maximum duration and runs every ten minutes (`*/10 * * * *`). It reads memo state once, checks all eight keys with one select and builds missing views with at most two workers: transmission US/CN, policy-response windows 1/3/6, cycle-table event_day/first_trading_day/month_end. The receipt is `{outcomes:[{kind,params,outcome,ms}]}` with `present|built|failed|skipped`; one failed view does not stop the others. Disabled strategy returns eight skipped outcomes without allocating storage/read dependencies; uncacheable state also skips. Snapshot publication does not call the warmer itself: after a publish, an ingest or a deploy the next scheduled run (at most ten minutes later) or the first request builds the missing views.
+
+Verify with an administrative connection (view table is service-only):
+
+```sql
+-- Latest manifest of each kind and the stored encoding.
+select distinct on (kind) kind, manifest_id, created_at,
+       case when body_gz is null then 'jsonb' else 'gzip' end as encoding,
+       body_bytes
+from public.macro_strategy_manifests
+order by kind, created_at desc, manifest_id desc;
+
+select kind, count(*) as views, max(created_at) as latest,
+       max(octet_length(view_json)) as max_view_bytes
+from public.macro_strategy_views
+ group by kind order by kind;
+```

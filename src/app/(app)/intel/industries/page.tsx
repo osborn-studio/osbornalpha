@@ -17,7 +17,7 @@ import {StateNotice} from '@/components/industries/StateNotice';
 import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
 import {listQueryFromSearch,loadView} from '@/lib/industry/page-data';
-import {AGG_METRICS,METRIC_DURATIONS,SOURCES,industryListView} from '@/lib/industry/read';
+import {metricsForScheme,durationsForScheme,SOURCES,industryListView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
@@ -29,6 +29,8 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
   const t=await getTranslations('industries');
   const locale=(await getLocale())==='en'?'en':'zh';
   const v=load.view;
+  const navigationNodes=v?.state==='empty'||v?.state==='ok'&&v.kind==='navigation'?v.nodes:v?.state==='ok'&&v.kind==='aggregate'?v.navigationNodes??[]:[];
+  const aggregateNodes=v?.state==='ok'&&v.kind==='aggregate'?v.nodes.filter(n=>!v.navigationNodes?.some(x=>x.code===n.code)):[];
   return (
     <SourceDrawerProvider>
       <div className="mx-auto flex max-w-[1400px] flex-col gap-5" data-page="industries-list">
@@ -53,17 +55,17 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
           </StateNotice>
         )}
         {v?.state==='empty'&&(<><RunHeaderBar header={null} freshness={v.freshness} /><StateNotice kind="empty" /></>)}
-        {v&&(v.state==='empty'&&v.nodes.length>0||v.state==='ok'&&v.kind==='navigation')&&(
+        {(navigationNodes.length>0||v?.state==='ok'&&v.kind==='navigation')&&(
           <section className="card-base" aria-label={t(`schemes.${q.scheme}`)}>
             {q.scheme==='sic'&&<div className="mb-3 flex flex-wrap items-center gap-2"><StateNotice kind="currentOnly" /></div>}
             <table className="w-full text-sm">
               <thead><tr className="text-left text-xs text-text-dim"><th className="py-1.5 font-normal">{t(`schemes.${q.scheme}`)}</th><th className="py-1.5 font-normal">{t('table.industry')}</th><th className="py-1.5 text-right font-normal">{t('detail.members')}</th><th className="py-1.5 font-normal" /></tr></thead>
               <tbody>
-                {v.nodes.map(n=>(
+                {navigationNodes.map(n=>(
                   <tr key={n.code} className="border-t border-border">
                     <td className="py-1.5 font-mono tabular-nums">{n.code}</td>
                     <td className="py-1.5"><Link href={industryPath(q.scheme,n.code)} className="text-text hover:text-accent">{nodeName(n,locale)}</Link></td>
-                    <td className="py-1.5 text-right font-mono tabular-nums">{'members' in n&&n.members!==null?n.members:'—'}</td>
+                    <td className="py-1.5 text-right font-mono tabular-nums">{'members' in n&&typeof n.members==='number'?n.members:'—'}</td>
                     <td className="py-1.5 text-right"><Link href={constituentsPath(q.scheme,n.code)} className="text-xs">{t('detail.viewConstituents')} →</Link></td>
                   </tr>
                 ))}
@@ -73,21 +75,22 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
         )}
         {v?.state==='ok'&&v.kind==='aggregate'&&(
           <>
+            {v.header.membershipOn&&<StateNotice kind="snapshotConstituents" values={{date:v.header.membershipOn}} />}
             <RunHeaderBar header={v.header} freshness={v.freshness} extra={t('header.grid',{codes:v.nodes.length,periods:v.periodEnds.length})} />
             {v.freshness==='stale'&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
             {v.header.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" />}
             <div className="flex flex-wrap items-center gap-2">
-              <LinkMenu label={t('controls.metric')} current={q.metric} options={AGG_METRICS.map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(INDUSTRIES_PATH,search,{metric:m,duration:undefined})}))} />
-              <LinkMenu label={t('controls.basis')} current={q.duration} options={METRIC_DURATIONS[q.metric].map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(INDUSTRIES_PATH,search,{duration:d})}))} />
+              <LinkMenu label={t('controls.metric')} current={q.metric} options={metricsForScheme(q.scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(INDUSTRIES_PATH,search,{metric:m,duration:undefined})}))} />
+              <LinkMenu label={t('controls.basis')} current={q.duration} options={durationsForScheme(q.scheme,q.metric).map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(INDUSTRIES_PATH,search,{duration:d})}))} />
               <LinkSegment label={t('controls.view')} current={mode} options={[
                 {value:'heatmap',label:t('controls.heatmap'),href:hrefWith(INDUSTRIES_PATH,search,{view:undefined})},
                 {value:'table',label:t('controls.table'),href:hrefWith(INDUSTRIES_PATH,search,{view:'table'})},
               ]} />
             </div>
             {mode==='heatmap'
-              ?<Heatmap scheme={q.scheme} nodes={v.nodes} periodEnds={v.periodEnds} cells={v.cells} metric={v.metric} header={v.header} preview={v.preview} tableHref={hrefWith(INDUSTRIES_PATH,search,{view:'table'})} />
-              :<ListTable scheme={q.scheme} nodes={v.nodes} periodEnds={v.periodEnds} cells={v.cells} companion={v.companion} metric={v.metric} header={v.header} preview={v.preview} />}
-            <ValuationSnapshot scheme={q.scheme} nodes={v.nodes} block={v.valuation} preview={v.preview} title="title" />
+              ?<Heatmap scheme={q.scheme} nodes={aggregateNodes} periodEnds={v.periodEnds} cells={v.cells} metric={v.metric} header={v.header} preview={v.preview} tableHref={hrefWith(INDUSTRIES_PATH,search,{view:'table'})} />
+              :<ListTable scheme={q.scheme} nodes={aggregateNodes} periodEnds={v.periodEnds} cells={v.cells} companion={v.companion} metric={v.metric} header={v.header} preview={v.preview} />}
+            <ValuationSnapshot scheme={q.scheme} nodes={aggregateNodes} block={v.valuation} preview={v.preview} title="title" />
             <section className="card-base" aria-label={t('judgments.title')}>
               <div className="mb-2 flex items-center gap-2"><h2 className="text-lg font-semibold">{t('judgments.title')}</h2><span className="rounded-[4px] border border-border px-1.5 text-xs text-text-dim">F4</span><span className="ml-auto text-xs text-text-dim">{t('judgments.methodsLink')}</span></div>
               <StateNotice kind="noJudgment"><span className="text-text-dim">{t('judgments.scope',{scheme:t(`schemes.${q.scheme}`),level:t(`levels.${q.level}`)})}</span></StateNotice>

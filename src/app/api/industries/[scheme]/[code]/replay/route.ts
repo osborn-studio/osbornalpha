@@ -11,7 +11,7 @@ import {QueryError,dateParam,errorResponse,paramErrorResponse,readParams} from '
 import {replayDeps,valuationReplayDeps} from '@/lib/industry/public-deps';
 import {SCHEME_VERSION,replayView,valuationReplayView} from '@/lib/industry/read';
 import {clientIp,codeOf,metricOf,modeOf,optionalDurationOf,replayLimiter,schemeOf,uuidOf,valuationMetricOf} from '@/lib/industry/route-params';
-import type {AggDuration,AggMetric,Scheme} from '@/lib/industry/types';
+import type {AggDuration,AggMetric,Scheme} from '@/lib/industry/types-us';
 import type {ValuationMetric} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
@@ -36,8 +36,8 @@ export async function GET(req:Request,{params}:{params:Promise<{scheme:string;co
    if(mode!=='original'||p.has('duration'))throw new QueryError(mode!=='original'?'mode':'duration');
    q={scheme,code,runId,mode,kind:'valuation',metric:valuationMetricOf(p),tradeDate};
   }else{
-   const metric=metricOf(p,null);
-   q={scheme,code,runId,mode,kind:'aggregate',metric,duration:optionalDurationOf(p,metric),periodEnd:periodEnd!};
+   const metric=metricOf(p,null,scheme);
+   q={scheme,code,runId,mode,kind:'aggregate',metric,duration:optionalDurationOf(p,metric,scheme),periodEnd:periodEnd!};
   }
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
@@ -53,6 +53,7 @@ export async function GET(req:Request,{params}:{params:Promise<{scheme:string;co
   if(v.state==='unknown_run')return errorResponse('unknown_run','no visible run',404);
   if(v.state==='unknown_cell')return errorResponse('unknown_cell','no replayable cell',404);
   if(v.state==='ambiguous_duration')return errorResponse('invalid_parameter:duration','several durations match; pass duration',400);
+  if(v.state==='not_available')return errorResponse('not_available','recompute not available for this scheme',501);
   return NextResponse.json({methodVersion:v.header.methodVersion,runId:v.header.runId,factsAsOf:v.header.factsAsOf,historyClass:v.header.historyClass,...v},{headers:v.mode==='recompute'?NO_STORE:CACHE});
  }catch(e){
   console.error('[industries/replay]',e instanceof Error?e.message:e);
