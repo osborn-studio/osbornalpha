@@ -35,7 +35,7 @@ import {claimSicScopeRow,finishSicScopeRow} from './sic';
 import {buildCellManifest,runIndustryAggregation} from './run-aggregation';
 import type {AggregationDeps,AggregationOptions,AggregationReceipt} from './run-aggregation';
 import {isEmptyDiff,manifestDiff} from './read';
-import type {ClassificationRow,IndustryDb,MetricCellRow} from './types';
+import type {ClassificationRow,IndustryDb,MetricCellRow} from './types-us';
 
 const enabled=!!process.env.S4_TEST_STATE;
 interface Fixture{

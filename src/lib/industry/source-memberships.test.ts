@@ -8,7 +8,7 @@ import {fixtureTushareCall} from './providers/tushare-industry';
 import type {TushareCall} from './providers/tushare-industry';
 import {findSourceOverlaps,isNullToDate,planSourceMemberships,runMembershipsSw,sameContent,sourceKey} from './source-memberships';
 import type {FetchedMember} from './source-memberships';
-import type {IndustryDeps,ManifestStore,SourceMembershipRow} from './types';
+import type {IndustryDeps,ManifestStore,SourceMembershipRow} from './types-us';
 
 const NOW='2026-11-09T02:00:00.000Z';
 const loc=(row:number)=>({api:'index_member_all',params:{l1_code:'801080.SI',is_new:'Y'},page:1,offset:0,row});
@@ -278,4 +278,14 @@ describe('runMembershipsSw (real index_member_all recordings: 801120.SI and 8017
   expect(r).toMatchObject({status:'failed',exitCode:1});
   expect(r.errors.map(e=>e.code)).toEqual(['no_classifications']);
  });
+});
+
+it('empty-store SW dry run fetches the recorded classification tree in memory with no writes',async()=>{
+ const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset']});
+ const db=memoryIndustryDb();
+ const deps:IndustryDeps={tables,db,facts:memoryFactsDb(),manifests:unusedManifests,now:()=>new Date(NOW),codeVersion:'sha',tushare:fixtureTushareCall()};
+ const dry=await runMembershipsSw(deps,{apply:false,l1Codes:['801120.SI'],sleep:noSleep});
+ expect(dry).toMatchObject({status:'dry_run',batchId:null,classificationCounts:{1:31,2:134,3:346},plannedSourceFetches:2,plans:[{l1:'801120.SI',inputs:187,unknownCodes:0}]});
+ expect(dry.errors).toEqual([]);expect(await db.classificationTree('sw2021','2021')).toEqual([]);
+ expect(await db.currentSourceMemberships({})).toEqual([]);expect(tables.rows('ingest_batches')).toEqual([]);expect(tables.rows('dq_freshness')).toEqual([]);
 });

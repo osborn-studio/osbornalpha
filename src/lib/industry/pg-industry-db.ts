@@ -6,6 +6,8 @@
 // bigint arrive as strings; every row goes through the db.ts normalisers (decimals from *_text,
 // timestamps in toISOString() form) and errors through toIndustryDbError, exactly like the Supabase
 // adapter. The pool's role is whatever the caller connected as (tests use the admin role).
+import {withUsIndustryTypes} from './types-us';
+import type {IndustryDbBoundary} from './types-us';
 import type {Pool} from 'pg';
 import {chunkIds} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
@@ -15,11 +17,11 @@ import {
  markFromTable,membershipFromTable,metricCellFromTable,metricRunFromTable,newRunArgs,observationResult,sameClassification,sourceArgs,sourceFromTable,
  stagedCellArgs,toIndustryDbError,unresolvedFromTable,upsertSourceResult,valuationCellFromTable,valuationRunFromTable,
 } from './db';
-import type {ClassificationRow,DelistingInput,IndustryDb,ObservationResult} from './types';
+import type {ClassificationRow,DelistingInput,IndustryDb,ObservationResult} from './types-us';
 
 const parts=<T>(rows:T[],size:number):T[][]=>{if(rows.length===0)return [[]];const out:T[][]=[];for(let i=0;i<rows.length;i+=size)out.push(rows.slice(i,i+size));return out;};
 
-export function pgIndustryDb(pool:Pool):IndustryDb{
+export function pgIndustryDb(pool:Pool):IndustryDbBoundary{
  const run=async(text:string,values:unknown[])=>{
   try{return await pool.query({text,values,types:typeParsers});}
   catch(e){throw toIndustryDbError(e as PgErrorLike);}
@@ -164,5 +166,5 @@ export function pgIndustryDb(pool:Pool):IndustryDb{
   async unresolvedCount(q){return distinctTsCodes(await unresolvedOf(q));},
   unresolvedOf,
  };
- return db;
+ return withUsIndustryTypes(db);
 }

@@ -25,10 +25,12 @@ import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {errorMessage,loaderOutcome,parkConflict,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
 import {createHash} from 'node:crypto';
-import type {IndustryDeps,SourceMembershipInput,SourceMembershipRow} from './types';
+import type {IndustryDeps,SourceMembershipInput,SourceMembershipRow} from './types-us';
 import type {IndexMemberRow,RowLocator,SnapshotCapture,TusharePage} from './providers/tushare-industry';
-import {IndustryProviderError,defaultTushareCall,fetchIndexMembers,locatorOf,ymdToIso} from './providers/tushare-industry';
+import {IndustryProviderError,defaultTushareCall,fetchIndexClassify,fetchIndexMembers,locatorOf,ymdToIso} from './providers/tushare-industry';
 import type {RunResult} from './classifications';
+import {planClassificationNodes} from './classifications';
+import type {ClassifyInputRow} from './classifications';
 import {canonicalSwCode} from './sw2021';
 
 export const SW_MEMBER_SOURCE='tushare:index_member_all';
@@ -137,7 +139,7 @@ export function findSourceOverlaps(inputs:SourceMembershipInput[],current:Source
 }
 
 export interface RunMembershipsSwOptions{apply:boolean;l1Codes?:string[];triggeredBy?:TriggeredBy;sleep?:(ms:number)=>Promise<void>;pageSize?:number;snapshots?:SnapshotCapture}
-export interface RunMembershipsSwResult extends Omit<RunResult,'status'|'batchId'>{status:RunResult['status']|'dry_run';batchId:string|null;plans:{l1:string;expected:SourcePlan['expected'];inputs:number;ambiguous:number;rejected:number;unknownCodes:number}[]}
+export interface RunMembershipsSwResult extends Omit<RunResult,'status'|'batchId'>{status:RunResult['status']|'dry_run';batchId:string|null;classificationCounts?:Record<number,number>;plannedSourceFetches?:number;plans:{l1:string;expected:SourcePlan['expected'];inputs:number;ambiguous:number;rejected:number;unknownCodes:number}[]}
 
 const contentDigest=(r:ContentFields)=>createHash('sha256').update(JSON.stringify([r.name,r.l1_code,r.l2_code,r.out_date])).digest('hex').slice(0,12);
 const contentOf=(r:ContentFields&{raw_hash:string}|SourceMembershipRow)=>({name:r.name,l1_code:r.l1_code,l2_code:r.l2_code,out_date:r.out_date,raw_hash:r.raw_hash});
@@ -154,7 +156,18 @@ const contentOf=(r:ContentFields&{raw_hash:string}|SourceMembershipRow)=>({name:
 export async function runMembershipsSw(deps:IndustryDeps,opts:RunMembershipsSwOptions):Promise<RunMembershipsSwResult>{
  if(opts.apply&&!deps.codeVersion)throw new Error('code_version_missing');
  const call=deps.tushare??defaultTushareCall({fetch:deps.fetch});
- const tree=await deps.db.classificationTree('sw2021','2021');
+ let tree=await deps.db.classificationTree('sw2021','2021');
+ if(!opts.apply&&tree.length===0){
+  const rows:ClassifyInputRow[]=[];
+  for(const level of ['L1','L2','L3'] as const){
+   const pages=await fetchIndexClassify(call,{level},{sleep:opts.sleep,now:deps.now});
+   for(const p of pages)rows.push(...p.rows.map((r,i)=>({...r,raw_hash:p.raw_hash,locator:locatorOf(p,i)})));
+  }
+  const plan=planClassificationNodes(rows);
+  if(plan.unmapped.length||plan.rejected.length)throw new Error('classification_plan_invalid');
+  tree=plan.nodes;
+ }
+ const classificationCounts=Object.fromEntries([1,2,3].map(level=>[level,tree.filter(n=>n.level===level).length]));
  const l1s=tree.filter(n=>n.level===1).map(n=>n.code).filter(c=>!opts.l1Codes||opts.l1Codes.includes(c)).sort();
  const known:KnownTree=new Map(tree.map(n=>[n.code,{level:n.level,parent_code:n.parent_code}]));
  const counts=emptyCounts();const errors:BatchError[]=[];const rejected:string[]=[];const plans:RunMembershipsSwResult['plans']=[];
@@ -235,7 +248,7 @@ export async function runMembershipsSw(deps:IndustryDeps,opts:RunMembershipsSwOp
  }
  const rejectedSummary=summarizeSkips(rejected);
  const allErrors=withSkippedSummary(errors,{},rejectedSummary);
- if(!batchId)return {status:'dry_run',batchId:null,counts,errors:allErrors,exitCode:allErrors.some(e=>e.code==='db_error')?1:0,plans};
+ if(!batchId)return {status:'dry_run',batchId:null,counts,errors:allErrors,exitCode:allErrors.some(e=>e.code==='db_error')?1:0,classificationCounts,plannedSourceFetches:l1s.length*2,plans};
  const status=await finishBatch(deps.tables,batchId,{counts,errors:allErrors},deps.now());
  const outcome=loaderOutcome(status,counts,rejectedSummary);
  await recordAttempt(deps.tables,SW_SOURCE_DATASET,{ok:outcome.ok&&!crashed,cadence:'weekly',now:deps.now()});

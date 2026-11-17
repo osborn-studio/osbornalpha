@@ -83,9 +83,12 @@ async function readBounded(res:Response,max:number):Promise<Uint8Array>{
 export interface CompanyFactsEntry{start?:string;end:string;val:string;accn:string;fy:number|null;fp:string|null;form:string;filed:string;frame?:string}
 export interface CompanyFactsDoc{cik:number;entityName?:string;facts:Record<string,Record<string,{units:Record<string,CompanyFactsEntry[]>}>>}
 export function decodeCompanyFacts(bytes:Uint8Array):CompanyFactsDoc{
- let d:Partial<CompanyFactsDoc>;
- try{d=decodeWithSchema(scanJsonNumbers(bytes),COMPANYFACTS_SCHEMA) as Partial<CompanyFactsDoc>;}catch(e){throw new ProviderError('parse_error',`json: ${(e as Error).message}`);}
- if(!d||typeof d!=='object'||typeof d.cik!=='number'||!d.facts||typeof d.facts!=='object')throw new ProviderError('parse_error','companyfacts shape: cik/facts');
+ let d:Partial<Omit<CompanyFactsDoc,'cik'>>&{cik?:unknown};
+ try{d=decodeWithSchema(scanJsonNumbers(bytes),COMPANYFACTS_SCHEMA) as typeof d;}catch(e){throw new ProviderError('parse_error',`json: ${(e as Error).message}`);}
+ if(!d||typeof d!=='object'||!d.facts||typeof d.facts!=='object')throw new ProviderError('parse_error','companyfacts shape: cik/facts');
+ const cik=typeof d.cik==='string'&&/^\d{1,10}$/.test(d.cik)?Number(d.cik):d.cik;
+ if(typeof cik!=='number'||!Number.isSafeInteger(cik)||cik<0||cik>9999999999)throw new ProviderError('parse_error','companyfacts shape: cik/facts');
+ d.cik=cik;
  return d as CompanyFactsDoc;
 }
 const FORM_TYPES:readonly string[]=['10-K','10-Q','20-F','40-F','10-K/A','10-Q/A','20-F/A'];

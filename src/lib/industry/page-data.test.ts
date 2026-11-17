@@ -83,3 +83,9 @@ describe('search params (tolerant: invalid → default)',()=>{
   expect(constituentsQueryFromSearch('sic','3674',{on:'2026-06-30'},NOW).on).toBe('2026-06-30');
  });
 });
+
+it('page params fall back to a valid metric and duration for the scheme',()=>{
+ expect(listQueryFromSearch({scheme:'sic',metric:'roe',duration:'TTM'})).toMatchObject({metric:'revenue_sum',duration:'12M'});
+ expect(detailQueryFromSearch('sic','3674',{metric:'net_margin',duration:'3M'})).toMatchObject({metric:'net_margin',duration:'12M'});
+ expect(listQueryFromSearch({metric:'net_margin'})).toMatchObject({metric:'gross_margin'});
+});

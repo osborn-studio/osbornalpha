@@ -38,7 +38,7 @@
 ### 1.2 本规格之外
 
 - 港股分类与成分；GICS；中证分类与估值；申万二级/三级的聚合与估值（v1 只做一级）。
-- **美股行业聚合与估值**：SIC 只有当前值，无一手历史来源，不做"用今天成分算历史"；v1 SIC 只提供分类导航、成分列表、公司页芯片。
+- **美股行业聚合与估值**：SIC 只有当前值，无一手历史来源，不做"用今天成分算历史"；v1 SIC 只提供分类导航、成分列表、公司页芯片。（**修订 A1，2026-11-16**：美股行业**聚合**按 §19 的"快照成分重建"口径启用；估值仍在本规格之外。）
 - **PS**：无官方对照、未定义输入契约，v1 不计算、不存储（二稿的"算而不发布"撤回）。
 - 判断模型：F4；§7 只定义输入适配与方法入口。
 - `industry_tags`、产业链图谱、替代数据：另立规格。
@@ -78,7 +78,7 @@
 | 数据集键（`industry_dataset_licenses.dataset_key`） | 内容 | 一手来源 | 适配器 | 历史 | 用途 | 默认授权 |
 |---|---|---|---|---|---|---|
 | `scheme:sw2021:2021` | 申万 2021 三级分类与成分 | 申万宏源研究所 | Tushare `index_classify`/`index_member_all` | `in_date`/`out_date`；2021 版前日期语义待核对（核对项 3） | 导航、成分、聚合、估值 | `internal`（决策 A） |
-| `scheme:sic:sec-current` | SIC 四位码（SEC 当前展示的码表快照） | SEC `submissions` + SIC 码表页 | 直接 HTTP | 无；`valid_from=观察日` | 导航、成分、芯片；**不聚合** | `public`（迁移写入） |
+| `scheme:sic:sec-current` | SIC 四位码（SEC 当前展示的码表快照） | SEC `submissions` + SIC 码表页 | 直接 HTTP | 无；`valid_from=观察日` | 导航、成分、芯片；聚合仅按 §19（修订 A1） | `public`（迁移写入） |
 | `marks:tushare-daily_basic` | 证券级收盘价/总股本 | 交易所 | Tushare `daily_basic` | 观测版本化（§6.1） | 估值输入；不单独对外 | `internal`（决策 A 同时裁定） |
 | `official:tushare-sw_daily` | 申万一级指数 pe/pb/市值 | 申万宏源研究所 | Tushare `sw_daily` | 日频 | 对账基准；抽屉"官方对照值" | `internal`（决策 A） |
 | `csrc:2012`（不入库） | 证监会季度分类 PDF 2017Q2–2021Q3 | 证监会 | 人工抄录 | 截止 2021Q3 | §15 对照 | — |
@@ -812,6 +812,47 @@ type IndustryTableRows = InputRef<'table_rows',
 | 76 | 聚合、清单、标记（Task 10–14） | 偏差（修复批 5） | 发布网格恒为该层级全部代码（全网格发布）；`codes` 只选择重算哪些组，且就绪门分母是全宇宙；因此废止原第 26 条。 |
 
 本轮不实施（规格自己的门）：I-3 估值计算/对账/发布（核对项 1、2 已完成，但 §6.3 公式无法通过申万对照，等 **owner 决策 H**）；§13.4 黄金断言（需 owner 抄录）；`history_class` 恒为 `reconstruction`（K3：2021-07-30 前为回溯映射，之后也只有生效日）。
+
+---
+
+## 19. 修订 A1（2026-11-16）：美股 SIC 行业聚合（快照成分重建）
+
+**动机。** 2026-11-16 生产勘察（`docs/audits/2026-11-16-industry-data/01-diagnosis.md`）：申万/A 股链路全部卡在 owner 决策（A/E/H/CN 发布），行业页只有分类列表；而美股两项输入已是公开一手数据且在库——SIC 归属 811 个发行人（`scheme:sic:sec-current` = `public`）、EDGAR 事实 577 个发行人（年度 USD `revenue` 533 家）。§1.2 把美股聚合排除在外的理由是"SIC 只有当前值，不做用今天成分算历史"。本修订不推翻这个理由，而是把它变成**显式口径**：不声称历史成分，只发布"以某一快照日的成分，汇总这些公司最近几个财年已披露的数字"，并在每一处标明。
+
+**19.1 范围。** `scheme='sic'`、`version='sec-current'`、`level=1`（四位码）。只做聚合（I-2 的美股对应物）；不做估值、不做判断输入、不做二位大类归并（库内无其一手名称表）。申万/CN 路径的行为、`METHOD_CONFIG` 与 `CONFIG_HASH` 不变。
+
+**19.2 成分口径。** 一次 run 的全部格使用同一成分集合：`members_at(on = membership_on, known_by = facts_as_of)`，`membership_on = facts_as_of`（run 日）。它对快照日是时点正确的；对更早的财年是重建。因此：
+- `history_class` 恒为 `reconstruction`；`expected_grid.membership_on` 记录快照日，激活函数用它（而非各格的 `period_end`）校验"每格依赖发行人集合 = 候选成分集合"，并强制 `membership_on <= facts_as_of` 且 `history_class='reconstruction'`；
+- 页面在 run 头部与抽屉显示"按 <快照日> 的当前 SIC 成分重建；不是历史成分"；
+- 窗口限制为最近 `US_HISTORY_BUCKETS = 3` 个**已完成**财年桶，以限制幸存者偏差的影响范围；已退出三个美股宇宙或已变更 SIC 的公司不在其中，文案如实说明。
+- 升级路径（不在本修订内）：EDGAR 每份申报的头部在受理时记录当时的 SIC，是一手的时点来源；装载后可把 `history_class` 升为 `point_in_time` 并改用逐期成分。
+
+**19.3 财年桶。** 美股财年不按自然年。桶 `Y` = 财年结束日落在 `[Y-01-01, Y-12-31]` 的 `12M` 事实；格的 `period_start = Y-01-01`、`period_end = Y-12-31`、`duration = '12M'` 表示桶，不表示每家公司的实际期间（实际期间在清单 `facts` 里逐条给出）。桶 `Y` 仅当 `facts_as_of >= (Y+1)-04-01` 时进入网格（年报法定披露期后），所以网格只含已完成的桶。52/53 周财年按规格二的 `12M` 归类处理。不做单季、不做 TTM（需要跨财年日历对齐，另行修订）。
+
+**19.4 指标（`METHOD_VERSION_US = 'industry-agg-us/1.0'`，独立的 `METHOD_CONFIG_US` 与哈希）。** 输入概念 `AGG_CONCEPTS_US = ['revenue','gross_profit','net_income_parent']`；每个 run 每个发行人恰好一次 `readFacts(issuer,'US',{concepts, asOf: facts_as_of, history: true})`（V6 不变）；只取 `USD`、`consolidated`、当前披露、`status='ok'`。
+
+| metric | 公式 | duration | unit |
+|---|---|---|---|
+| `revenue_sum` | Σ revenue | 12M | USD |
+| `net_income_parent_sum` | Σ net_income_parent | 12M | USD |
+| `gross_margin` | Σ gross_profit / Σ revenue，仅含两者俱全且期间相同的发行人；SIC 6000–6799 → `financial_excluded` | 12M | ratio |
+| `net_margin`（新指标） | Σ net_income_parent / Σ revenue，仅含两者俱全且期间相同的发行人 | 12M | ratio |
+| `revenue_yoy` / `net_income_yoy` | (Σ_Y − Σ_{Y−1}) / \|Σ_{Y−1}\|，同集合（桶 Y 与桶 Y−1 都有唯一值的发行人） | 12M | ratio |
+| `member_count` | n_members | INSTANT | count |
+
+取数规则（缺失就是缺失，不用代理）：某发行人某概念在桶内恰有一条匹配事实 → 采用；零条 → `excluded:missing_concept`（存在其他币种的同键事实 → `unit_excluded`）；多于一条（财年变更）→ `excluded:ambiguous_period`；比率的分子分母 `period_start/period_end` 不一致 → `excluded:period_mismatch`；`truncated` 信封 → 该发行人全部格 `read_truncated`。外币申报者（CNY/EUR 等）因此被排除并计入覆盖分母，不折算。舍入、十进制字符串、清单结构（`industry-manifest/2`）、`replayFromManifest` 自检、内容寻址、依赖登记、激活时刻规则全部沿用 §5.3–§5.4；`replayFromManifest` 按清单的 `method_version` 分派。
+
+**19.5 网格与完整性。** `expected_grid = {codes: 分类表全部一级码, period_ends: 桶的 12-31, metrics: 上表, cell_rule: 'fiscal_year_bucket/1', membership_on}`。激活完整性：`cell_rule` 缺省 → 现行 CN 季度规则（不变）；`fiscal_year_bucket/1` → 每个 code × period_end × metric 有一行，`member_count` 为 `INSTANT`、其余为 `12M`。无成分的码 → `missing:no_members`。
+
+**19.6 就绪与显示阈值。** 美股不设 95% 的 run 级就绪门（US 事实范围现有 577/814 成功，门会把全部可用行业一并挡掉，而缺口已由逐格覆盖如实表达）；run 记录 `coverage_summary.{universe, ready}`，仅当 `ready/universe < 50%` 时判为事实源故障 → `failed(facts_scope_not_ready)`。显示阈值（不改变格状态，只改变页面标注；接口仍返回值与计数）：`DISPLAY_MIN_MEMBERS_SIC = 5` 与既有 `DISPLAY_MIN_COVERAGE = 0.8`（`n_with_data / n_members`）；不满足的格页面显示"成分不足 n<5"或"覆盖不足 x/y"，不着色、不显示数值。
+
+**19.7 作业、调度、新鲜度。** 新作业 `aggregate-sic`（不受 `FACTS_CN_ENABLED` 门控；只读公开数据）；有真正的 dry-run（完整计算、零写入，回执给出将发布的格数与样例）；`aggregate`（申万）同样获得 dry-run。新鲜度数据集 `industry.agg.sic`（weekly）。cron：`/api/cron/industry-sync?job=aggregate-sic`，每周一次；发行人信封读取与清单上传使用有界并发，须在 `maxDuration` 内完成（首次生产装载按运行手册用脚本执行并记录耗时）。
+
+**19.8 页面。** `scheme=sic` 且存在活跃 run：列表页用与申万相同的热力图/表格组件（列 = 财年桶，标注"FY<Y>：财年结束于 <Y> 年"），每个数字仍是来源抽屉按钮（原样回放），头部显示快照成分说明与"历史重建"徽标；详情页给出该码的序列与表格。无活跃 run 或该码无行：保持 PR #179 的分类列表回退。不新增版式，沿用既有画布的组件与状态。
+
+**19.9 迁移。** 一份只增的迁移：`industry_metrics.metric` 检查约束加入 `net_margin`；`activate_industry_metric_run` 按 19.2/19.5 读取 `expected_grid.cell_rule` / `membership_on`（两键都缺省时行为与现行逐字相同，数据库测试断言）。
+
+**19.10 成功标准。** 生产存在 `scheme='sic'` 的活跃 run；`industry_metrics` 网格内每格有值或缺因；抽样格 `replayFromManifest` 与存储值相等；`dq_freshness('industry.agg.sic')` 为 fresh；登出与登录状态下行业页显示数值、覆盖与来源抽屉；申万路径测试与 `CONFIG_HASH` 钉值不变。
 
 ---
 

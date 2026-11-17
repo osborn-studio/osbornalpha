@@ -11,26 +11,32 @@ import {computeFreshness} from '../dq/freshness';
 import type {FreshnessStatus} from '../dq/freshness';
 import {canonicalDecimal} from '../facts/json-numbers';
 import type {FactRow,FactsDb,Market} from '../facts/types';
-import {cellDisplay} from './display';
+import {cellDisplay,cellDisplaySic} from './display';
 import type {CellDisplay} from './display';
 import {schemeDatasetKey} from './licenses';
 import {isMemberAt} from './memberships';
 import {CONFIG_HASH,METHOD_CONFIG,METHOD_VERSION,cellSpecs} from './method';
+import {METHOD_CONFIG_US,METHOD_VERSION_US,cellSpecsUs} from './method-us';
+import {pickInputsUs} from './aggregate-us';
 import {InputIndex,pickInputs} from './aggregate';
 import type {PoolDerived,PoolFact} from './aggregate';
 import {canonicalJson} from './canonical-json';
 import {replayCell,replayFromManifest} from './replay';
-import type {AggDuration,AggMetric,AggregateManifest,CellStatus,ClassificationRow,DatasetKey,FreshnessRow,HistoryClass,IndustryDb,ManifestCell,ManifestStore,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,MissingReason,Scheme,SchemeVersion,ValuationCellRow} from './types';
+import type {AggDuration,AggMetric,AggregateManifest,CellStatus,ClassificationRow,DatasetKey,FreshnessRow,HistoryClass,IndustryDb,ManifestCell,ManifestStore,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,MissingReason,Scheme,SchemeVersion,ValuationCellRow} from './types-us';
 
 export const SCHEME_VERSION:Record<Scheme,SchemeVersion>={sw2021:'2021',sic:'sec-current'};
 export const AGG_METRICS:readonly AggMetric[]=['revenue_sum','net_income_parent_sum','gross_margin','roe','revenue_yoy','net_income_yoy','member_count'];
+export const SIC_METRICS:readonly AggMetric[]=['revenue_sum','net_income_parent_sum','gross_margin','net_margin','revenue_yoy','net_income_yoy','member_count'];
+export const metricsForScheme=(scheme:Scheme):readonly AggMetric[]=>scheme==='sic'?SIC_METRICS:AGG_METRICS;
+export const durationsForScheme=(scheme:Scheme,metric:AggMetric):readonly AggDuration[]=>scheme==='sic'?[metric==='member_count'?'INSTANT':'12M']:METRIC_DURATIONS[metric];
+export const defaultMetric=(scheme:Scheme):AggMetric=>scheme==='sic'?'revenue_sum':'gross_margin';
 export const AGG_DURATIONS:readonly AggDuration[]=['12M','3M','TTM','INSTANT'];
 /** Spec §5.2: the durations each metric is computed for (first = page default). */
-export const METRIC_DURATIONS:Record<AggMetric,readonly AggDuration[]>={revenue_sum:['12M','3M'],net_income_parent_sum:['12M','3M'],gross_margin:['12M'],roe:['TTM'],revenue_yoy:['12M','3M'],net_income_yoy:['12M','3M'],member_count:['INSTANT']};
+export const METRIC_DURATIONS:Record<AggMetric,readonly AggDuration[]>={revenue_sum:['12M','3M'],net_income_parent_sum:['12M','3M'],gross_margin:['12M'],net_margin:['12M'],roe:['TTM'],revenue_yoy:['12M','3M'],net_income_yoy:['12M','3M'],member_count:['INSTANT']};
 /** The stored YoY metric shown next to a sum in the table view (no page-side arithmetic). */
 export const YOY_COMPANION:Partial<Record<AggMetric,AggMetric>>={revenue_sum:'revenue_yoy',net_income_parent_sum:'net_income_yoy'};
 /** dq_freshness datasets written by the jobs (Task 12 aggregate, Task 7 SW memberships, Task 9 SIC). */
-export const AGG_FRESHNESS:Record<Scheme,string>={sw2021:'industry.agg.sw2021',sic:'industry.sic.memberships'};
+export const AGG_FRESHNESS:Record<Scheme,string>={sw2021:'industry.agg.sw2021',sic:'industry.agg.sic'};
 export const MEMBERSHIP_FRESHNESS:Record<Scheme,string>={sw2021:'industry.sw2021.memberships',sic:'industry.sic.memberships'};
 export type SourceId='sw_via_tushare'|'exchange_via_tushare'|'tushare_statements'|'sec_submissions'|'edgar_companyfacts';
 export const SOURCES:Record<Scheme,readonly SourceId[]>={sw2021:['sw_via_tushare','exchange_via_tushare','tushare_statements'],sic:['sec_submissions','edgar_companyfacts']};
@@ -53,7 +59,7 @@ export interface ReadDeps{
 }
 
 export interface NodeView{code:string;level:number;nameZh:string|null;nameEn:string|null;parentCode:string|null}
-export interface RunHeader{methodVersion:string;runId:string;generation:number;level:number;factsAsOf:string;knowledgeDate:string;historyClass:HistoryClass;activatedAt:string|null;configHash:string;formulaVersion:string;codeVersion:string}
+export interface RunHeader{membershipOn:string|null;methodVersion:string;runId:string;generation:number;level:number;factsAsOf:string;knowledgeDate:string;historyClass:HistoryClass;activatedAt:string|null;configHash:string;formulaVersion:string;codeVersion:string}
 export interface PublicCell{code:string;metric:AggMetric;duration:AggDuration;periodStart:string;periodEnd:string;status:CellStatus;missingReason:MissingReason|null;value:string|null;unit:string;nMembers:number;nWithData:number;nUnresolved:number;manifestHash:string|null;updatedAt:string|null;display:CellDisplay}
 export interface PublicValuation{code:string;tradeDate:string;metric:ValuationCellRow['metric'];value:string;factsAsOf:string;nMembers:number|null;nWithData:number|null;nUnresolved:number|null;mcapCoverage:string|null;manifestHash:string|null;updatedAt:string|null}
 export type ValuationBlock=
@@ -66,7 +72,7 @@ export interface ListQuery{scheme:Scheme;version:SchemeVersion;level:number;metr
 export type ListView=
  |{state:'unlicensed';datasetKey:DatasetKey}
  |(Base&{state:'empty';kind:'aggregate';nodes:NodeView[]})
- |(Base&{state:'ok';kind:'aggregate';header:RunHeader;nodes:NodeView[];metric:AggMetric;duration:AggDuration;periodEnds:string[];cells:PublicCell[];companion:PublicCell[];valuation:ValuationBlock})
+ |(Base&{state:'ok';kind:'aggregate';header:RunHeader;nodes:NodeView[];navigationNodes?:(NodeView&{members:number|null})[];metric:AggMetric;duration:AggDuration;periodEnds:string[];cells:PublicCell[];companion:PublicCell[];valuation:ValuationBlock})
  |(Base&{state:'ok';kind:'navigation';nodes:(NodeView&{members:number|null})[]});
 
 export interface MethodInfo{methodVersion:string;configHash:string;formulaVersion:string|null;codeVersion:string|null;config:unknown}
@@ -95,10 +101,10 @@ const byCode=(a:{code:string},b:{code:string})=>a.code<b.code?-1:a.code>b.code?1
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
 
 export function runHeader(r:MetricRunRow):RunHeader{
- return {methodVersion:r.method_version,runId:r.run_id,generation:Number(r.generation),level:r.level,factsAsOf:r.facts_as_of,knowledgeDate:r.knowledge_date,historyClass:r.history_class,activatedAt:r.activated_at,configHash:r.config_hash,formulaVersion:r.formula_version,codeVersion:r.code_version};
+ return {membershipOn:r.scheme==='sic'?r.expected_grid.membership_on??null:null,methodVersion:r.method_version,runId:r.run_id,generation:Number(r.generation),level:r.level,factsAsOf:r.facts_as_of,knowledgeDate:r.knowledge_date,historyClass:r.history_class,activatedAt:r.activated_at,configHash:r.config_hash,formulaVersion:r.formula_version,codeVersion:r.code_version};
 }
-export function publicCell(r:MetricCellRow):PublicCell{
- return {code:r.code,metric:r.metric,duration:r.duration,periodStart:r.period_start,periodEnd:r.period_end,status:r.status,missingReason:r.missing_reason,value:r.value,unit:r.unit,nMembers:r.n_members,nWithData:r.n_with_data,nUnresolved:r.n_unresolved,manifestHash:r.manifest_hash,updatedAt:r.updated_at,display:cellDisplay(r)};
+export function publicCell(r:MetricCellRow,scheme:Scheme='sw2021'):PublicCell{
+ return {code:r.code,metric:r.metric,duration:r.duration,periodStart:r.period_start,periodEnd:r.period_end,status:r.status,missingReason:r.missing_reason,value:r.value,unit:r.unit,nMembers:r.n_members,nWithData:r.n_with_data,nUnresolved:r.n_unresolved,manifestHash:r.manifest_hash,updatedAt:r.updated_at,display:scheme==='sic'?cellDisplaySic(r):cellDisplay(r)};
 }
 const publicValuation=(r:ValuationCellRow):PublicValuation=>({code:r.code,tradeDate:r.trade_date,metric:r.metric,value:r.value??'',factsAsOf:r.facts_as_of,nMembers:r.n_members,nWithData:r.n_with_data,nUnresolved:r.n_unresolved,mcapCoverage:r.mcap_coverage,manifestHash:r.manifest_hash,updatedAt:r.updated_at});
 const factView=(r:FactRow):FactCellView=>({factId:r.fact_id,concept:r.concept,value:r.value_text,unit:r.unit,periodStart:r.period_start,periodEnd:r.period_end,duration:r.duration,availableDate:r.available_date,filingId:r.filing_id,rawHash:r.raw_hash});
@@ -144,21 +150,24 @@ export async function industryListView(deps:ReadDeps,q:ListQuery):Promise<ListVi
  if(!await licensed(deps,datasetKey))return {state:'unlicensed',datasetKey};
  const [tree,fresh]=await Promise.all([deps.db.classificationTree(q.scheme,q.version),deps.db.freshness()]);
  const today=utcDate(deps.now);
- if(q.scheme==='sic'){
+ const run=await deps.db.activeMetricRun(q.scheme,q.version,q.level);
+ if(q.scheme==='sic'&&!run){
   const counts=deps.memberCounts?await deps.memberCounts(q.scheme,q.version,today):null;
   const nodes=tree.map(nodeView).sort(byCode).map(n=>({...n,members:counts?counts.get(n.code)??0:null}));
   return {state:'ok',kind:'navigation',datasetKey,preview:deps.preview,freshness:effectiveFreshness(fresh,MEMBERSHIP_FRESHNESS.sic,deps.now),nodes};
  }
  const freshness=effectiveFreshness(fresh,AGG_FRESHNESS[q.scheme],deps.now);
  const nodes=tree.filter(n=>n.level===q.level).map(nodeView).sort(byCode);
- const run=await deps.db.activeMetricRun(q.scheme,q.version,q.level);
  if(!run)return {state:'empty',kind:'aggregate',datasetKey,preview:deps.preview,freshness,nodes};
  const periodEnds=periodEndsFor(run,q.duration,{count:q.periods});
  const companion=YOY_COMPANION[q.metric];
  const rows=periodEnds.length===0?[]:await deps.db.metricRowsOfRun(run.run_id,{metrics:companion?[q.metric,companion]:[q.metric],periodEnds,durations:[q.duration]});
+ const absent=q.scheme==='sic'?nodes.filter(n=>!rows.some(r=>r.code===n.code)):[];
+ const counts=absent.length&&deps.memberCounts?await deps.memberCounts(q.scheme,q.version,today):null;
+ const navigationNodes=absent.map(n=>({...n,members:counts?counts.get(n.code)??0:null}));
  const valuation=latestPerKey(await valuationBlock(deps,q.scheme,q.version,q.level,{from:daysBefore(today,45)}));
- return {state:'ok',kind:'aggregate',datasetKey,preview:deps.preview,freshness,header:runHeader(run),nodes,metric:q.metric,duration:q.duration,periodEnds,
-  cells:rows.filter(r=>r.metric===q.metric).map(publicCell),companion:companion?rows.filter(r=>r.metric===companion).map(publicCell):[],valuation};
+ return {state:'ok',kind:'aggregate',datasetKey,preview:deps.preview,freshness,header:runHeader(run),nodes,...(q.scheme==='sic'?{navigationNodes}:{}),metric:q.metric,duration:q.duration,periodEnds,
+  cells:rows.filter(r=>r.metric===q.metric).map(r=>publicCell(r,q.scheme)),companion:companion?rows.filter(r=>r.metric===companion).map(r=>publicCell(r,q.scheme)):[],valuation};
 }
 
 function ancestorsOf(tree:ClassificationRow[],row:ClassificationRow):NodeView[]{
@@ -178,18 +187,20 @@ export async function industryDetailView(deps:ReadDeps,q:DetailQuery):Promise<De
  const row=tree.find(n=>n.code===q.code);
  if(!row)return {state:'unknown_industry'};
  const today=utcDate(deps.now);
- const [fresh,members,unresolved,run]=await Promise.all([
+ const [fresh,members,unresolved,activeRun]=await Promise.all([
   deps.db.freshness(),
   currentMembers(deps,{scheme:q.scheme,version:q.version,code:q.code,level:row.level,on:today,knownBy:today}),
   q.scheme==='sw2021'?deps.unresolved.unresolvedCount({code:q.code,level:row.level,on:today,knownBy:today}):Promise.resolve(0),
-  q.scheme==='sw2021'?deps.db.activeMetricRun(q.scheme,q.version,row.level):Promise.resolve(null),
+  deps.db.activeMetricRun(q.scheme,q.version,row.level),
  ]);
+ let run=activeRun;
  const from=windowStart(q.window,today);
  let periodEnds:string[]=[],series:PublicCell[]=[];
  if(run){
   periodEnds=periodEndsFor(run,null,{from});
-  if(periodEnds.length>0)series=(await deps.db.metricRowsOfRun(run.run_id,{codes:[q.code],metrics:q.metrics,periodEnds,durations:q.durations??undefined})).filter(r=>r.code===q.code).map(publicCell).sort(seriesOrder);
+  if(periodEnds.length>0)series=(await deps.db.metricRowsOfRun(run.run_id,{codes:[q.code],metrics:q.metrics,periodEnds,durations:q.durations??undefined})).filter(r=>r.code===q.code).map(r=>publicCell(r,q.scheme)).sort(seriesOrder);
  }
+ if(q.scheme==='sic'&&series.length===0){run=null;periodEnds=[];}
  const valuation=await valuationBlock(deps,q.scheme,q.version,row.level,{codes:[q.code],from:from??undefined});
  const lastAddition=members.reduce<string|null>((m,r)=>m===null||r.valid_from>m?r.valid_from:m,null);
  return {
@@ -197,7 +208,7 @@ export async function industryDetailView(deps:ReadDeps,q:DetailQuery):Promise<De
   node:nodeView(row),ancestors:ancestorsOf(tree,row),children:tree.filter(n=>n.parent_code===q.code).map(nodeView).sort(byCode),
   header:run?runHeader(run):null,aggregated:run!==null,members:{count:new Set(members.map(m=>m.issuer_id)).size,unresolved,lastAddition},
   periodEnds,series,valuation,
-  method:{methodVersion:run?.method_version??METHOD_VERSION,configHash:run?.config_hash??CONFIG_HASH,formulaVersion:run?.formula_version??null,codeVersion:run?.code_version??null,config:METHOD_CONFIG},
+  method:{methodVersion:run?.method_version??METHOD_VERSION,configHash:run?.config_hash??CONFIG_HASH,formulaVersion:run?.formula_version??null,codeVersion:run?.code_version??null,config:run?.method_version===METHOD_VERSION_US?METHOD_CONFIG_US:METHOD_CONFIG},
   sources:SOURCES[q.scheme],
  };
 }
@@ -285,7 +296,7 @@ export interface ReplayDiff{
 }
 export type ReplayResult=
  |{state:'unlicensed';datasetKey:DatasetKey}
- |{state:'unknown_run'}|{state:'unknown_cell'}|{state:'ambiguous_duration'}
+ |{state:'unknown_run'}|{state:'unknown_cell'}|{state:'ambiguous_duration'}|{state:'not_available'}
  |{state:'ok';mode:'original';header:RunHeader;freshness:FreshnessStatus;cell:PublicCell;manifestHash:string;manifest:AggregateManifest;replay:ManifestCell[];reproduced:boolean}
  |{state:'ok';mode:'recompute';header:RunHeader;freshness:FreshnessStatus;cell:PublicCell;manifestHash:string;result:'match'|'changed';diff:ReplayDiff};
 
@@ -309,14 +320,18 @@ export function filterManifest(m:AggregateManifest,metric:AggMetric,cell:{durati
  const derivedPool:D[]=m.derived.map(d=>({issuer_id:d.issuer_id,metric:d.metric,period_start:d.period_start,period_end:d.period_end,duration:d.duration,unit:d.unit,value:d.value,src:d}));
  const idx=new InputIndex(facts,derivedPool);
  const roles=m.roles.filter(r=>r.metric===metric&&r.duration===cell.duration);
- const spec=cellSpecs(m.period_end).find(s=>s.metric===metric&&s.duration===cell.duration&&s.period_start===cell.period_start);
+ const us=m.method_version===METHOD_VERSION_US;
+ const spec=(us?cellSpecsUs(m.period_end):cellSpecs(m.period_end)).find(s=>s.metric===metric&&s.duration===cell.duration&&s.period_start===cell.period_start);
  const usedFacts=new Set<AggregateManifest['facts'][number]>(),usedDerived=new Set<AggregateManifest['derived'][number]>();
  if(spec&&metric!=='member_count')for(const r of roles){
   if(r.role!=='included')continue;
-  const p=pickInputs(spec,r.issuer_id,idx);
-  if(!p.ok)continue;
-  for(const f of p.facts)usedFacts.add(f.src);
-  for(const d of p.derived)usedDerived.add(d.src);
+  if(us){
+   const p=pickInputsUs(spec,r.issuer_id,facts);if(p.ok)for(const f of p.facts)usedFacts.add(f.src);
+  }else{
+   const p=pickInputs(spec,r.issuer_id,idx);if(!p.ok)continue;
+   for(const f of p.facts)usedFacts.add(f.src);
+   for(const d of p.derived)usedDerived.add(d.src);
+  }
  }
  const cited=new Set([...usedDerived].flatMap(d=>d.inputs.map(i=>i.fact_id)));
  return {...m,facts:m.facts.filter(f=>usedFacts.has(f)||cited.has(f.fact_id)),derived:m.derived.filter(d=>usedDerived.has(d)),roles,cells:m.cells.filter(c=>sameCell(c,metric,cell.duration,cell.period_start))};
@@ -362,8 +377,9 @@ export async function replayView(deps:ReplayDeps,q:ReplayQuery):Promise<ReplayRe
  if(rows.length>1)return {state:'ambiguous_duration'};
  const cell=rows[0];
  if(cell.status!=='ok'||cell.manifest_hash===null)return {state:'unknown_cell'};
+ if(q.scheme==='sic'&&q.mode==='recompute')return {state:'not_available'};
  const [fresh,stored]=await Promise.all([deps.db.freshness(),deps.manifests.get(cell.manifest_hash)]);
- const base={header:runHeader(run),freshness:effectiveFreshness(fresh,AGG_FRESHNESS[q.scheme],deps.now),cell:publicCell(cell),manifestHash:cell.manifest_hash};
+ const base={header:runHeader(run),freshness:effectiveFreshness(fresh,AGG_FRESHNESS[q.scheme],deps.now),cell:publicCell(cell,q.scheme),manifestHash:cell.manifest_hash};
  const original=filterManifest(stored,q.metric,cell);
  if(q.mode==='original'){
   // validate the exact single-cell payload returned, not the full grid
@@ -417,13 +433,13 @@ export async function adminReplayView(deps:AdminReplayDeps,q:{runId:string;code:
  const manifest=manifestHashes.length?await deps.manifests.get(manifestHashes[0]):null;   // one manifest per (code, period_end) group (spec §5.3)
  const replay=manifest?replayFromManifest(manifest).cells:null;
  const unresolved=await deps.db.unresolvedOf({code:q.code,level:run.level,on:q.periodEnd,knownBy:run.knowledge_date});
- const cells=rows.map(r=>({...publicCell(r),reproduced:r.status==='ok'&&replay?reproduces(replay.find(c=>sameCell(c,r.metric,r.duration,r.period_start)),r):null}));
+ const cells=rows.map(r=>({...publicCell(r,run.scheme),reproduced:r.status==='ok'&&replay?reproduces(replay.find(c=>sameCell(c,r.metric,r.duration,r.period_start)),r):null}));
  let focus:ReplayFocus|null=null;
  const pick=q.metric?rows.filter(r=>r.metric===q.metric&&(q.duration===null||r.duration===q.duration)):[];
  if(pick.length===1&&pick[0].status==='ok'&&pick[0].manifest_hash&&manifest&&replay){
   const c=pick[0];const fm=filterManifest(manifest,c.metric,c);
   const rc=replayCell(fm,{metric:c.metric,duration:c.duration,period_start:c.period_start});
-  focus={cell:publicCell(c),manifestHash:c.manifest_hash!,manifest:fm,replay:rc.cell?[rc.cell]:[],reproduced:rc.reproduced&&reproduces(rc.cell??undefined,c)};
+  focus={cell:publicCell(c,run.scheme),manifestHash:c.manifest_hash!,manifest:fm,replay:rc.cell?[rc.cell]:[],reproduced:rc.reproduced&&reproduces(rc.cell??undefined,c)};
  }
  return {state:'ok',run,cells,manifestHashes,manifest,replay,unresolved,focus};
 }

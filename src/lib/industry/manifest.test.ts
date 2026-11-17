@@ -8,7 +8,7 @@ import type {AggregateCellResult} from './aggregate';
 import {MANIFEST_BUCKET,buildAggregateManifest,decodeManifest,encodeManifest,gcManifests,isManifestObjectPath,memoryManifestStore,supabaseManifestStore} from './manifest';
 import type {BuildManifestInput} from './manifest';
 import {memoryIndustryDb} from './memory-industry-db';
-import type {IndustryDb} from './types';
+import type {IndustryDb} from './types-us';
 
 const I1='00000000-0000-4000-8000-000000000001',I2='00000000-0000-4000-8000-000000000002';
 const fact=(id:string,issuer:string,concept:string,filing:string,o:Partial<FactRow>={}):FactRow=>({fact_id:id,issuer_id:issuer,market:'CN',filing_id:filing,run_id:'r',concept,source_concept:'income.revenue',statement:'IS',period_start:'2024-01-01',period_end:'2024-12-31',duration:'12M',value:'1000.50',value_text:'1000.50',unit:'CNY',consolidation:'consolidated',available_date:'2025-03-28',mapping_gen:1,mapping_version:'facts-map/1',status:'ok',raw_hash:`raw-${id}`,created_at:'2025-03-29T00:00:00.000Z',is_current:true,...o});

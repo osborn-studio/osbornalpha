@@ -12,8 +12,8 @@ import type {TushareCall} from './providers/tushare-industry';
 import {resolveSourceMemberships,runResolveMemberships,targetsFor,windowEnd} from './resolve-memberships';
 import type {ResolvedValue} from './resolve-memberships';
 import {runMembershipsSw} from './source-memberships';
-import type {IndustryDb,IndustryDeps,ManifestStore,SourceMembershipRow} from './types';
-import {IndustryDbError} from './types';
+import type {IndustryDb,IndustryDeps,ManifestStore,SourceMembershipRow} from './types-us';
+import {IndustryDbError} from './types-us';
 
 const NOW='2026-11-09T02:00:00.000Z';const TODAY='2026-11-09';
 const unusedManifests:ManifestStore={put:async()=>{throw new Error('unused');},get:async()=>{throw new Error('unused');},remove:async()=>{throw new Error('unused');}};
