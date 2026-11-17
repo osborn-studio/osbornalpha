@@ -8,7 +8,7 @@
 
 函数唯一清单见 `src/lib/judgments/rpc-inventory.ts`；服务函数均为 service_role 独占，内部函数不向客户端授权。公共读 RPC：`judgments_server_time`、`judgment_envelope_of`、`latest_judgment_cards`、`judgment_history`、`calibration_cohort`、`methodology_state_at`、`judgment_envelope_by_id`。
 
-服务写 RPC（含服务专用读）：`calibration_cohort_internal`、`sync_methodology`、`retire_methodology`、`register_judgment`、`claim_due_judgments`、`claim_judgment`、`release_lease`、`append_settlement`、`quarantine_settlement`、`apply_quarantine_override`、`resolve_closed_judgment_quarantine`、`reject_quarantined_settlement`、`freeze_calibration_cohort`、`calibration_cohort_members`、`clear_calibration_generation`、`insert_calibration`、`set_job_state`、`repair_stale_batches`。
+服务写 RPC（含服务专用读）：`calibration_cohort_internal`、`sync_methodology`、`register_judgment`、`claim_due_judgments`、`claim_judgment`、`release_lease`、`append_settlement`、`quarantine_settlement`、`apply_quarantine_override`、`resolve_closed_judgment_quarantine`、`reject_quarantined_settlement`、`freeze_calibration_cohort`、`calibration_cohort_members`、`clear_calibration_generation`、`insert_calibration`、`set_job_state`、`repair_stale_batches`。
 
 内部函数：`judgments_settle_after_date`、`judgments_grace_days`、`judgment_operation_payload`、`judgment_settlement_payload`、`judgment_replay_status`、`judgment_append_settlement_internal`。触发器函数随表删除。RPC 签名以 inventory 和迁移为准；`claim_due_judgments` 返回 jsonb 数组，`set_job_state` 返回 `{ok,updated_at}`。
 
@@ -56,7 +56,7 @@ US macro-sync 与 CN ingest finish 的生产装配会在新快照提交后调用
 
 先停两个 cron，导出九表及 judgments 隔离项作为审计证据，清空私有桶对象。以下清单涵盖 `rpc-inventory.ts` 所有非触发器函数；按实际 `pg_proc` 签名由迁移角色逐个 `drop function`（先处理依赖它们的视图 / 策略，再删表），不可 `cascade` 到非 F4 对象：
 
-`judgments_server_time`, `judgment_envelope_of`, `latest_judgment_cards`, `judgment_history`, `calibration_cohort`, `methodology_state_at`, `judgment_envelope_by_id`, `calibration_cohort_internal`, `sync_methodology`, `retire_methodology`, `register_judgment`, `claim_due_judgments`, `claim_judgment`, `release_lease`, `append_settlement`, `quarantine_settlement`, `apply_quarantine_override`, `resolve_closed_judgment_quarantine`, `reject_quarantined_settlement`, `freeze_calibration_cohort`, `calibration_cohort_members`, `clear_calibration_generation`, `insert_calibration`, `set_job_state`, `repair_stale_batches`, `judgments_settle_after_date`, `judgments_grace_days`, `judgment_operation_payload`, `judgment_settlement_payload`, `judgment_replay_status`, `judgment_append_settlement_internal`。
+`judgments_server_time`, `judgment_envelope_of`, `latest_judgment_cards`, `judgment_history`, `calibration_cohort`, `methodology_state_at`, `judgment_envelope_by_id`, `calibration_cohort_internal`, `sync_methodology`, `register_judgment`, `claim_due_judgments`, `claim_judgment`, `release_lease`, `append_settlement`, `quarantine_settlement`, `apply_quarantine_override`, `resolve_closed_judgment_quarantine`, `reject_quarantined_settlement`, `freeze_calibration_cohort`, `calibration_cohort_members`, `clear_calibration_generation`, `insert_calibration`, `set_job_state`, `repair_stale_batches`, `judgments_settle_after_date`, `judgments_grace_days`, `judgment_operation_payload`, `judgment_settlement_payload`, `judgment_replay_status`, `judgment_append_settlement_internal`。
 
 然后按外键逆序删除九表及 `judgment_envelope` 类型，再删 F4 触发器函数；桶清空后删除 `storage.buckets` 的 `judgments-calibration` 行。重新部署已移除 cron 的版本。检查 `pg_proc` / `pg_class` 中无 F4 遗留；回滚演练在临时库执行。
 
@@ -83,5 +83,3 @@ US macro-sync 与 CN ingest finish 的生产装配会在新快照提交后调用
 ## 11. 后续
 
 跟踪宏观目录输入时间证据、DataGateway 复权录制、场景条件可求值能力；这些限制及接受风险见规格 §19。
-
-For the BIS catalog cut-over and macro_regime@v3, follow [Catalog change b91aad6b17f3 / macro_regime@v3 — production order](macro-sync.md#catalog-change-b91aad6b17f3--macro_regimev3--production-order). Register and confirm the v3 publication terms, verify CN ingestion and judgments for both regions, then retire v2; stop at any failed step. The previous build can be redeployed while v2 remains active, without dropping migrations.

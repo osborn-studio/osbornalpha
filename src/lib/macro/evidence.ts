@@ -15,8 +15,8 @@ export interface EvidenceStore{put(input:EvidenceInput):Promise<{objectPath:stri
 export class EvidenceError extends Error{
  constructor(readonly code:'evidence_hash_mismatch'|'evidence_invalid'|'evidence_upload_failed',message?:string){super(message===undefined?code:`${code}: ${message}`);this.name='EvidenceError';}
 }
-const ADAPTERS:readonly Adapter[]=['fred_csv','akshare','bis_sdmx_csv'];
-const PATH=/^(fred_csv|akshare|bis_sdmx_csv)\/[0-9a-f]{64}\.(csv|json|html|txt)$/;
+const ADAPTERS:readonly Adapter[]=['fred_csv','akshare'];
+const PATH=/^(fred_csv|akshare)\/[0-9a-f]{64}\.(csv|json|html|txt)$/;
 // FRED answers Content-Type application/csv (verified 2026-11-06); it is still CSV. The upload MIME comes from the
 // extension (MIME below), never from the server header, so it is always one the bucket allows.
 const EXT:Record<string,EvidenceExt>={'text/csv':'csv','application/csv':'csv','application/json':'json','text/html':'html','text/plain':'txt'};

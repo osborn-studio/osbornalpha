@@ -14,7 +14,7 @@ describe('runValidate on the repository',()=>{
   expect(r.exitCode).toBe(0);
   expect(r.output.checks.availability).toMatchObject({ok:true,scope:'diagnostic_only',
    calibration:{status:'unavailable',reason:'no_probability_methodology'},
-   methodologies:expect.arrayContaining([{id:'macro_regime',version:'v3',kind:'categorical'}])});
+   methodologies:expect.arrayContaining([{id:'macro_regime',version:'v2',kind:'categorical'}])});
   const kinds=r.output.checks.availability.kinds as {kind:string;enabled:boolean;reason?:string}[];
   expect(kinds.find(k=>k.kind==='extraction_gold')).toMatchObject({enabled:false,reason:'D8: license decision pending'});
   expect(kinds.find(k=>k.kind==='judgment_calibration')).toMatchObject({enabled:false});
