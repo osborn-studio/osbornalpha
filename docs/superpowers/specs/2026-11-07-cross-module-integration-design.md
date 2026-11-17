@@ -413,4 +413,4 @@ F6 registry 两项默认 false，只有 license 和阈值确定、真实 provide
 更正 §2.4：F3 `disclosure_documents.filing_source_ref`（`document-pipeline-3cfbb4/supabase/migrations/20261117090000_disclosure_documents.sql:51`）是与 `filings.source_ref` 的精确键；`filing_documents` 只用于 HK。
 PR D 以 `(source, filing_source_ref)` 精确匹配并按 F3 as-of 版本规则取唯一文档；匹配不唯一或缺失即不显示抽屉，绝不按 ticker 最近文档猜测。
 
-迁移时间戳顺序与合并顺序一致：F4 `20261116090000`、F3 `20261117*`、公司 `20261118*`、外资 `20261125*`，无冲突。
+迁移时间戳顺序与合并顺序一致：F4 `20261116090000`、F3 `20261117*`、公司 `20261118*`、外资 `20261201*`，无冲突。
