@@ -13,6 +13,8 @@ import { companyApi, companyHref, type CompanyFilingsResponse, type FreshnessRes
 import { datasetOf, displayNames, freshnessKey, padCik, securityChips } from '@/lib/company/header-model';
 import type { CompanyPageData } from '@/lib/company/page-data';
 import { useCompanyFetch } from './useCompanyFetch';
+import { PageHeader } from '@/components/research-ui';
+import { ChainChips } from './ChainChips';
 import { TrackButton } from './tracking/TrackButton';
 
 function WatchlistButton({ ticker }: { ticker: string }) {
@@ -68,7 +70,7 @@ function InlineError({ message, onRetry }: { message: string; onRetry: () => voi
 
 const dot: Record<string, string> = { fresh: 'bg-[var(--bearish)]', stale: 'bg-[var(--warn)]', error: 'bg-[var(--danger)]', missing: 'bg-[var(--text-muted)]' };
 
-export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageData; view: ViewId; asOf: string | null; locale: 'zh' | 'en' }) {
+export function CompanyHeader({ data, view, asOf, locale, foreignPublic }: { data: CompanyPageData; view: ViewId; asOf: string | null; locale: 'zh' | 'en'; foreignPublic: boolean }) {
   const t = useTranslations('company.header');
   const tf = useTranslations('company.header.freshness');
   const issuer = data.issuer;
@@ -86,15 +88,33 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
 
   return (
     <section className="flex flex-wrap items-start gap-4 sm:gap-6" data-testid="company-header">
-      <div className="flex min-w-0 flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {names.title}{names.subtitle && <span className="ml-2 text-base font-normal text-[var(--text-dim)]">{names.subtitle}</span>}
-        </h1>
+      <div className="flex min-w-0 w-full flex-col gap-2">
+        <nav aria-label={t('breadcrumbResearch')} className="flex flex-wrap items-center gap-1 text-xs text-text-dim">
+          <Link className="inline-flex min-h-11 items-center sm:min-h-0" href="/intel/companies">{t('breadcrumbResearch')}</Link> / {t('breadcrumbDirectory')} / <span className="font-mono tabular-nums">{ticker}</span>
+        </nav>
+        <PageHeader title={names.title} altTitle={[ticker, data.market, names.subtitle].filter(Boolean).join(' · ')} scope={t('scope')}
+          scopeSwitch={data.streams.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-[var(--text-dim)]">{t('streamLabel')}</span>
+            <div role="group" aria-label={t('streamLabel')} className="inline-flex overflow-hidden rounded-md border border-[var(--border)] text-xs">
+              {data.streams.map((s) => (
+                <Link key={s.market} href={companyHref(s.ticker, { view, asOf }) as never} aria-current={s.market === data.market ? 'true' : undefined}
+                  className={`inline-flex min-h-11 items-center px-2.5 py-1 sm:min-h-0 no-underline ${s.market === data.market ? 'bg-[var(--accent-wash)] text-[var(--accent)]' : 'text-[var(--text-dim)]'}`}>
+                  {s.market === 'US' ? t('streamUS') : t('streamCN')}
+                </Link>
+              ))}
+            </div>
+            <span className="text-[11px] text-[var(--text-dim)]">{t('streamHint')}</span>
+          </div>
+        ) : null}
+          freshness={{status: freshness.status === 'error' ? 'error' : fkey === 'unknown' ? 'missing' : fkey,
+            asOf: asOf ? (replayFilings.status === 'ok' ? replayFilings.data.filings[0]?.availableDate ?? null : null) : cov?.latest_available_date ?? null}} />
+        <ChainChips issuerId={issuer?.issuer_id ?? null} market={data.market} ticker={ticker} asOf={asOf} locale={locale} foreignPublic={foreignPublic}/>
         <div className="flex gap-2 overflow-x-auto whitespace-nowrap pb-0.5 text-xs">
           {chips.map((c) => (
             <Link key={c.ticker} href={companyHref(c.ticker, { view, asOf }) as never} aria-current={c.current ? 'true' : undefined} data-testid="security-chip"
               title={c.primary ? t('primary') : undefined}
-              className={`num inline-flex items-center rounded-full border px-2.5 py-0.5 no-underline ${c.current ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--text-dim)]'}`}>
+              className={`num inline-flex min-h-11 sm:min-h-0 items-center rounded-full border px-2.5 py-0.5 no-underline ${c.current ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--text-dim)]'}`}>
               {c.ticker}{c.current ? ' ◉' : ''}
             </Link>
           ))}
@@ -108,21 +128,7 @@ export function CompanyHeader({ data, view, asOf, locale }: { data: CompanyPageD
         {issuer?.redirected_from && <p className="text-xs text-[var(--warn)]">{t('redirected', { name: names.title })}</p>}
       </div>
 
-      <div className="flex flex-col items-start gap-2 sm:ml-auto sm:items-end">
-        {data.streams.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs text-[var(--text-dim)]">{t('streamLabel')}</span>
-            <div role="group" aria-label={t('streamLabel')} className="inline-flex overflow-hidden rounded-md border border-[var(--border)] text-xs">
-              {data.streams.map((s) => (
-                <Link key={s.market} href={companyHref(s.ticker, { view, asOf }) as never} aria-current={s.market === data.market ? 'true' : undefined}
-                  className={`px-2.5 py-1 no-underline ${s.market === data.market ? 'bg-[var(--accent-wash)] text-[var(--accent)]' : 'text-[var(--text-dim)]'}`}>
-                  {s.market === 'US' ? t('streamUS') : t('streamCN')}
-                </Link>
-              ))}
-            </div>
-            <span className="text-[11px] text-[var(--text-dim)]">{t('streamHint')}</span>
-          </div>
-        )}
+      <div className="flex min-w-0 flex-col items-start gap-2">
         {issuer && data.market && (
           <Card className="grid grid-cols-2 gap-x-5 gap-y-2 px-3.5 py-2.5 text-xs sm:grid-cols-3">
             {cov ? (

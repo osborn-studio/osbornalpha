@@ -1,6 +1,8 @@
 'use client';
 // Metrics view + valuation-model area (plan 2026-11-06 Task 13; spec §5.4, §5.10; canvas Metrics).
 // Reads only the company metrics proxy; stale → "pending recomputation", never "not produced" or old values.
+import { StateCell } from '@/components/research-ui';
+import { naturalKey } from './disclosure-drawer-adapter';
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Tag } from '@/components/ui';
@@ -39,7 +41,7 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
   const rowSub = (row: MetricGridRow) => (row.inputUnit === null ? row.metric : `${row.metric} · ${row.inputUnit} · ${row.basis}`);
 
   function open(e: MetricEntry, c: MetricCol) {
-    if (e.cell.kind === 'withheld') { drawers.open({ kind: 'withheld', reason: e.cell.reason, title: `${name(e.metric)} · ${c.periodEnd} ${dur(c.duration)}` }); return; }
+    if (e.cell.kind === 'withheld') { drawers.open({ kind: 'withheld', id: naturalKey({concept: e.metric, periodStart: e.periodStart, periodEnd: e.periodEnd, unit: e.inputUnit}), reason: e.cell.reason, title: `${name(e.metric)} · ${c.periodEnd} ${dur(c.duration)}` }); return; }
     drawers.open({ kind: 'formula', metric: e.metric, cell: e.cell, periodLabel: `${c.periodEnd} ${dur(c.duration)}`, computedAt: e.computedAt, computedAtKind: e.computedAtKind, basedOnRev: e.basedOnRev, scaleExp: exp });
   }
 
@@ -81,8 +83,8 @@ export function MetricsView({ ticker, market, asOf }: { ticker: string; market: 
                       return (
                         <td key={c.key} className="num whitespace-nowrap px-3 py-1.5 text-right">
                           <button type="button" onClick={() => open(e, c)} title={text === null ? (pending ? tst('cellPendingTitle') : tst('cellIncompleteTitle')) : undefined}
-                            className={`${text === null ? 'text-[var(--text-dim)]' : 'underline decoration-dotted underline-offset-4 hover:text-[var(--accent)]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]`}>
-                            {text ?? (pending ? tst('cellPending') : tst('cellIncomplete'))}
+                            className={`min-h-11 sm:min-h-0 ${text === null ? 'text-[var(--text-dim)]' : 'underline decoration-dotted underline-offset-4 hover:text-[var(--accent)]'} focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]`}>
+                            {e.cell.kind === 'withheld' ? <StateCell state="withheld" detail={pending ? tst('cellPending') : tst('cellIncomplete')} /> : text}
                           </button>
                         </td>
                       );

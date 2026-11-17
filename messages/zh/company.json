@@ -9,7 +9,8 @@
     "ai": "模型观点（未校准）",
     "signals": "信号",
     "holdings": "持仓",
-    "ariaLabel": "公司页视图"
+    "ariaLabel": "公司页视图",
+    "more": "更多"
   },
   "header": {
     "marketCN": "A 股",
@@ -49,7 +50,10 @@
     "inWatchlist": "已在自选",
     "replayError": "回放日最近文件读取失败（{code}）",
     "freshnessError": "数据状态读取失败（{code}）",
-    "adminTag": "管理员"
+    "adminTag": "管理员",
+    "scope": "本页只陈述该发行人已披露的事实；判断单独放在“判断”页签。",
+    "breadcrumbResearch": "公司研究",
+    "breadcrumbDirectory": "目录"
   },
   "replay": {
     "button": "回放 asOf ▾",
@@ -192,7 +196,15 @@
     "openUnitHistory": "打开 {unit} 的披露历史",
     "selectEvidence": "查看该行证据",
     "withheldRow": "未显示：{reason}",
-    "retry": "重试"
+    "retry": "重试",
+    "issuer": "发行人 / 代码",
+    "concept": "概念",
+    "currentDisclosure": "现行",
+    "supersededDisclosure": "已被取代",
+    "citationEdgar": "该值因披露引用门禁通过（edgar）而显示；此处不声明许可条款。",
+    "citationLinked": "该值因披露引用门禁通过（linked）而显示；此处不声明许可条款。",
+    "citationUnknown": "引用门禁状态不可用。",
+    "citationAttribution": "来源归属以所选披露与证据快照为准。"
   },
   "metrics": {
     "materialized": "读物化表 · basedOnRev {rev} · formula_version {version}",
@@ -292,10 +304,10 @@
   },
   "judgments": {
     "emptyTitle": "判断层（F4）尚未上线",
-    "empty": "这里只渲染 F4 登记、可结算的判断卡。不显示 recommendations。",
+    "empty": "这里只渲染 F4 登记、可结算的判断卡。开启前本页签保留，内容为这段说明。",
     "none": "该发行人暂无判断卡。",
-    "replayFailed": "回放读取失败：响应 view ≠ as_known 或 asOf 与请求不符，不渲染判断区。",
-    "loadFailed": "判断读取失败（{code}）。",
+    "replayFailed": "回放读取失败",
+    "loadFailed": "判断读取失败（{code}）",
     "uncalibrated": "未校准",
     "calibrated": "已校准",
     "noPercent": "不显示百分比（{calibration}）",
@@ -311,7 +323,9 @@
     "calibrationLink": "校准记录 ↗",
     "inputs": "证据输入",
     "inputFallback": "输入 {n}",
-    "retrospective": "补登记"
+    "retrospective": "补登记",
+    "loadFailedBody": "页头与事实页签照常可用，不回退到其他数据源。",
+    "replayFailedBody": "响应的视图或截至日与请求不符，不渲染判断区。"
   },
   "tracking": {
     "slotTitle": "跟踪时间线",
@@ -417,7 +431,8 @@
     "loading": "加载中…",
     "invalidQ": "只能输入字母、数字、空格、. 或 -（最多 24 个字符）；未发起查询。",
     "freshnessUnavailable": "新鲜度不可用",
-    "moreTickers": "另有代码：{list}"
+    "moreTickers": "另有代码：{list}",
+    "scope": "已覆盖发行人的披露事实目录；只列出库里已有的公司。"
   },
   "sourceDrawer": {
     "title": "来源文件",
@@ -448,6 +463,20 @@
     "download": "下载副本",
     "signIn": "登录后可下载副本。",
     "downloadFailed": "无法下载副本。",
-    "citationMissing": "引用不可用。"
+    "citationMissing": "引用不可用。",
+    "snippet": "引用片段",
+    "visibility": "可见性",
+    "publicDocument": "公开文档",
+    "rightsUnknown": "此响应未提供文档许可条款。",
+    "attribution": "来源归属以关联文档为准。"
+  },
+  "chain": {
+    "industry": "02 行业",
+    "foreign": "04 外资研报",
+    "reports": "04 覆盖它的研报",
+    "error": "读取失败",
+    "retry": "重试",
+    "loading": "加载中",
+    "industryLink": "← 02 行业："
   }
 }
