@@ -1,6 +1,6 @@
 // src/lib/broker-research/db.ts
 // BrokerResearchDb over Supabase (spec §4.14, plan §共享契约). Private methods use the service-role
-// client (tables + RPCs of 20261125091000); public methods use the anon client and read only the
+// client (tables + RPCs of 20261201091000); public methods use the anon client and read only the
 // §4.11 views. Every write that needs a lock, a lease, server time, an attempts counter or a hash
 // is an RPC; plain CRUD goes through .from() (the A1 triggers still guard it). numeric columns are
 // selected `::text` so decimals never pass through JS numbers; timestamps are normalised to

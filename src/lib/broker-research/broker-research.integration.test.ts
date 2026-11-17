@@ -18,7 +18,7 @@ import type {CorrectedValue,OutboxEvent} from './types';
 import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMULA_VERSION} from './versions';
 
 const enabled=!!process.env.S4_TEST_STATE;
-const M1='supabase/migrations/20261125090000_broker_research.sql';
+const M1='supabase/migrations/20261201090000_broker_research.sql';
 const TABLES=['broker_research_settings','broker_report_licences','broker_report_upload_intents','broker_report_documents','broker_report_runs','broker_research_reports','broker_report_targets','broker_report_target_overrides','broker_report_fields','broker_report_snippets','broker_report_summaries','broker_report_publications','broker_report_rule_receipts','broker_purge_steps','research_institutions','research_rating_scales','research_analysts','broker_report_analysts','broker_report_access_log','broker_eval_receipts','broker_outbox','broker_storage_writes'];
 
 // Same replay policy as facts.integration.test.ts (not exported there).
@@ -384,7 +384,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
 
 // ---- shared by blocks 2–4 (A2 writes these; A3/A5 reuse them). Each block's beforeAll rebinds
 // the pool; describes run sequentially within this file, so the module-level bindings are safe.
-const M2='supabase/migrations/20261125091000_broker_research_functions.sql';
+const M2='supabase/migrations/20261201091000_broker_research_functions.sql';
 let pool:Pool;let s:ReturnType<typeof seeds>;
 const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});s=seeds(pool);};
  const J=(v:unknown)=>JSON.stringify(v);
@@ -964,7 +964,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
 });
 
 describe.skipIf(!enabled)('A3 public views under the real anon and authenticated roles',()=>{
- const M3='supabase/migrations/20261125092000_broker_research_views.sql';
+ const M3='supabase/migrations/20261201092000_broker_research_views.sql';
  const VIEWS=['broker_reports_public_v','broker_report_targets_public_v','broker_report_citations_v','broker_report_snippets_public_v','broker_report_summaries_public_v','broker_analysts_public_v','broker_rating_history_v','broker_spread_latest_v','research_institutions_public_v','research_rating_scales_public_v'];
  let unlock:(()=>Promise<void>)|undefined;
  beforeAll(async()=>{bind();unlock=await lockSettings(pool);},60000);        // toggles public_enabled; ready() sets the gold hash
