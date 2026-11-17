@@ -18,6 +18,7 @@ import { IndicatorTable } from './IndicatorTable';
 import { strategyLinkTabs } from './strategy-links';
 // /MACRO-P3
 import { MacroJudgmentSlot } from './MacroJudgmentSlot';
+import { AllocationTemplateCard } from './AllocationTemplateCard';
 import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
 import { SourceFooter } from './SourceFooter';
 import { useMacroOverview } from './use-macro-overview';
@@ -129,6 +130,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
           {env && <><a href="#macro-updates">{t('changes.title')}</a><a href="#macro-indicators">{t('tabs.indicators')}</a><a href="#macro-sources">{t('sources.title')}</a></>}
         </nav><div className="macro-overview-main">
       {judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
+      {!judgmentsEnabled && <AllocationTemplateCard current={null} />}
 
       {tab === 'overview' && env && (
         <div className="space-y-3">

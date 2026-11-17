@@ -27,17 +27,22 @@ export interface FredFetchOptions{fetch?:typeof fetch;signal?:AbortSignal;now?:(
 export const fredCsvUrl=(code:string,cosd=FRED_COSD)=>`https://${FRED_HOST}/graph/fredgraph.csv?id=${encodeURIComponent(code)}&cosd=${cosd}`;
 /**
  * cosd for one run (`backfilled` = the series' full backfill is complete, i.e. persisted eligible data reaches back to
- * FRED_BACKFILL_DONE_BY — not merely that some row exists): a series without a completed backfill is fetched in full from FRED_COSD from FRED_COSD (spec §4.4); afterwards a recent
+ * FRED_BACKFILL_DONE_BY (or its later first-period threshold): a series without a completed backfill is fetched in full from its first period or FRED_COSD (spec §4.4); afterwards a recent
  * window keeps the daily run small — daily series 400 days, monthly/quarterly 6 years (BLS revises seasonal
  * factors 5 years back each February). Never earlier than FRED_COSD.
  */
-export function fredCosdFor(period:PeriodKind,backfilled:boolean,today:string):string{
- if(!backfilled)return FRED_COSD;
+export function fredCosdFor(period:PeriodKind,backfilled:boolean,today:string,firstPeriod?:string):string{
+ if(!backfilled)return firstPeriod&&firstPeriod>FRED_COSD?firstPeriod:FRED_COSD;
  const d=new Date(`${today}T00:00:00Z`);
  if(!Number.isFinite(d.getTime()))throw new Error('invalid_today');
  if(period==='day')d.setUTCDate(d.getUTCDate()-400);else{d.setUTCDate(1);d.setUTCFullYear(d.getUTCFullYear()-6);}
  const iso=d.toISOString().slice(0,10);
  return iso<FRED_COSD?FRED_COSD:iso;
+}
+/** The latest date by which eligible history must begin: 105 days after a later first period covers a quarterly first period. */
+export function fredBackfillDoneBy(firstPeriod?:string):string{
+ if(!firstPeriod||firstPeriod<=FRED_COSD)return FRED_BACKFILL_DONE_BY;
+ const d=new Date(`${firstPeriod}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+105);return d.toISOString().slice(0,10);
 }
 const defaultSleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 const retryable=(e:FredFetchError)=>e.code==='fetch_timeout'||e.code==='fetch_network'||e.code==='fetch_http_5xx'||e.code==='fetch_http_retryable';

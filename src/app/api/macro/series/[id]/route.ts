@@ -2,7 +2,10 @@
 // GET /api/macro/series/[id]?from&to&asOf&transform (spec §3.3, §8): catalog-whitelisted history,
 // at most 600 points, asOf ⇒ available_at ≤ asOf, transform raw | yoy (declared yoy derivation only)
 // | diff (exact decimal). cycles/events/assetsByCycle are placeholders filled by Task 14.
-import {CATALOG_VERSION,MACRO_CATALOG,catalogById} from '@/lib/macro/catalog';
+import type {AnySeriesDef} from '@/lib/macro/display-catalog';
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
+import {DISPLAY_CATALOG_VERSION} from '@/lib/macro/display-catalog';
+import {ALL_SERIES,isDisplayOnly,seriesById} from '@/lib/macro/series-registry';
 import {CYCLES_VERSION} from '@/lib/macro/cycles';
 import {MacroDbError} from '@/lib/macro/db';
 import {EVENTS_VERSION} from '@/lib/macro/events';
@@ -11,7 +14,7 @@ import {subtract} from '@/lib/macro/decimal';
 import {ParamError,asOfParam,dateParam,enumParam,errorResponse,failureResponse,macroRouteDeps,okJson,paramErrorResponse,readParams,requireSessionUser,shaOfRetrievals} from '@/lib/macro/route-helpers';
 import {seriesExtras} from '@/lib/macro/series-extras';
 import {resolveClosure} from '@/lib/macro/views';
-import type {MacroSeriesDef,ObservationRow} from '@/lib/macro/types';
+import type {ObservationRow} from '@/lib/macro/types';
 
 export const dynamic='force-dynamic';
 const PARAMS=['from','to','asOf','transform'] as const;
@@ -25,7 +28,7 @@ const dayShift=(d:string,days:number)=>new Date(Date.parse(`${d}T00:00:00Z`)+day
 export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const auth=await requireSessionUser();if(!auth.ok)return auth.response;
  const {id}=await params;
- const def=catalogById(id);
+ const def=seriesById(id);
  if(!def)return errorResponse('unknown_series','series is not in the catalog',404);
  let q:{from?:string;to?:string;asOf?:string;transform:typeof TRANSFORMS[number]};
  try{
@@ -33,9 +36,9 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
   q={from:dateParam(p,'from'),to:dateParam(p,'to'),asOf:asOfParam(p),transform:enumParam(p,'transform',TRANSFORMS,'raw')};
   if(q.from&&q.to&&q.from>q.to)throw new ParamError('from');
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
- let source:MacroSeriesDef=def.aliasOf?(catalogById(def.aliasOf)??def):def;
+ let source:AnySeriesDef=def.aliasOf?(seriesById(def.aliasOf)??def):def;
  if(q.transform==='yoy'){
-  const y=MACRO_CATALOG.find(d=>(d.derive?.kind==='yoy_from_index'||d.derive?.kind==='index_minus_100')&&d.derive.from===source.id);
+  const y=ALL_SERIES.find(d=>(d.derive?.kind==='yoy_from_index'||d.derive?.kind==='index_minus_100')&&d.derive.from===source.id);
   if(!y)return errorResponse('invalid_parameter:transform','series declares no yoy derivation',400);
   source=y;
  }
@@ -45,7 +48,7 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  // Task 14: detail extras (spec §3.3, §6). Inactive series have no observations, so their extras are empty.
  const empty={cycles:[],insufficient:[],events:[],calendar:[],assetsByCycle:[],eventsVersion:EVENTS_VERSION,cyclesVersion:CYCLES_VERSION};
  const exposed=macroJudgmentsEnabled()?def:(({weight:_w,...rest})=>rest)(def);
- const base={catalogVersion:CATALOG_VERSION,def:exposed,seriesRead:source.id,transform:q.transform,provenance};
+ const base={catalogVersion:isDisplayOnly(def.id)?DISPLAY_CATALOG_VERSION:CATALOG_VERSION,def:exposed,seriesRead:source.id,transform:q.transform,provenance};
  if(source.status!=='active')return okJson({...base,...empty,provenance:{...provenance,ancestors:[]},observations:[]});
  try{
   const deps=macroRouteDeps();

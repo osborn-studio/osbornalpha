@@ -1,7 +1,7 @@
 // src/lib/macro/providers/fred.test.ts
 import {createHash} from 'node:crypto';
 import {describe,expect,it,vi} from 'vitest';
-import {FRED_BACKOFF_MS,FredFetchError,fetchFredCsv,fredCosdFor,fredCsvUrl} from './fred';
+import {FRED_BACKOFF_MS,FredFetchError,fetchFredCsv,fredBackfillDoneBy,fredCosdFor,fredCsvUrl} from './fred';
 
 const CSV='observation_date,DFF\n2026-10-01,4.10\n';
 const ok=(body=CSV,headers:Record<string,string>={'content-type':'application/csv'})=>new Response(body,{status:200,headers});
@@ -81,6 +81,17 @@ describe('fetchFredCsv error codes and content type',()=>{
 });
 
 describe('fredCosdFor',()=>{
+ it('fredCosdFor floors the full window at firstPeriod and ignores it once backfilled',()=>{
+  expect(fredCosdFor('day',false,'2026-11-06','2002-12-18')).toBe('2002-12-18');
+  expect(fredCosdFor('day',false,'2026-11-06','1999-01-01')).toBe('2000-01-01');
+  expect(fredCosdFor('day',true,'2026-11-06','2002-12-18')).toBe('2025-10-02');
+  expect(fredCosdFor('day',false,'2026-11-06')).toBe('2000-01-01');
+ });
+ it('fredBackfillDoneBy: 105 days after the series start, never before FRED_BACKFILL_DONE_BY',()=>{
+  expect(fredBackfillDoneBy()).toBe('2000-04-15');
+  expect(fredBackfillDoneBy('2002-12-18')).toBe('2003-04-02');
+  expect(fredBackfillDoneBy('1999-06-01')).toBe('2000-04-15');
+ });
  it('backfills from 2000-01-01 without data and uses a recent window afterwards',()=>{
   expect(fredCosdFor('day',false,'2026-11-06')).toBe('2000-01-01');
   expect(fredCosdFor('day',true,'2026-11-06')).toBe('2025-10-02');

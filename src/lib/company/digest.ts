@@ -7,8 +7,10 @@
 // attempt failed (backoff in SQL). Selection: incremental 80 % (digestDue) + sweep 20 % (sweepDue,
 // never swept, older than 7 days, or failed after backoff), deduped, interleaved 4:1 so a deadline still leaves sweeps their share; full =
 // every scope row (script). Batch counters are per STREAM and always balance
-// (fetched = inserted + duplicates + versioned + quarantined + failed); freshness ok = no failed stream
-// in this run and no failed stream in backoff (CompanyDb.backlog). code_version missing → refuse apply.
+// (fetched = inserted + duplicates + versioned + quarantined + failed); evidence writes use bounded
+// chunks with a fence on every call and prune last; failed writes never prune. Freshness tolerates
+// max(1, floor(active streams / 100)) failed streams, unless marking a failure failed.
+// code_version missing → refuse apply.
 import {randomUUID} from 'node:crypto';
 import type {TableClient} from '@/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '@/lib/dq/batches';
@@ -25,13 +27,14 @@ import {EVENTS_VERSION,deriveIssuerEvents} from './events';
 import {buildEvidenceIndex} from './evidence-index';
 import type {ParsedSnapshotCache,SnapshotObjectStore} from './evidence-index';
 import {CompanyDbError,EVIDENCE_INDEX_VERSION} from './types';
-import type {CompanyDb,ReadSnapshotOptions,ReadSnapshotResult,ReplaceResult} from './types';
+import type {CompanyDb,DigestBacklog,ReadSnapshotOptions,ReadSnapshotResult,ReplaceResult} from './types';
 
 export const DIGEST_PRODUCER='company-digest';
 export const DIGEST_DATASET=DATASETS.company.events;
 export const DEFAULT_DIGEST_LIMIT=200;
 export const SWEEP_AGE_MS=7*86_400_000;
 export const STREAM_MIN_MS=30_000;
+export const backlogTolerance=(activeStreams:number):number=>Math.max(1,Math.floor(activeStreams/100));
 export type ReadSnapshotFn=(issuer:string,market:Market,opts:ReadSnapshotOptions)=>Promise<ReadSnapshotResult>;
 export interface DigestDeps{
  db:CompanyDb;tables:TableClient;readSnapshot:ReadSnapshotFn;
@@ -45,7 +48,7 @@ export class DigestError extends Error{constructor(public code:'code_version_mis
 export interface PlannedStream{issuerId:string;market:Market;stateRev:number;sweep:boolean;source:'incremental'|'sweep'|'full'}
 export type StreamOutcomeKind='changed'|'unchanged'|'skipped_stale'|'skipped_unknown'|'failed'|'planned';
 export interface StreamOutcome{issuerId:string;market:Market;sweep:boolean;outcome:StreamOutcomeKind;code?:string;attemptId:number|null;basedOnRev:number|null;events:number;result:ReplaceResult|null;evidence:{indexed:number;facts:number}|null;retried:boolean;markFailedError?:boolean;/** first 200 chars of the cause (batch errors only; the cron receipt strips it) */message?:string}
-export interface DigestDetail{events:ReplaceResult;attempted:number;succeeded:number;failed:number;skippedStale:number;skippedUnknown:number;swept:number;idle:boolean;backlogFailed:number|null;evidence:{indexed:number;facts:number}}
+export interface DigestDetail{events:ReplaceResult;attempted:number;succeeded:number;failed:number;skippedStale:number;skippedUnknown:number;swept:number;idle:boolean;backlogFailed:number|null;backlogTolerance:number|null;activeStreams:number|null;degraded:boolean;failedStreams:DigestBacklog['streams'];evidence:{indexed:number;facts:number}}
 export interface DigestReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];streams:StreamOutcome[];idle:boolean;detail:DigestDetail}
 
 const cmp=(a:string,b:string)=>a<b?-1:a>b?1:0;
@@ -174,7 +177,7 @@ export async function runCompanyDigest(deps:DigestDeps,opts:DigestOptions):Promi
  if(!dryRun)({batchId}=await startBatch(deps.tables,{producer:DIGEST_PRODUCER,dataset:DIGEST_DATASET,
   toolVersions:{events:EVENTS_VERSION,mappingGen:String(MAPPING_GEN),formulaVersion:FORMULA_VERSION,evidenceIndex:EVIDENCE_INDEX_VERSION},codeVersion:deps.codeVersion!,triggeredBy:opts.triggeredBy??'script'}));
  const ctx:Ctx={batchId,today,now,dryRun};
- const detailOf=(backlogFailed:number|null):DigestDetail=>({events:{...events},attempted,succeeded,failed,skippedStale,skippedUnknown,swept,idle,backlogFailed,evidence:{...evidence}});
+ const detailOf=(backlog:DigestBacklog|null):DigestDetail=>({events:{...events},attempted,succeeded,failed,skippedStale,skippedUnknown,swept,idle,backlogFailed:backlog?.failedStreams??null,backlogTolerance:backlog?backlogTolerance(backlog.activeStreams):null,activeStreams:backlog?.activeStreams??null,degraded:(backlog?.failedStreams??0)>0||failed>0,failedStreams:backlog?.streams??[],evidence:{...evidence}});
  try{
   const planned=await selectStreams(deps,opts,now);idle=planned.length===0;
   for(let i=0;i<planned.length;i++){
@@ -197,11 +200,11 @@ export async function runCompanyDigest(deps:DigestDeps,opts:DigestOptions):Promi
      if(o.markFailedError)errors.push({code:'mark_failed_error',key});
    }
   }
-  if(dryRun)return {batchId:null,status:'dry_run',counts,errors,streams,idle,detail:detailOf(0)};
-  const backlogFailed=(await deps.db.backlog()).failedStreams;
-  const detail=detailOf(backlogFailed);
+  if(dryRun)return {batchId:null,status:'dry_run',counts,errors,streams,idle,detail:{...detailOf(null),backlogFailed:0}};
+  const backlog=await deps.db.backlog();
+  const detail=detailOf(backlog);
   const status=await finishBatch(deps.tables,batchId!,{counts,errors},deps.now());
-  await recordAttempt(deps.tables,DIGEST_DATASET,{ok:failed===0&&backlogFailed===0,cadence:'daily',now:deps.now(),detail:{...detail}});
+  await recordAttempt(deps.tables,DIGEST_DATASET,{ok:backlog.failedStreams<=backlogTolerance(backlog.activeStreams)&&!streams.some(s=>s.markFailedError),cadence:'daily',now:deps.now(),detail:{...detail}});
   return {batchId,status,counts,errors,streams,idle,detail};
  }catch(e){
   if(dryRun)throw e;

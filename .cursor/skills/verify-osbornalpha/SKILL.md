@@ -1,6 +1,6 @@
 ---
 name: verify-osbornalpha
-description: Drive the real osbornalpha (stock-monitor) Next.js app locally and prove behavior with evidence — web UI over headless Chrome/CDP (landing + i18n, guest watchlist search/add, Portfolio K-line) and its HTTP APIs (/api/quote, /api/search, auth gate). Use when you changed osbornalpha and need to show a user-facing feature works, when reviewing a PR head, or when something "looks off" in the running app.
+description: Drive the real osbornalpha (stock-monitor) Next.js app locally and prove behavior with evidence — web UI over headless Chrome/CDP (landing + i18n, guest watchlist search/add, Portfolio K-line, guest Macro Workbench allocation template) and its HTTP APIs (/api/quote, /api/search, auth gate). Use when you changed osbornalpha and need to show a user-facing feature works, when reviewing a PR head, or when something "looks off" in the running app.
 ---
 
 # verify-osbornalpha
@@ -31,6 +31,7 @@ What it does (see `scripts/launch.sh`):
 3. Starts `npx next dev -p $OSB_PORT` with explicit Supabase environment values that take precedence over checkout dotenv files:
    - **guest** mode: empty URL and keys disable Supabase. This turns off the middleware auth gate and `(app)/layout.tsx` guard (by design for local dev). `/api/search` serves `developer-fallback` results from `MOCK_UNIVERSE`, and the watchlist lives in browser `localStorage`. Market data (`/api/quote`, `/api/kline`) is **live** from Eastmoney/Sina/Tencent, so outbound internet is needed.
    - **gate** mode: `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54399` (nothing listens there) plus a dummy anon key. The service-role key is empty in both modes. Every request is therefore "signed out", which turns the real middleware gate on without a real Supabase project.
+   - both modes also pin `MACRO_JUDGMENTS_ENABLED=` (empty), so `/macro` always shows the static allocation template card rather than the DB-backed judgment slot.
 4. Starts headless Chrome with a throwaway profile in `$OSB_RUN_DIR/chrome-profile`, CDP on `127.0.0.1:$OSB_CDP_PORT`. Do not use Chrome's one-shot `--screenshot` mode, which hangs on this kind of box. Take every screenshot over CDP.
 5. Creates the evidence dir `$OSB_EVIDENCE_ROOT/verify-<YYYYmmdd-HHMMSS>/` (default root `~/osbornalpha-verify-evidence`) and records it in `$OSB_RUN_DIR/evidence_dir`.
 
@@ -57,7 +58,7 @@ node $S/drive.mjs all                      # every journey valid for the current
 node $S/drive.mjs watchlist stock          # a subset
 ```
 
-Journeys (guest: all five; gate: landing, quote-api, auth-gate). Each is a feature file in `features/`:
+Journeys (guest: all six; gate: landing, quote-api, auth-gate). Each is a feature file in `features/`:
 
 | journey | feature file | harness |
 |---|---|---|
@@ -66,6 +67,7 @@ Journeys (guest: all five; gate: landing, quote-api, auth-gate). Each is a featu
 | `stock` | `features/stock-detail.md` | CDP browser |
 | `quote-api` | `features/market-data-api.md` | HTTP |
 | `auth-gate` | `features/auth-gate.md` | HTTP + CDP browser |
+| `macro` | `features/macro-workbench.md` | CDP browser (guest only) |
 
 Harness facts:
 - `drive.mjs` loads `@playwright/test` from the repo's `node_modules` and calls `chromium.connectOverCDP('http://127.0.0.1:$OSB_CDP_PORT')`. Each journey opens a **fresh browser context**, which is a brand-new guest with empty `localStorage`.
@@ -112,7 +114,7 @@ Env overrides: `OSB_PORT`, `OSB_CDP_PORT`, `OSB_RUN_DIR`, `OSB_EVIDENCE_ROOT`, `
 
 ## Limits (what this skill cannot prove locally)
 
-- Real sign-in/registration, Company Research data at `/stock/[ticker]` (guest only proves its fail-closed issuer-unavailable state), signed-in product data (`/macro`, portfolio positions, `/research/*` with data, `/admin` incl. `/admin/dq`), Supabase-backed watchlist sync, the production security-master search, Stripe, and LLM/copilot features all need real Supabase/LLM/Stripe credentials. The `e2e/authed.spec.ts` and `e2e/research-setup.spec.ts` suites cover some of this when `E2E_EMAIL`/`E2E_PASSWORD` are provided. Never put those values in files.
+- Real sign-in/registration, Company Research data at `/stock/[ticker]` (guest only proves its fail-closed issuer-unavailable state), signed-in product data (`/macro` data: investment clock, judgment slot, indicators, Fed liquidity / CN policy-rate series; portfolio positions, `/research/*` with data, `/admin` incl. `/admin/dq`), Supabase-backed watchlist sync, the production security-master search, Stripe, and LLM/copilot features all need real Supabase/LLM/Stripe credentials. The `e2e/authed.spec.ts` and `e2e/research-setup.spec.ts` suites cover some of this when `E2E_EMAIL`/`E2E_PASSWORD` are provided. Never put those values in files.
 - Disclosure facts / issuer public reads (`/api/facts/[ticker]`, `/api/facts/[ticker]/metrics`, `/api/filings/[ticker]`, `/api/entities/resolve`) need a migrated Supabase with issuers + financial facts seeded (see `docs/runbooks/data-foundation.md`). Guest/gate launch strips or fakes Supabase, so `getAnonSupabase()` fails closed — do not invent a local drive. #104 enabled the CN sync path (Tushare fixtures, cron) but did not make these reads driveable locally. Deprecated `/api/financials/[ticker]` needs `TUSHARE_TOKEN` and points successors at `/api/facts/{ticker}`. Ops cron `POST /api/cron/facts-sync` (US+CN) needs the cron secret and is not a user journey.
 - DataGateway/Wind quotes need `DATAGATEWAY_*`. Without them the quote chain falls back to Eastmoney/Sina/Tencent, which is what these journeys exercise.
 - Market data is live, so prices differ run to run. Checks assert shape and presence, not values.

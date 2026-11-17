@@ -53,6 +53,32 @@ describe('deriveSeries month_end',()=>{
  });
 });
 
+describe('deriveSeries month_end over weekly Wednesday inputs',()=>{
+ const me=def('US_WALCL',{kind:'month_end',from:'US_WALCL_W'});
+ it('takes the last Wednesday observation of each completed month; a month whose last Wednesday is early is not padded',()=>{
+  const w=['2026-09-02','2026-09-09','2026-09-16','2026-09-23','2026-09-30','2026-10-07','2026-10-14','2026-10-21','2026-10-28','2026-11-04'].map((d,i)=>obs('US_WALCL_W',d,String(6700000+i)));
+  const out=deriveSeries(me,w,{now:new Date('2026-11-06T05:30:00Z')});
+  expect(out.map(o=>[o.period_end,o.value_text])).toEqual([['2026-09-30','6700004'],['2026-10-31','6700008']]);
+  expect(out[1].derived_from).toEqual([w[8].observation_id,w[9].observation_id]); // Oct 28 + witness Nov 4
+ });
+ it('a month with no observation produces no row',()=>{
+  const w=[obs('US_WALCL_W','2026-08-26','1'),obs('US_WALCL_W','2026-10-07','2'),obs('US_WALCL_W','2026-11-04','3')];
+  expect(deriveSeries(me,w,{now:new Date('2026-11-06T05:30:00Z')}).map(o=>o.period_end)).toEqual(['2026-08-31','2026-10-31']);
+ });
+});
+
+describe('deriveSeries month_end over LPR quote dates (event source)',()=>{
+ const lpr=def('CN_LPR_1Y',{kind:'month_end',from:'CN_LPR_1Y_Q'},'month','immutable');
+ it('two quotes in one month → the later one; a month without a quote → no row; the current month → no row; available_at = witness',()=>{
+  const a=obs('CN_LPR_1Y_Q','2026-08-20','3','2026-08-20T01:30:00.000Z'),b=obs('CN_LPR_1Y_Q','2026-08-25','3.1','2026-08-25T01:30:00.000Z'),c=obs('CN_LPR_1Y_Q','2026-10-20','3.1','2026-10-20T01:30:00.000Z'),d=obs('CN_LPR_1Y_Q','2026-11-20','3','2026-11-20T01:30:00.000Z');
+  const out=deriveSeries(lpr,[a,b,c,d],{now:new Date('2026-11-21T05:30:00Z')});
+  expect(out).toEqual([
+   {series_id:'CN_LPR_1Y',period_end:'2026-08-31',value_text:'3.1',available_at:c.available_at,revisable:false,derived_from:[b.observation_id,c.observation_id],transform:'month_end@1'},
+   {series_id:'CN_LPR_1Y',period_end:'2026-10-31',value_text:'3.1',available_at:d.available_at,revisable:false,derived_from:[c.observation_id,d.observation_id],transform:'month_end@1'},
+  ]);
+ });
+});
+
 describe('deriveSeries yoy_from_index',()=>{
  const yoy=def('US_CPI_YOY',{kind:'yoy_from_index',from:'US_CPI_INDEX'});
  it('computes (cur/prev − 1) × 100 in decimals with available_at = max of both inputs',()=>{
