@@ -9,7 +9,18 @@ const enabled=!!process.env.S4_TEST_STATE;
 type FactSpec={filing_id:string;fact_id?:string;concept?:string;period_start?:string|null;period_end?:string;duration?:string;value?:string;unit?:string;available_date?:string};
 describe.skipIf(!enabled)('read_facts_batch PG17 parity',()=>{
  let admin:Pool;
- const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
+ const RETRYABLE=new Set(['55P03','40P01']);
+ // Each q call is one autocommit statement; failed attempts leave no changes, so retrying is safe.
+ const q=async(text:string,values:unknown[]=[]):Promise<Record<string,any>[]>=>{
+  for(let attempt=1;;attempt++){
+   try{return (await admin.query(text,values)).rows as Record<string,any>[];}
+   catch(e){
+    const code=(e as {code?:string}).code;
+    if(attempt>=10||!code||!RETRYABLE.has(code))throw e;
+    await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
+   }
+  }
+ };
  const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
  const issuer=async()=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Facts Test')`,[id]);return id;};
  const batch=async()=>{const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'facts-sync','facts.us')`,[id]);return id;};
@@ -70,4 +81,64 @@ describe.skipIf(!enabled)('read_facts_batch PG17 parity',()=>{
   expect(await readBatch(null,true)).toEqual([]);expect(await readBatch([],false)).toEqual([]);
   for(const role of ['anon','authenticated','service_role'])expect(await one(`select has_function_privilege($1,'public.read_facts_batch(uuid[],text,text[],date,boolean)','EXECUTE') v`,[role])).toBe(role==='service_role');
  });
+ const readSlice=(ids:(string|null)[]|null,history:boolean,from:string|null=null,to:string|null=null,durations:string[]|null=['12M'],concepts:string[]|null=['revenue','total_assets'])=>one(`select public.read_facts_batch_slice($1::uuid[],'US',$2::text[],'2030-01-01'::date,$3::date,$4::date,$5::boolean,$6::text[]) v`,[ids,concepts,from,to,history,durations]);
+ it('matches duration-filtered read_facts across history, bounds and duration selections',async()=>{
+  const iss=await issuer(),empty=await issuer(),b=await batch();await scope(iss);await claim(iss,b);
+  const run=await begin(iss,b),files:string[]=[];
+  // Duration is deliberately absent from the disclosure key. Filtering it before windows
+  // would incorrectly make the middle annual disclosure current and renumber the last one.
+  for(const [i,duration] of ['3M','12M','3M','12M'].entries()){
+   const available=`2024-0${i+1}-01`,f=await filing(run,available);files.push(f);
+   await stage(run,[{filing_id:f,period_start:'2023-01-01',duration,value:String(100+i),available_date:available},
+    {filing_id:f,concept:'total_assets',period_start:'2023-01-01',duration:i===3?'3M':'12M',value:String(200+i),available_date:available}]);
+  }
+  const f=files[0];
+  await stage(run,[{filing_id:f,period_start:'2021-01-01',period_end:'2021-12-31',duration:'12M',available_date:'2024-01-01'},
+   {filing_id:f,period_start:'2025-01-01',period_end:'2025-12-31',duration:'12M',available_date:'2024-01-01'}]);
+  await publish(run,files);
+  for(const history of [true,false])for(const [from,to] of [[null,null],['2023-01-01',null],[null,'2023-12-31'],['2023-01-01','2023-12-31']] as const)for(const durations of [['12M'],['12M','3M']]){
+   const out=await readSlice([iss,null,empty,iss],history,from,to,durations);
+   expect(out.map((e:{issuer_id:string})=>e.issuer_id)).toEqual([iss,empty].sort());
+   for(const {issuer_id,...env} of out){
+    const full=await one(`select public.read_facts($1,'US',$2::text[],'2030-01-01'::date,$3::date,$4::date,$5::boolean,null,false) v`,[issuer_id,['revenue','total_assets'],from,to,history]);
+    const rows=full.rows.filter((r:{duration:string})=>durations.includes(r.duration));
+    expect(env).toEqual({...full,rows,row_count:rows.length});
+   }
+  }
+  const annual=(await readSlice([iss],true,'2023-01-01','2023-12-31'))[0].rows.filter((r:{concept:string})=>r.concept==='revenue');
+  expect(annual.map((r:{disclosure_seq:number;is_current:boolean;is_revision:boolean})=>[r.disclosure_seq,r.is_current,r.is_revision])).toEqual([[2,false,true],[4,true,true]]);
+  expect((await readSlice([iss],false,'2023-01-01','2023-12-31'))[0].rows.every((r:{concept:string})=>r.concept==='revenue')).toBe(true);
+  const normalized=await pgFactsBatchReader(admin).readFactsBatch([iss],'US',{concepts:['revenue'],asOf:'2030-01-01',history:false,from:'2023-01-01',to:'2023-12-31',durations:['12M']});
+  const full=await pgFactsDb(admin).readFacts(iss,'US',{concepts:['revenue'],asOf:'2030-01-01',history:false,from:'2023-01-01',to:'2023-12-31'});
+  expect(normalized.get(iss)).toEqual({...full,rows:full.rows.filter(r=>r.duration==='12M')});
+ });
+ it('applies the cap after duration filtering, independently per issuer',async()=>{
+  const annual=await issuer(),quarterly=await issuer();
+  for(const [iss,duration] of [[annual,'12M'],[quarterly,'3M']]){
+   const b=await batch();await scope(iss);await claim(iss,b);const run=await begin(iss,b),f=await filing(run);
+   for(let start=0;start<10001;start+=500){
+    const rows:FactSpec[]=[];
+    for(let i=start;i<Math.min(start+500,10001);i++){
+     const end=new Date(Date.UTC(1990,0,1)+i*86400000).toISOString().slice(0,10);
+     rows.push({filing_id:f,period_start:'1989-01-01',period_end:end,duration,value:String(i)});
+    }
+    await stage(run,rows);
+   }
+   if(iss===quarterly)await stage(run,[{filing_id:f,period_start:'2023-01-01',duration:'12M'}]);
+   await publish(run,[f]);
+  }
+  for(const history of [true,false]){
+   const out=await readSlice([annual,quarterly],history);
+   expect(out.find((e:{issuer_id:string})=>e.issuer_id===annual)).toMatchObject({truncated:true,row_count:0,rows:[]});
+   expect(out.find((e:{issuer_id:string})=>e.issuer_id===quarterly)).toMatchObject({truncated:false,row_count:1,rows:[{duration:'12M'}]});
+  }
+ },120000);
+ it('guards slice inputs and grants only service_role execution',async()=>{
+  for(const durations of [null,[]])await expect(readSlice([],false,null,null,durations)).rejects.toMatchObject({code:'22023'});
+  for(const concepts of [null,[]])await expect(readSlice([],false,null,null,['12M'],concepts)).rejects.toMatchObject({code:'22023'});
+  await expect(readSlice(Array.from({length:201},()=>randomUUID()),false)).rejects.toMatchObject({code:'22023'});
+  expect(await readSlice(null,false)).toEqual([]);expect(await readSlice([],true)).toEqual([]);
+  for(const role of ['anon','authenticated','service_role'])expect(await one(`select has_function_privilege($1,'public.read_facts_batch_slice(uuid[],text,text[],date,date,date,boolean,text[])','EXECUTE') v`,[role])).toBe(role==='service_role');
+ });
+
 });

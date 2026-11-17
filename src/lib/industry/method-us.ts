@@ -36,3 +36,10 @@ export function expectedGridUs(codes:readonly string[],factsAsOf:string):Expecte
  return {codes:uniq,period_ends:usBuckets(factsAsOf),metrics:[...AGG_METRICS_US],cell_rule:'fiscal_year_bucket/1',membership_on:factsAsOf};
 }
 export const isFinancialCodeUs=(code:string)=>/^\d{4}$/.test(code)&&code>='6000'&&code<='6799';
+
+/** Transport window containing every current/prior fiscal-year pick in the grid. */
+export function usEnvelopeWindow(periodEnds:readonly string[]):{from:string;to:string}{
+ if(!periodEnds.length)throw new Error('invalid_us_window');
+ const years=periodEnds.map(pe=>{assertDay('periodEnd',pe);return Number(pe.slice(0,4));});
+ return {from:`${Math.min(...years)-1}-01-01`,to:`${Math.max(...years)}-12-31`};
+}
