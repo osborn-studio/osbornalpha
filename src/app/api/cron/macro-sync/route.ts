@@ -1,6 +1,4 @@
 // src/app/api/cron/macro-sync/route.ts
-// BIS runs in a separate macro.bis batch. It never publishes CN: the next CN publication
-// after AKShare ingest finish picks up eligible BIS rows.
 // Daily US macro sync (spec §4.4 steps 1–4, §8): CRON_SECRET bearer via authorizedCronRequest; upsert the
 // catalog mirror; one ingest batch (producer 'ts-fred', dataset 'macro.fred') over every active native FRED
 // series: fetch (retry/backoff) → parse → ingestEvidence; derive US in the same batch; MacroDb.finalizeBatch (第 6 稿 P1-1: the
@@ -32,8 +30,6 @@ import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {IngestAbort,abortError,addCounts,batchFinalizeInput,deriveAndWrite,emptyChunkCounts,ingestEvidence} from '@/lib/macro/ingest';
 import type {IngestReceipt} from '@/lib/macro/ingest';
-import {BIS_FETCHER_VERSION,BisFetchError,fetchBisCbpol} from '@/lib/macro/providers/bis';
-import {BIS_PARSER_VERSION,BisParseError,parseBisCbpolLpr1y} from '@/lib/macro/parsers/bis-cbpol';
 import {FRED_COSD,FRED_FETCHER_VERSION,FredFetchError,fetchFredCsv,fredBackfillDoneBy,fredCosdFor} from '@/lib/macro/providers/fred';
 import {FRED_PARSER_VERSION,FredParseError,parseFredCsv} from '@/lib/macro/parsers/fred-csv';
 import {MACRO_RULES_VERSION} from '@/lib/macro/quality';
@@ -45,7 +41,7 @@ export const maxDuration=300;
 const DEADLINE_MS=240_000,SAMPLE=3;
 const NO_STORE={'Cache-Control':'no-store'};
 const err=(code:string,message:string,status:number)=>NextResponse.json({error:{code,message}},{status,headers:NO_STORE});
-const errCode=(e:unknown)=>e instanceof FredFetchError||e instanceof BisFetchError?e.code:e instanceof FredParseError||e instanceof BisParseError?`parse_${e.code}`:'fetch_failed';
+const errCode=(e:unknown)=>e instanceof FredFetchError?e.code:e instanceof FredParseError?`parse_${e.code}`:'fetch_failed';
 const publicErrors=(errors:BatchError[])=>errors.map(e=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key});
 
 const fetchEvidence=(deps:MacroDeps,def:AnySeriesDef,signal:AbortSignal,cosd:string)=>
@@ -55,57 +51,6 @@ const parseEvidence=(def:AnySeriesDef,evidence:EvidenceInput)=>
 async function fetchAndParse(deps:MacroDeps,def:AnySeriesDef,signal:AbortSignal,cosd:string){
  const evidence=await fetchEvidence(deps,def,signal,cosd);
  return {evidence,parsed:parseEvidence(def,evidence)};
-}
-
-const fetchBis=(deps:MacroDeps,def:AnySeriesDef,signal:AbortSignal)=>
- fetchBisCbpol(def.source!.seriesKey.split('|')[1],{fetch:deps.fetch,sleep:deps.sleep,now:deps.now,signal});
-const parseBis=(deps:MacroDeps,def:AnySeriesDef,evidence:EvidenceInput)=>
- parseBisCbpolLpr1y(evidence.bytes,{seriesId:def.id,today:deps.now().toISOString().slice(0,10)});
-
-/** Independent batch: a BIS error cannot invalidate FRED rows or US publication. */
-async function syncBis(deps:MacroDeps,codeVersion:string,signal:AbortSignal){
- let batchId:string|undefined,counts=emptyChunkCounts(),usable=0;const errors:BatchError[]=[];
- try{
-  ({batchId}=await startBatch(deps.tables,{producer:'ts-bis',dataset:'macro.bis',codeVersion,triggeredBy:'cron',
-   toolVersions:{fetcher:BIS_FETCHER_VERSION,parser:BIS_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}}));
-  const take=(rec:IngestReceipt)=>{counts=addCounts(counts,rec.counts);usable+=rec.usable;errors.push(...rec.errors);};
-  for(const def of collectableSeriesOf('bis_sdmx_csv')){
-   let evidence:EvidenceInput;
-   try{evidence=await fetchBis(deps,def,signal);}catch(e){counts.failed++;errors.push({code:errCode(e),key:def.id});continue;}
-   let parsed:ParsedPoint[];
-   try{parsed=parseBis(deps,def,evidence);}catch(e){
-    let retrievalId='unstored';
-    try{const stored=await ingestEvidence(deps,{batchId,adapter:'bis_sdmx_csv',retrievals:[{evidence,parsed:[]}]});retrievalId=stored.retrievalIds[0]??'unstored';}
-    catch(x){if(x instanceof IngestAbort)throw x;}
-    counts.failed++;errors.push({code:errCode(e),key:def.id,message:`retrieval ${retrievalId}: ${e instanceof Error?e.message:'parse failed'}`});continue;
-   }
-   try{take(await ingestEvidence(deps,{batchId,adapter:'bis_sdmx_csv',retrievals:[{evidence,parsed}]}));}
-   catch(e){if(e instanceof IngestAbort&&e.partial)take(e.partial);throw e;}
-  }
-  if(!usable)errors.push({code:'no_native_outcomes'});
-  const {status}=await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now()),null);
-  await recordAttempt(deps.tables,'macro.bis',{ok:status!=='failed'&&usable>0,cadence:'daily'});
-  return {batchId,status,counts,errors:publicErrors(errors.filter(e=>e.code!=='no_native_outcomes'))};
- }catch(e){
-  errors.push(e instanceof IngestAbort?abortError(e):{code:'sync_crashed'});
-  if(batchId){
-   const input=batchFinalizeInput({counts,errors},deps.now(),'failed');
-   try{await deps.db.finalizeBatch(batchId,input,null);}catch{await deps.db.finalizeBatch(batchId,input,null).catch(()=>console.error('macro-sync: BIS batch left running',{batchId}));}
-  }
-  await recordAttempt(deps.tables,'macro.bis',{ok:false,cadence:'daily'}).catch(()=>undefined);
-  return {batchId,status:'failed',counts,errors:publicErrors(errors)};
- }
-}
-async function previewBis(deps:MacroDeps,signal:AbortSignal){
- const series=[];let fetched=0;
- for(const def of collectableSeriesOf('bis_sdmx_csv')){
-  try{
-   const evidence=await fetchBis(deps,def,signal),parsed=parseBis(deps,def,evidence);fetched+=parsed.length;
-   series.push({series_id:def.id,points:parsed.length,first:parsed[0]?.periodEnd??null,last:parsed.at(-1)?.periodEnd??null,
-    sample:parsed.slice(-SAMPLE).map(p=>({period_end:p.periodEnd,value_text:p.valueText})),sha256:evidence.sha256,bytes:evidence.bytes.byteLength});
-  }catch(e){series.push({series_id:def.id,error:errCode(e)});}
- }
- return {ok:series.every(s=>!('error' in s)),counts:{fetched},series};
 }
 
 /** Backfill is complete only when persisted eligible data reaches back to the start of the full window (T7-2). Any read
@@ -127,8 +72,7 @@ async function preview(deps:MacroDeps,defs:AnySeriesDef[],signal:AbortSignal){
     sample:parsed.slice(-SAMPLE).map(p=>({period_end:p.periodEnd,value_text:p.valueText})),sha256:evidence.sha256,bytes:evidence.bytes.byteLength});
   }catch(e){series.push({series_id:def.id,code:def.source!.seriesKey,error:errCode(e)});}
  }
- const bis=await previewBis(deps,signal);
- return NextResponse.json({bis,ok:bis.ok&&series.every(s=>!('error' in s)),preview:true,catalogVersion:CATALOG_VERSION,counts:{fetched},series},{status:200,headers:NO_STORE});
+ return NextResponse.json({ok:series.every(s=>!('error' in s)),preview:true,catalogVersion:CATALOG_VERSION,counts:{fetched},series},{status:200,headers:NO_STORE});
 }
 
 async function sync(deps:MacroDeps,defs:AnySeriesDef[],codeVersion:string,signal:AbortSignal){
@@ -198,8 +142,7 @@ async function sync(deps:MacroDeps,defs:AnySeriesDef[],codeVersion:string,signal
  const publish=batchStatus==='failed'||!nativeLanded
   ?{status:'skipped' as const,region:'US' as const,reason:nativeLanded?'batch_failed':'no_native_outcomes'}
   :await publishRegion({db:deps.db,onPublished:deps.onPublished},'US',today,{publishKey:`cron:${batchId}`});
- const bis=await syncBis(deps,codeVersion,signal);
- return NextResponse.json({bis,ok:batchStatus==='success'&&bis.status==='success',date:today,batchId,status:batchStatus,publish,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
+ return NextResponse.json({ok:batchStatus==='success',date:today,batchId,status:batchStatus,publish,counts,native_counts:native,native_usable:nativeUsable,derived_counts:derivedCounts,errors:publicErrors(errors)},{status:200,headers:NO_STORE});
 }
 
 async function run(request:Request):Promise<NextResponse>{

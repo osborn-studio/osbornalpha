@@ -421,17 +421,6 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    meth.set(k,{...old,status:row.status,publishable:pub,code_version:row.code_version,synced_at:at});
    return {changed,seq};
   },
-  async retireMethodology(id,version,actor,reason){
-   if(!/^(script|admin:[0-9a-f-]{36})$/.test(actor))fail('unknown','judgment_methodology_events_actor_check');
-   if(!reason||!reason.trim())fail('invalid_parameter','reason');
-   const k=mk(id,version),old=meth.get(k);
-   if(!old)throw new JudgmentError('methodology_unavailable',`${id}@${version}`);
-   if(old.status==='retired')return {changed:false};
-   const seq=Math.max(0,...events.filter(e=>e.methodology_id===id&&e.version===version).map(e=>e.seq))+1,at=now();
-   meth.set(k,{...old,status:'retired',synced_at:at});
-   addEvent(old,seq,'status_changed','retired',old.publishable,actor,reason,at);
-   return {changed:true,seq};
-  },
   async listMethodologies(status){return clone([...meth.values()].filter(r=>status===undefined||r.status===status).sort((a,b)=>cmp(a.methodology_id,b.methodology_id)||cmp(a.version,b.version)));},
   async methodologyStateAt(id,version,cutoff){const e=lastEvent(id,version,cutoff);return e?clone(e):null;},
   async jobState(job){const r=jobs.get(job);return r?clone({state:r.state,updated_at:r.updated_at}):null;},

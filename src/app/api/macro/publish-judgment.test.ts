@@ -35,9 +35,7 @@ beforeEach(async()=>{
  wiring.evidence.mockReturnValue({put:async(e:import('@/lib/macro/types').EvidenceInput)=>({objectPath:evidencePath(e.adapter,e.sha256,e.contentType),status:'stored'})});
  wiring.judgments.mockImplementation(()=>{if(fail)throw new Error('test setup unavailable');return {db,inputsDb:inputDb,tables:db.tables};});
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL)=>{
-  const url=new URL(String(input));
-  if(url.host==='stats.bis.org')return new Response(readFileSync('src/lib/macro/fixtures/bis/WS_CBPOL-M.CN.csv'),{headers:{'content-type':'text/csv'}});
-  const code=url.searchParams.get('id');
+  const code=new URL(String(input)).searchParams.get('id');
   const def=collectableOf('fred_csv').find(d=>d.source!.seriesKey===code)!;
   return new Response(def.period==='day'?`observation_date,${code}\n2026-06-30,4.0\n2026-07-31,4.1\n2026-08-31,4.2\n2026-09-30,4.3\n2026-10-01,4.3\n`:`observation_date,${code}\n2025-06-01,50\n2025-07-01,50\n2025-08-01,50\n2025-09-01,50\n2026-06-01,51\n2026-07-01,51\n2026-08-01,51\n2026-09-01,51\n`);
  }));
@@ -65,7 +63,7 @@ async function runCN(empty=false){
 async function expectBound(region:'US'|'CN'){
  const snap=await macro.activeSnapshot(region);expect(snap).not.toBeNull();
  const ids=await db.judgmentsBySnapshot(snap!.snapshot_id);expect(ids).toHaveLength(1);
- const row=await db.getJudgment(ids[0]);expect(row).toMatchObject({subject_type:'macro_region',subject_key:region,as_of:snap!.as_of,methodology_id:'macro_regime',methodology_version:'v3',abstained:false});
+ const row=await db.getJudgment(ids[0]);expect(row).toMatchObject({subject_type:'macro_region',subject_key:region,as_of:snap!.as_of,methodology_id:'macro_regime',methodology_version:'v2',abstained:false});
  return snap!;
 }
 it('US production sync immediately registers the exact published snapshot through the real producer',async()=>{
@@ -112,7 +110,7 @@ it('concurrent hook producers for a fresh binding register one judgment and leav
  const hook=productionMacroJudgmentHook({codeVersion:'a'.repeat(40),triggeredBy:'cron'});
  await Promise.all([hook(snapshot),hook(snapshot)]);
  expect(arrivals).toBe(2);expect(await db.judgmentsBySnapshot(snapshot.snapshot_id)).toHaveLength(1);
- expect(await db.jobState('produce:macro_regime@v3')).toBeNull();
+ expect(await db.jobState('produce:macro_regime@v2')).toBeNull();
 });
 it('a newer active snapshot does not retarget an older publication callback',async()=>{
  await runUS();const older=await expectBound('US');

@@ -9,6 +9,7 @@ describe('vercel.json crons',()=>{
   expect(crons.filter(c=>c.path==='/api/cron/macro-sync')).toHaveLength(1);
   expect(crons.filter(c=>c.path==='/api/cron/macro-review')).toHaveLength(1);
  });
+ it('warms strategy views every ten minutes',()=>{expect(crons.filter(c=>c.path==='/api/cron/macro-strategy-warm')).toEqual([{path:'/api/cron/macro-strategy-warm',schedule:'*/10 * * * *'}]);});
  it('the review cron runs at 06:00 UTC on the 3rd (runbook §3)',()=>{
   expect(crons.find(c=>c.path==='/api/cron/macro-review')!.schedule).toBe('0 6 3 * *');
  });

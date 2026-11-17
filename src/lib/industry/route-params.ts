@@ -4,9 +4,9 @@
 // plus the in-memory per-IP limiter of /replay (10 per minute; per server instance, best effort
 // across instances as the spec allows). Pure: no clients, so pages reuse it for search params.
 import {QueryError,UUID_RE,dateParam,listParam} from '../facts/public-route';
-import {AGG_DURATIONS,AGG_METRICS,METRIC_DURATIONS,SCHEME_VERSION} from './read';
+import {AGG_DURATIONS,defaultMetric,durationsForScheme,metricsForScheme,SCHEME_VERSION} from './read';
 import type {ValuationMetric,Window} from './read';
-import type {AggDuration,AggMetric,Scheme,SchemeVersion} from './types';
+import type {AggDuration,AggMetric,Scheme,SchemeVersion} from './types-us';
 
 export const CODE_RE=/^[A-Za-z0-9.\-]{1,32}$/;
 export const MAX_PERIODS=44;
@@ -35,22 +35,22 @@ export function levelOf(p:Map<string,string>,scheme:Scheme):number{
  if(!/^[1-3]$/.test(v)||(scheme==='sic'&&v!=='1'))throw new QueryError('level');
  return Number(v);
 }
-export function metricOf(p:Map<string,string>,fallback:AggMetric|null='gross_margin'):AggMetric{
+export function metricOf(p:Map<string,string>,fallback:AggMetric|null|undefined=undefined,scheme:Scheme='sw2021'):AggMetric{
  const v=p.get('metric');
- if(v===undefined){if(fallback===null)throw new QueryError('metric');return fallback;}
- if(!(AGG_METRICS as readonly string[]).includes(v))throw new QueryError('metric');
+ if(v===undefined){if(fallback===null)throw new QueryError('metric');return fallback??defaultMetric(scheme);}
+ if(!(metricsForScheme(scheme) as readonly string[]).includes(v))throw new QueryError('metric');
  return v as AggMetric;
 }
 /** Default = the metric's first duration; a duration the metric is not computed for is invalid. */
-export function durationOf(p:Map<string,string>,metric:AggMetric):AggDuration{
+export function durationOf(p:Map<string,string>,metric:AggMetric,scheme:Scheme='sw2021'):AggDuration{
  const v=p.get('duration');
- if(v===undefined)return METRIC_DURATIONS[metric][0];
- if(!(METRIC_DURATIONS[metric] as readonly string[]).includes(v))throw new QueryError('duration');
+ if(v===undefined)return durationsForScheme(scheme,metric)[0];
+ if(!(durationsForScheme(scheme,metric) as readonly string[]).includes(v))throw new QueryError('duration');
  return v as AggDuration;
 }
-export function optionalDurationOf(p:Map<string,string>,metric:AggMetric):AggDuration|null{return p.has('duration')?durationOf(p,metric):null;}
-export function metricsOf(p:Map<string,string>):AggMetric[]{return (listParam(p,'metrics',new Set(AGG_METRICS),AGG_METRICS.length) as AggMetric[]|undefined)??[...AGG_METRICS];}
-export function durationsOf(p:Map<string,string>):AggDuration[]|null{return (listParam(p,'durations',new Set(AGG_DURATIONS),AGG_DURATIONS.length) as AggDuration[]|undefined)??null;}
+export function optionalDurationOf(p:Map<string,string>,metric:AggMetric,scheme:Scheme='sw2021'):AggDuration|null{return p.has('duration')?durationOf(p,metric,scheme):null;}
+export function metricsOf(p:Map<string,string>,scheme:Scheme='sw2021'):AggMetric[]{const metrics=metricsForScheme(scheme);return (listParam(p,'metrics',new Set(metrics),metrics.length) as AggMetric[]|undefined)??[...metrics];}
+export function durationsOf(p:Map<string,string>,scheme:Scheme='sw2021'):AggDuration[]|null{return (listParam(p,'durations',new Set(scheme==='sic'?['12M','INSTANT']:AGG_DURATIONS),AGG_DURATIONS.length) as AggDuration[]|undefined)??null;}
 export function windowOf(p:Map<string,string>):Window{
  const v=p.get('window');
  if(v===undefined)return '10y';

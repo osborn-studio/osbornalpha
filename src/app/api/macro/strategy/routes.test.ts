@@ -32,6 +32,7 @@ vi.mock('@/lib/macro/strategy/deviations',()=>({listDeviationCases:m.listDeviati
 vi.mock('@/lib/macro/strategy/f4-client',()=>({createF4Client:m.createF4Client,F4Unavailable:class F4Unavailable extends Error{}}));
 vi.mock('@/lib/macro/strategy/llm-deps',()=>({productionLlmDeps:(userId:string)=>({tag:'llm',userId})}));
 
+import {GET as warmCron,maxDuration as warmMaxDuration} from '@/app/api/cron/macro-strategy-warm/route';
 import {GET as cron} from '@/app/api/cron/macro-review/route';
 import {ParamError,canonicalExplainBody,isClosedMonth,lastClosedMonth,monthOf,readParams,reviewAsOfDate,subjectIdOf,windowOf} from '@/lib/macro/strategy/route-helpers';
 import {GET as cycleTable} from './cycle-table/route';
@@ -52,8 +53,8 @@ const json=async(r:Response)=>r.json() as Promise<Record<string,unknown>>;
 const codeOf=async(r:Response)=>((await json(r)).error as {code:string}).code;
 const TV:TransmissionView={version:'macro-transmission/1',region:'US',manifest_id:MID,cutoff:'2026-11-03T06:02:00Z',snapshots:{US:'snap:US:1',CN:'snap:CN:1'},catalog_version:'cat/1',stages:[]};
 const PV:PolicyResponseView={version:'macro-policy-response/1',window:3,manifest_id:MID,cutoff:'2026-11-03T06:02:00Z',dims:[],rows:[],sentences:[]};
-const CARD:F4CardLite={judgment_id:'j1',lifecycle:'open',calibration:'insufficient_sample',as_of:'2026-11-03T03:20:00Z',methodology:{id:'macro_regime',version:'v3'},selected:'overheat'};
-const SUMMARY:F4Summary={judgment_id:'j1',selected:'overheat',lifecycle:'open',outcome:null,calibration:'insufficient_sample',methodology:{id:'macro_regime',version:'v3'},as_of:'2026-11-03T03:20:00Z',href:'/intel/methods/macro_regime/v3'};
+const CARD:F4CardLite={judgment_id:'j1',lifecycle:'open',calibration:'insufficient_sample',as_of:'2026-11-03T03:20:00Z',methodology:{id:'macro_regime',version:'v2'},selected:'overheat'};
+const SUMMARY:F4Summary={judgment_id:'j1',selected:'overheat',lifecycle:'open',outcome:null,calibration:'insufficient_sample',methodology:{id:'macro_regime',version:'v2'},as_of:'2026-11-03T03:20:00Z',href:'/intel/methods/macro_regime/v2'};
 const MARK:{mark:F4Mark;summary:F4Summary}={mark:{regime:'overheat',judgment_id:'j1',snapshot_match:true,as_of:'2026-11-03T03:20:00Z'},summary:SUMMARY};
 const PB:PlaybookView[]=[{regime:'recovery',title:{zh:'复苏',en:'Recovery'},triggers:[],mechanism:[],implications:{favored:[],disfavored:[]},watch:[]}];
 const FROZEN_US={snapshot_id:'snap:US:1',created_at:'2026-11-03T06:02:00.000Z',as_of:'2026-11-03',catalog_counts:{verified:1,missing:0,restricted:0},observation_ids:[],history_ids:[]};
@@ -92,7 +93,7 @@ beforeEach(()=>{
  m.user.mockResolvedValue({data:{user:{id:USER}},error:null});
  m.port.mockReturnValue(PORT);m.code.mockReturnValue('abc123');
  db=memoryStrategyDb();m.db=db;
- m.trManifest.mockResolvedValue(body('transmission',{snapshots:{US:FROZEN_US,CN:null}}));m.buildTransmission.mockReturnValue(TV);m.buildPlaybooks.mockReturnValue(PB);
+ m.trManifest.mockReset().mockResolvedValue(body('transmission',{snapshots:{US:FROZEN_US,CN:null}}));m.buildTransmission.mockReturnValue(TV);m.buildPlaybooks.mockReturnValue(PB);
  m.prManifest.mockResolvedValue(body('policy_response'));m.buildPolicyResponse.mockReturnValue(PV);
  m.ctManifest.mockResolvedValue(body('cycle_table'));m.buildCycleTable.mockReturnValue({version:'macro-cycle-table/1'});
  m.createF4Client.mockReturnValue({latestRegimeCard:m.card,judgmentDetail:m.detail,history:vi.fn()});
@@ -188,6 +189,31 @@ describe('parameters (whitelist, 400 invalid_parameter:<name>)',()=>{
 });
 
 describe('fact routes',()=>{
+ it.each([
+  ...(['US','CN'] as const).map(region=>['transmission',()=>transmission(get(`/transmission?region=${region}`))] as const),
+  ...([1,3,6] as const).map(window=>['policy_response',()=>policyResponse(get(`/policy-response?window=${window}`))] as const),
+  ...(['event_day','first_trading_day','month_end'] as const).map(boundary=>['cycle_table',()=>cycleTable(get(`/cycle-table?boundary=${boundary}`))] as const),
+ ])('%s stored cold replay is byte-identical without builders or manifest writes',async(_kind,call)=>{
+  const put=vi.spyOn(db,'putManifest');
+  const built=await call();expect(built.status).toBe(200);const text=await built.text();
+  expect(built.headers.get('X-Macro-Strategy-View')).toBe('built');
+  const ids=put.mock.results.length;const builders=m.trManifest.mock.calls.length+m.prManifest.mock.calls.length+m.ctManifest.mock.calls.length;
+  strategyMemo.clear();shared.clear();
+  const stored=await call();expect(stored.status).toBe(200);
+  expect(stored.headers.get('X-Macro-Strategy-View')).toBe('stored');
+  expect(await stored.text()).toBe(text);
+  expect(put).toHaveBeenCalledTimes(ids);
+  expect(m.trManifest.mock.calls.length+m.prManifest.mock.calls.length+m.ctManifest.mock.calls.length).toBe(builders);
+ });
+ it.each(['failure','conflict'] as const)('serves fresh facts after view store %s',async(mode)=>{
+  const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+  const put=vi.spyOn(db,'putStrategyView');
+  if(mode==='failure')put.mockRejectedValue(new Error('private body'));else put.mockResolvedValue({outcome:'conflict'});
+  const response=await cycleTable(get('/cycle-table'));expect(response.status).toBe(200);
+  expect(response.headers.get('X-Macro-Strategy-View')).toBe('built');
+  expect(log.mock.calls).toEqual([[mode==='failure'?'[macro-strategy-view-store-failed]':'[macro-strategy-view-conflict]']]);
+  log.mockRestore();
+ });
  it.each([['transmission',()=>transmission(get('/transmission?region=US')),m.trManifest],['policy-response',()=>policyResponse(get('/policy-response?window=3')),m.prManifest],['cycle-table',()=>cycleTable(get('/cycle-table?boundary=event_day')),m.ctManifest]] as const)('%s memo hits, invalidates on input revision, and single flights',async(_name,call,builder)=>{
   PORT.publishState.mockResolvedValue({revision:1,input_revision:1});
   const put=vi.spyOn(db,'putManifest');
@@ -198,7 +224,7 @@ describe('fact routes',()=>{
   expect((await call()).headers.get('X-Macro-Strategy-Memo')).toBe('miss');expect(builder).toHaveBeenCalledTimes(2);
   shared.clear();strategyMemo.clear();builder.mockClear();put.mockClear();
   const both=await Promise.all([call(),call()]);expect(both.map(r=>r.headers.get('X-Macro-Strategy-Memo'))).toEqual(['miss','coalesced']);
-  expect(builder).toHaveBeenCalledTimes(1);expect(put).toHaveBeenCalledTimes(1);
+  expect(builder).toHaveBeenCalledTimes(0);expect(put).toHaveBeenCalledTimes(0);
  });
  it.each(FACT_ROUTES.slice(0,3))('%s reuses persisted facts after a cold process memo, gates warm cache, and retries errors',async(_name,call)=>{
   const first=await call();expect(first.status).toBe(200);expect(first.headers.get('cache-control')).toBe('private, no-store');const expected=await first.json();
@@ -210,16 +236,19 @@ describe('fact routes',()=>{
   m.user.mockResolvedValue({data:{user:{id:USER}},error:null});delete process.env.MACRO_STRATEGY_ENABLED;expect((await call()).status).toBe(404);
   expect(PORT.activeSnapshot).toHaveBeenCalledTimes(4);
   process.env.MACRO_STRATEGY_ENABLED='1';shared.clear();strategyMemo.clear();
+  PORT.publishState.mockResolvedValue({revision:2,input_revision:2});
   const put=vi.spyOn(db,'putManifest').mockRejectedValueOnce(new Error('storage down'));
   expect((await call()).status).toBe(500);expect(shared.size).toBe(0);
   expect((await call()).status).toBe(200);expect(put).toHaveBeenCalledTimes(2);
  });
  it.each(FACT_ROUTES.slice(0,3))('%s bypasses both caches for unverifiable publish state',async(_name,call)=>{
+  const read=vi.spyOn(db,'getStrategyView'),write=vi.spyOn(db,'putStrategyView');
   for(const state of [null,{revision:1,input_revision:NaN},{revision:-1,input_revision:1}]){
    shared.clear();strategyMemo.clear();PORT.publishState.mockResolvedValue(state);
    expect((await call()).status).toBe(200);expect((await call()).status).toBe(200);
    expect(shared.size).toBe(0);expect(strategyMemo.stats().size).toBe(0);
   }
+  expect(read).not.toHaveBeenCalled();expect(write).not.toHaveBeenCalled();
  });
  it('without either snapshot, policy and cycle builds use request time and bypass the memo',async()=>{
   PORT.activeSnapshot.mockResolvedValue(null);
@@ -513,5 +542,24 @@ describe('cycle-table failure diagnostics',()=>{
    expect((await cycleTable(get('/cycle-table?boundary=event_day'))).status).toBe(401);
    expect(log).not.toHaveBeenCalled();
   }finally{log.mockRestore();}
+ });
+});
+
+describe('strategy warm cron',()=>{
+ it('requires the cron bearer including when disabled',async()=>{
+  for(const secret of [undefined,'wrong']){
+   const response=await warmCron(new Request('https://fixture.invalid/api/cron/macro-strategy-warm',{headers:secret?{authorization:`Bearer ${secret}`}:{}}));
+   expect(response.status).toBe(401);
+  }
+ });
+ it('skips all eight quickly when off without allocating the foundation',async()=>{
+  delete process.env.MACRO_STRATEGY_ENABLED;m.port.mockClear();
+  const response=await warmCron(new Request('https://fixture.invalid/api/cron/macro-strategy-warm',{headers:{authorization:'Bearer cron-secret'}}));
+  expect(response.status).toBe(200);expect((await response.json()).outcomes.map((r:{outcome:string})=>r.outcome)).toEqual(Array(8).fill('skipped'));
+  expect(m.port).not.toHaveBeenCalled();expect(warmMaxDuration).toBe(60);
+ });
+ it('returns the per-view outcomes for an authorized run',async()=>{
+  const response=await warmCron(new Request('https://fixture.invalid/api/cron/macro-strategy-warm',{headers:{authorization:'Bearer cron-secret'}}));
+  expect(response.status).toBe(200);expect((await response.json()).outcomes.map((r:{outcome:string})=>r.outcome)).toEqual(Array(8).fill('built'));
  });
 });

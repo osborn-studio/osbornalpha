@@ -1,6 +1,7 @@
 // Installed Supabase client + real adapter; only HTTP is simulated. No production/network access.
 import {createClient} from '@supabase/supabase-js';
 import {writeFileSync} from 'node:fs';
+import {gunzipSync} from 'node:zlib';
 import {expect,it,vi} from 'vitest';
 import type {StrategyManifest} from './contract';
 import {buildCycleTable,buildCycleTableManifest} from './cycle-table';
@@ -12,20 +13,21 @@ import {fedTargetFixture,fixture,monthly,obs,snap} from './testing/fixture';
 
 const ID='11111111-1111-4111-8111-111111111111',CREATED='2026-11-07T00:00:00.000Z';
 type Row=Record<string,unknown>;
-function transport(opts:{rpcResult?:unknown;rpcError?:string;rpcErrorCode?:string;rows?:(row:Row)=>Row[];duringRpc?:()=>void;fullRead?:boolean;selectError?:boolean}={}){
+function transport(opts:{rpcResult?:unknown;rpcError?:string;rpcErrorCode?:string;rows?:(row:Row)=>Row[];duringRpc?:()=>void;fullRead?:boolean;selectError?:boolean;jsonb?:boolean}={}){
  let row:Row|undefined;
  const calls:{method:string;select:string|null;requestBytes:number;responseBytes:number}[]=[];
  const fetcher:typeof fetch=async(input,init)=>{
   const request=new Request(input,init),url=new URL(request.url),body=await request.text();
   let result:unknown,status=200;
-  if(url.pathname==='/rest/v1/rpc/macro_put_manifest_json'){
-   const args=JSON.parse(body);
+  if(['/rest/v1/rpc/macro_put_manifest_json','/rest/v1/rpc/macro_put_manifest_gz'].includes(url.pathname)){
+   const args=JSON.parse(body),gz=url.pathname.endsWith('_gz');
+   const decoded=gz?JSON.parse(gunzipSync(Buffer.from(args.p_body_gz,'base64')).toString()):args.p_body;
    if(opts.rpcError){status=400;result={code:opts.rpcErrorCode??'P0001',message:opts.rpcError};}
-   else if(row&&row.manifest_hash===args.p_manifest_hash&&canonicalJson(row.body)!==canonicalJson(args.p_body)){
+   else if(row&&row.manifest_hash===args.p_manifest_hash&&canonicalJson(row.body??JSON.parse(gunzipSync(Buffer.from(String(row.body_gz).slice(2),'hex')).toString()))!==canonicalJson(decoded)){
     status=400;result={code:'P0001',message:'payload_conflict'};
    }else{
-    row??={manifest_id:ID,manifest_hash:args.p_manifest_hash,body:args.p_body,created_at:CREATED};
-    result='rpcResult' in opts?opts.rpcResult:ID;
+    row??={manifest_id:ID,manifest_hash:args.p_manifest_hash,body:gz?null:decoded,...(gz?{body_gz:`\\x${Buffer.from(args.p_body_gz,'base64').toString('hex')}`,body_bytes:args.p_body_bytes}:{}),created_at:CREATED};
+    result='rpcResult' in opts?opts.rpcResult:gz?{manifest_id:ID,outcome:'replayed'}:ID;
    }
    opts.duringRpc?.();
   }else if(url.pathname==='/rest/v1/macro_strategy_manifests'){
@@ -44,7 +46,12 @@ function transport(opts:{rpcResult?:unknown;rpcError?:string;rpcErrorCode?:strin
  };
  const client=createClient('https://fixture.invalid','explicit-fixture-key',{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:fetcher}});
  const real=supabaseTransport({admin:client,anon:client});
- return {db:strategyDbOver({...real,select:(role,spec)=>real.select(role,opts.fullRead?{...spec,columns:undefined}:spec)}),calls,row:()=>row!};
+ return {db:strategyDbOver({...real,rpc:async(fn,args)=>{
+  if(!opts.jsonb||fn!=='macro_put_manifest_gz')return real.rpc(fn,args);
+  const {p_body_gz,p_body_bytes:_bytes,...metadata}=args;
+  const id=await real.rpc('macro_put_manifest',{...metadata,p_body:JSON.parse(gunzipSync(Buffer.from(p_body_gz as string,'base64')).toString())});
+  return {manifest_id:id,outcome:'inserted'};
+ },select:(role,spec)=>real.select(role,opts.fullRead?{...spec,columns:undefined}:spec)}),calls,row:()=>row!};
 }
 it('reads metadata only after RPC, preserves canonical body/hash and replay, while manifest GET still reads full evidence',async()=>{
  const t=transport(),body=testManifest('cycle_table',{salt:'fixed'});
@@ -106,15 +113,18 @@ async function largeCycle():Promise<StrategyManifest>{
   {now:new Date(CREATED),codeVersion:'fixture-cycle-transport',boundary:'event_day'});
 }
 it('bounds returned bytes for a representative large real cycle manifest without dropping evidence',async()=>{
- const body=await largeCycle(),before=transport({fullRead:true}),after=transport();
+ const body=await largeCycle(),before=transport({fullRead:true,jsonb:true}),after=transport();
  const firstStart=performance.now();await before.db.putManifest(body);const beforeMs=performance.now()-firstStart;
  const nextStart=performance.now(),optimized=await after.db.putManifest(body),afterMs=performance.now()-nextStart;
  const oldBytes=before.calls.reduce((n,c)=>n+c.responseBytes,0),newBytes=after.calls.reduce((n,c)=>n+c.responseBytes,0);
  expect(body.inputs.length).toBeGreaterThan(22_000);expect(oldBytes).toBeGreaterThan(6_000_000);
- expect(newBytes).toBeLessThan(300);expect(after.calls[0].requestBytes).toBe(before.calls[0].requestBytes);
+ expect(newBytes).toBeLessThan(300);expect(after.calls[0].requestBytes).toBeLessThan(before.calls[0].requestBytes);
  const persisted={manifest_id:ID,manifest_hash:String(before.row().manifest_hash),body:before.row().body as StrategyManifest,created_at:CREATED};
- expect(canonicalJson(optimized)).toBe(canonicalJson(persisted));expect(optimized.body).toEqual(after.row().body);
- expect(optimized.manifest_hash).toBe(sha256Hex(canonicalJson(body)));expect(buildCycleTable(optimized)).toEqual(buildCycleTable(persisted));
+ const blobStored=await after.db.manifest(ID);
+ expect(after.row().body).toBeNull();expect(blobStored!.body).toEqual(persisted.body);
+ expect(optimized.manifest_hash).toBe(persisted.manifest_hash);expect(optimized.manifest_hash).toBe(sha256Hex(canonicalJson(body)));
+ const blobView=buildCycleTable(blobStored!),jsonbView=buildCycleTable(persisted);
+ expect(blobView).toEqual(jsonbView);expect(JSON.stringify(blobView)).toBe(JSON.stringify(jsonbView));
  const report={scope:'Installed Supabase client + real StrategyDb adapter with simulated HTTP; JSON UTF-8 bytes, uncompressed, excluding headers. Synthetic real-builder cycle manifest. No production latency measurement.',
   inputs:body.inputs.length,manifestHash:optimized.manifest_hash,bodyBytes:Buffer.byteLength(JSON.stringify(body)),
   before:{responseBytes:oldBytes,requestBytes:before.calls[0].requestBytes,localMs:beforeMs},after:{responseBytes:newBytes,requestBytes:after.calls[0].requestBytes,localMs:afterMs}};

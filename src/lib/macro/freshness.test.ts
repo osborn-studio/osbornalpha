@@ -52,7 +52,6 @@ describe('collectionStatus (shared dq_freshness, recomputed at read time)',()=>{
   expect(s).toEqual([
    {dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-06T05:30:00.000Z',lastAttemptAt:'2026-11-06T05:30:00.000Z'},
    {dataset:'macro.akshare',status:'missing',lastOkAt:null,lastAttemptAt:null},
-   {dataset:'macro.bis',status:'missing',lastOkAt:null,lastAttemptAt:null},
   ]);
   await recordAttempt(tables,'macro.akshare',{ok:false,cadence:'daily',now:t0});
   await recordAttempt(tables,'macro.akshare',{ok:false,cadence:'daily',now:new Date('2026-11-07T05:00:00Z')});
@@ -65,12 +64,4 @@ describe('collectionStatus (shared dq_freshness, recomputed at read time)',()=>{
   expect(datasetOf('US')).toBe('macro.fred');
   expect(datasetOf('CN')).toBe('macro.akshare');
  });
-});
-
-it('tracks BIS freshness independently from AKShare and FRED',async()=>{
- const tables=memoryTableClient({dq_freshness:['dataset']});const now=new Date('2026-11-16T05:30:00Z');
- await recordAttempt(tables,'macro.bis',{ok:true,cadence:'daily',now});
- const rows=await collectionStatus(tables,now);
- expect(rows.find(r=>r.dataset==='macro.bis')).toMatchObject({status:'fresh',lastOkAt:now.toISOString()});
- expect(rows.filter(r=>r.dataset!=='macro.bis').every(r=>r.status==='missing')).toBe(true);
 });

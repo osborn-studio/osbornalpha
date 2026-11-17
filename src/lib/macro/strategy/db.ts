@@ -8,7 +8,8 @@
 // unit tests; db-contract.ts runs the same cases against both. New RPCs are not registered in database.types.ts
 // (repo convention, src/lib/supabase/admin.ts): the client is narrowed locally. Timestamps are normalised to ISO-8601
 // UTC with milliseconds; bigint generation arrives as a string from pg and as a number from PostgREST → Number().
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {gzipSync,gunzipSync} from 'node:zlib';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {canonicalJson,sha256Hex} from './hash';
 import {manifestRequestId,withManifestRequest} from './manifest-request';
@@ -20,9 +21,33 @@ export interface RunDetail{explanation_id:string;user_id:string;state:Explanatio
 export const hasRecordedCompletion=(raw:unknown):boolean=>typeof raw==='object'&&raw!==null&&!Array.isArray(raw);
 /** Running rows scanned per recoverableRuns call. */
 export const RECOVERY_SCAN=50;
+export const MANIFEST_GZ_THRESHOLD_BYTES=1_000_000;
 
 export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'cutoff_mismatch'|'invalid_argument'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
+export type FactViewKind='transmission'|'policy_response'|'cycle_table';
+export interface StrategyView{view_key:string;kind:FactViewKind;identity:Record<string,unknown>;manifest_id:string;view_json:string;view_sha256:string;code_version:string}
+export type StrategyViewWrite={outcome:'inserted'|'replayed'|'conflict'};
+const VIEW_KINDS=['transmission','policy_response','cycle_table'];
+const HEX64=/^[0-9a-f]{64}$/;
+const VIEW_KEYS=['view_key','kind','identity','manifest_id','view_json','view_sha256','code_version'];
+function validateView(a:StrategyView):void{
+ if(Object.keys(a).length!==VIEW_KEYS.length||!VIEW_KEYS.every(k=>k in a)||!HEX64.test(a.view_key)||!VIEW_KINDS.includes(a.kind)
+  ||typeof a.identity!=='object'||a.identity===null||Array.isArray(a.identity)||typeof a.manifest_id!=='string'||!UUID.test(a.manifest_id)
+  ||typeof a.view_json!=='string'||!HEX64.test(a.view_sha256)||sha256Hex(a.view_json)!==a.view_sha256
+  ||typeof a.code_version!=='string'||a.code_version.length<1||a.code_version.length>128)throw new StrategyDbError('invalid_argument');
+}
+/** Diagnostics contain fixed labels only, including when the logger itself fails. */
+export function logStrategyView(label:'corrupt'|'read-failed'|'store-failed'|'conflict'|'warm-failed'):void{
+ try{console.error(`[macro-strategy-view-${label}]`);}catch{}
+}
+function viewFrom(r:Record<string,unknown>):StrategyView|null{
+ if(typeof r.view_json!=='string'||typeof r.view_sha256!=='string'||!HEX64.test(r.view_sha256)||sha256Hex(r.view_json)!==r.view_sha256||!VIEW_KINDS.includes(String(r.kind))){logStrategyView('corrupt');return null;}
+ return {view_key:String(r.view_key),kind:r.kind as FactViewKind,identity:r.identity as Record<string,unknown>,manifest_id:String(r.manifest_id),view_json:r.view_json,view_sha256:r.view_sha256,code_version:String(r.code_version)};
+}
 export interface StrategyDb{
+ getStrategyView(viewKey:string):Promise<StrategyView|null>;
+ getStrategyViews(viewKeys:string[]):Promise<StrategyView[]>;
+ putStrategyView(view:StrategyView):Promise<StrategyViewWrite>;
  putManifest(body:StrategyManifest):Promise<StoredManifest>;   // computes manifest_hash = sha256Hex(canonicalJson(body)); RPC macro_put_manifest; idempotent by hash
  manifest(id:string):Promise<StoredManifest|null>;                                                          // anon
  reviewCurrent(region:Region,month:string):Promise<{result:ReviewResult;generation:number;cutoff:string}|null>;   // anon
@@ -53,7 +78,7 @@ export interface StrategyDb{
 }
 
 // ---------------------------------------------------------------- transport
-export type StrategyTable='macro_strategy_manifests'|'macro_review_results'|'macro_review_current'|'macro_explanation_runs'|'macro_explanations';
+export type StrategyTable='macro_strategy_views'|'macro_strategy_manifests'|'macro_review_results'|'macro_review_current'|'macro_explanation_runs'|'macro_explanations';
 export type ReadRole='anon'|'admin'|'session';
 export interface SelectSpec{columns?:readonly string[];table:StrategyTable;eq:Record<string,string>;in?:{column:string;values:string[]};order:{column:string;ascending:boolean}[];limit:number}
 /** rpc runs as service_role and rejects with the database error (message = code for raised errors); select runs under `role`. */
@@ -76,7 +101,17 @@ const isoOrNull=(v:unknown):string|null=>v===null||v===undefined?null:iso(v);
 const str=(v:unknown):string|null=>v===null||v===undefined?null:String(v);
 
 // ---------------------------------------------------------------- row mapping
-const manifestFrom=(r:Record<string,unknown>):StoredManifest=>({manifest_id:String(r.manifest_id),manifest_hash:String(r.manifest_hash),body:r.body as StrategyManifest,created_at:iso(r.created_at)});
+function manifestBody(r:Record<string,unknown>):StrategyManifest{
+ if(r.body!==null)return r.body as StrategyManifest;
+ try{
+  const gz=r.body_gz;
+  if(!Buffer.isBuffer(gz)&&(typeof gz!=='string'||!/^\\x(?:[0-9a-fA-F]{2})+$/.test(gz)))throw new Error();
+  const bytes=gunzipSync(Buffer.isBuffer(gz)?gz:Buffer.from((gz as string).slice(2),'hex'),{maxOutputLength:128*1024*1024});
+  if(bytes.length!==r.body_bytes||createHash('sha256').update(bytes).digest('hex')!==r.manifest_hash)throw new Error();
+  return JSON.parse(bytes.toString('utf8')) as StrategyManifest;
+ }catch{throw new StrategyDbError('rpc_failed','manifest_blob_corrupt');}
+}
+const manifestFrom=(r:Record<string,unknown>):StoredManifest=>({manifest_id:String(r.manifest_id),manifest_hash:String(r.manifest_hash),body:manifestBody(r),created_at:iso(r.created_at)});
 const resultFrom=(r:Record<string,unknown>):ReviewResult=>({result_id:String(r.result_id),region:r.region as Region,month:String(r.month),status:r.status as ReviewStatus,
  manifest_id:String(r.manifest_id),manifest_hash:String(r.manifest_hash),facts:r.facts as ReviewFacts,method_version:String(r.method_version),code_version:String(r.code_version),created_at:iso(r.created_at)});
 const runDetailFrom=(r:Record<string,unknown>):RunDetail=>({explanation_id:String(r.explanation_id),user_id:String(r.user_id),state:r.state as ExplanationState,locale:r.locale as 'zh'|'en',
@@ -137,18 +172,25 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
     // even if the caller changes its object while the RPC is in flight. Undefined fields disappear as on wire.
     const canonical=canonicalJson(body),hash=sha256Hex(canonical);
     const frozen=JSON.parse(canonical) as StrategyManifest;
+    const bodyBytes=Buffer.byteLength(canonical,'utf8'),gzip=bodyBytes>MANIFEST_GZ_THRESHOLD_BYTES;
+    const args={p_kind:frozen.kind,...(gzip?{p_body_gz:gzipSync(Buffer.from(canonical,'utf8'),{level:6}).toString('base64'),p_body_bytes:bodyBytes}:{p_body:frozen}),
+     p_manifest_hash:hash,p_cutoff:frozen.cutoff,p_method_version:frozen.method_version,p_code_version:frozen.code_version,p_catalog_version:frozen.catalog_version};
     completed();stage='rpc';stageStarted=performance.now();
-    const id=await call(()=>t.rpc('macro_put_manifest',{p_kind:frozen.kind,p_body:frozen,p_manifest_hash:hash,p_cutoff:frozen.cutoff,p_method_version:frozen.method_version,p_code_version:frozen.code_version,p_catalog_version:frozen.catalog_version}));
+    const response=await call(()=>t.rpc(gzip?'macro_put_manifest_gz':'macro_put_manifest',args));
+    const result=response as {manifest_id?:unknown;outcome?:unknown}|null;
+    const id=gzip?result?.manifest_id:response;
+    if(gzip&&!['inserted','replayed','compare'].includes(String(result?.outcome)))throw new StrategyDbError('rpc_failed','invalid_manifest_id');
     if(typeof id!=='string'||!UUID.test(id))throw new StrategyDbError('rpc_failed','invalid_manifest_id');
-    // The service-only RPC inserts this exact JSONB value or verifies equality on hash conflict.
-    // Manifest rows have no update/delete grants. Read metadata only; manifest(id) still reads full evidence.
+    // The RPC verifies equality on hash conflict, or requests canonical comparison for mixed/different encodings.
+    // Immutable rows need metadata only after insertion or byte-identical replay.
     completed();stage='readback';stageStarted=performance.now();
     // Fixed limit 1 already satisfies the shared select wrapper's clamp.
-    const rows=await call(()=>t.select('admin',{table:'macro_strategy_manifests',columns:['manifest_id','manifest_hash','created_at'],eq:{manifest_id:id},order:[],limit:1}));
+    const rows=await call(()=>t.select('admin',{table:'macro_strategy_manifests',...(gzip&&result?.outcome==='compare'?{}:{columns:['manifest_id','manifest_hash','created_at']}),eq:{manifest_id:id},order:[],limit:1}));
     const r=rows[0];
     if(rows.length!==1||!r||typeof r.manifest_id!=='string'||r.manifest_id.toLowerCase()!==id.toLowerCase()||r.manifest_hash!==hash
      ||!(r.created_at instanceof Date||typeof r.created_at==='string'&&/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(r.created_at)))
      throw new StrategyDbError('rpc_failed','invalid_manifest_metadata');
+    if(gzip&&result?.outcome==='compare'&&canonicalJson(manifestFrom(r).body)!==canonical)throw new StrategyDbError('payload_conflict');
     const stored={manifest_id:r.manifest_id,manifest_hash:hash,body:frozen,created_at:iso(r.created_at)};
     completed();return stored;
    }catch(e){
@@ -159,6 +201,22 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
     throw e;
    }
    });
+  },
+  async getStrategyView(viewKey){
+   if(!HEX64.test(viewKey))return null;
+   const [r]=await select('admin',{table:'macro_strategy_views',eq:{view_key:viewKey},order:[],limit:1});
+   return r?viewFrom(r):null;
+  },
+  async getStrategyViews(viewKeys){
+   if(!viewKeys.length)return [];
+   const rows=await select('admin',{table:'macro_strategy_views',eq:{},in:{column:'view_key',values:viewKeys},order:[],limit:viewKeys.length});
+   return rows.map(viewFrom).filter((r):r is StrategyView=>r!==null);
+  },
+  async putStrategyView(a){
+   validateView(a);
+   const result=await rpc('macro_put_strategy_view',Object.fromEntries(Object.entries(a).map(([k,v])=>[`p_${k}`,v]))) as StrategyViewWrite;
+   if(!['inserted','replayed','conflict'].includes(result?.outcome))throw new StrategyDbError('rpc_failed');
+   return result;
   },
   manifest:id=>manifestById('anon',id),
   async reviewCurrent(region,month){
@@ -238,7 +296,8 @@ export function supabaseTransport(c:{admin:SupabaseClient;anon:SupabaseClient;se
  return {
   async rpc(fn,args){
    // Unnamed JSONB RPC accepts this same complete request body without PostgREST's
-   // large json_to_record argument tuple. SQL delegates to the original validated RPC.
+   // large json_to_record argument tuple. Gzip already names its unnamed JSONB endpoint;
+   // the small-body JSON endpoint delegates to the original validated RPC.
    const {data,error}=await pick('admin').rpc(fn==='macro_put_manifest'?'macro_put_manifest_json':fn,args);
    if(error)throw error;return data;
   },
@@ -262,7 +321,31 @@ export type MemRunView={state:ExplanationState;raw_output:unknown;finalize_paylo
 export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(id:string)=>void;_run:(explanationId:string)=>MemRunView|null}{
  const now=opts.now??(()=>new Date());
  const clone=<T>(v:T):T=>v===undefined?v:JSON.parse(JSON.stringify(v)) as T;
- const manifests=new Map<string,StoredManifest>(),byHash=new Map<string,string>();
+ const views=new Map<string,StrategyView>();
+ const manifests=new Map<string,StoredManifest>(),byHash=new Map<string,string>(),manifestRows=new Map<string,Record<string,unknown>>();
+ const manifestStore=strategyDbOver({
+  async rpc(fn,a){
+   const gz=fn==='macro_put_manifest_gz',existing=byHash.get(String(a.p_manifest_hash));
+   const bytes=gz?Buffer.from(String(a.p_body_gz),'base64'):null;
+   if(gz){
+    const keys=['p_kind','p_body_gz','p_body_bytes','p_manifest_hash','p_cutoff','p_method_version','p_code_version','p_catalog_version'];
+    if(Object.keys(a).length!==keys.length||!keys.every(k=>k in a)||typeof a.p_body_gz!=='string')throw new StrategyDbError('invalid_argument');
+    if(!bytes||bytes.length<20||bytes.length>16777216||bytes[0]!==31||bytes[1]!==139||!Number.isInteger(a.p_body_bytes)||Number(a.p_body_bytes)<=0||Number(a.p_body_bytes)>134217728)throw new StrategyDbError('invalid_argument');
+   }
+   if(existing){
+    const r=manifestRows.get(existing)!;
+    if(!gz){if(r.body===null||canonicalJson(r.body)!==canonicalJson(a.p_body))throw new StrategyDbError('payload_conflict');return existing;}
+    const equal=r.body===null&&Buffer.isBuffer(r.body_gz)&&r.body_gz.equals(bytes!)&&r.body_bytes===a.p_body_bytes
+     &&r.kind===a.p_kind&&iso(r.cutoff)===iso(a.p_cutoff)&&r.method_version===a.p_method_version&&r.code_version===a.p_code_version&&r.catalog_version===a.p_catalog_version;
+    return {manifest_id:existing,outcome:equal?'replayed':'compare'};
+   }
+   const id=randomUUID();
+   manifestRows.set(id,{manifest_id:id,manifest_hash:a.p_manifest_hash,created_at:now().toISOString(),kind:a.p_kind,
+    body:gz?null:clone(a.p_body),body_gz:bytes,body_bytes:gz?a.p_body_bytes:null,cutoff:a.p_cutoff,method_version:a.p_method_version,code_version:a.p_code_version,catalog_version:a.p_catalog_version});
+   byHash.set(String(a.p_manifest_hash),id);return gz?{manifest_id:id,outcome:'inserted'}:id;
+  },
+  async select(_role,spec){const r=manifestRows.get(spec.eq.manifest_id);return r?[spec.columns?Object.fromEntries(spec.columns.map(k=>[k,r[k]])):{...r,body:clone(r.body)}]:[];},
+ });
  const results=new Map<string,ReviewResult>(),resultByKey=new Map<string,string>();
  const current=new Map<string,{region:Region;month:string;result_id:string;generation:number;cutoff:string;updated_at:string}>();
  const attempts:{region:Region;month:string;status:string;result_id:string|null;error:unknown}[]=[];
@@ -284,14 +367,17 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
  return {
   _userId(id){sessionUser=id;},
   _run(id){const r=runs.get(id);return r?clone({state:r.state,raw_output:r.raw_output,finalize_payload:r.finalize_payload,finalized:r.finalized,late_output:r.late_output}):null;},
-  async putManifest(body){
-   const hash=sha256Hex(canonicalJson(body));
-   const existing=byHash.get(hash);
-   if(existing){const m=manifests.get(existing)!;if(canonicalJson(m.body)!==canonicalJson(body))throw new StrategyDbError('payload_conflict');return clone(m);}
-   const m:StoredManifest={manifest_id:randomUUID(),manifest_hash:hash,body:clone(body),created_at:now().toISOString()};
-   manifests.set(m.manifest_id,m);byHash.set(hash,m.manifest_id);return clone(m);
+  async putManifest(body){const m=await manifestStore.putManifest(body);manifests.set(m.manifest_id,clone(m));return m;},
+  async getStrategyView(key){const row=views.get(key);return row?clone(row):null;},
+  async getStrategyViews(keys){return keys.flatMap(key=>{const row=views.get(key);return row?[clone(row)]:[];});},
+  async putStrategyView(a){
+   validateView(a);
+   if(!manifests.has(a.manifest_id))throw new StrategyDbError('rpc_failed');
+   const previous=views.get(a.view_key);
+   if(previous)return {outcome:previous.view_sha256===a.view_sha256?'replayed':'conflict'};
+   views.set(a.view_key,clone(a));return {outcome:'inserted'};
   },
-  async manifest(id){const m=manifests.get(id);return m?clone(m):null;},
+  manifest:id=>manifestStore.manifest(id),
   async reviewCurrent(region,month){
    const c=current.get(`${region}|${month}`);if(!c)return null;
    return {result:clone(results.get(c.result_id)!),generation:c.generation,cutoff:c.cutoff};

@@ -3,8 +3,7 @@ import {describe,expect,it} from 'vitest';
 import {MACRO_CATALOG,catalogById,regimeInputsOf} from './catalog';
 import {METHODOLOGY_VERSION,RULES,RULES_VERSION,WEIGHTS_V1,classifyRegime,matchRule,pickStates,regionWeights} from './regime';
 import type {RegimeInput} from './regime';
-import type {ObservationRow,SeriesType} from './types';
-import {buildRegimeInputFromRows} from './regime-selection';
+import type {SeriesType} from './types';
 
 let n=0;
 const o=(period_end:string,value_text:string)=>({observation_id:`obs-${++n}`,period_end,value_text});
@@ -178,17 +177,4 @@ describe('pickStates tie order (recovery < overheat < stagflation < recession)',
  it('only one nonzero → secondary null',()=>{
   expect(pickStates({recovery:0,overheat:0,stagflation:0,recession:1})).toEqual({primary:'recession',secondary:null});
  });
-});
-
-it('consumes BIS LPR through row selection and adds 10/125 CN coverage',async()=>{
- const histories=Object.fromEntries(Object.entries(CN.series).map(([id,s])=>[id,[s.prev3m,s.prev,s.latest].filter((v,i,a)=>v&&a.findIndex(x=>x?.period_end===v.period_end)===i).map(v=>({series_id:id,...v!}) as ObservationRow).sort((a,b)=>a.period_end.localeCompare(b.period_end))]));
- histories.CN_LPR_1Y=[{series_id:'CN_LPR_1Y',observation_id:'bis-lpr',period_end:'2026-10-31',value_text:'3'} as ObservationRow];
- const build=async(withLpr:boolean)=>buildRegimeInputFromRows('CN',{}, {
-  latestEligible:async ids=>ids.filter(id=>withLpr||id!=='CN_LPR_1Y').flatMap(id=>histories[id]?.slice(-1)??[]),
-  eligibleHistory:async id=>histories[id]??[],eligibleHistoryAsOf:async id=>histories[id]??[],
- });
- const before=classifyRegime((await build(false)).input),after=classifyRegime((await build(true)).input);
- expect(after.contributions.find(c=>c.series_id==='CN_LPR_1Y')).toMatchObject({rule_id:'policy.2_5to4_5',weight:10,contribution:{recovery:3,overheat:2,stagflation:1,recession:1}});
- expect(after.regime!.coverage-before.regime!.coverage).toBeCloseTo(10/125,10);
- expect(before.uncoveredWeight-after.uncoveredWeight).toBe(10);
 });
