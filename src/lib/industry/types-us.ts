@@ -1,5 +1,6 @@
 // US extensions live outside the macro_regime@v2 pinned import closure.
 import {IndustryDbError as PinnedIndustryDbError} from './types';
+import type {FactsBatchReader} from '../facts/read-batch';
 import type * as Pinned from './types';
 export * from './types';
 
@@ -27,7 +28,7 @@ export type IndustryDb=Omit<Pinned.IndustryDb,'createMetricRun'|'stageMetricRows
  metricRun(run:string):Promise<MetricRunRow|null>;
  metricRowsOfRun(run:string,filter?:{codes?:string[];metrics?:AggMetricAny[];periodEnds?:string[];durations?:Pinned.AggDuration[]}):Promise<MetricCellRow[]>;
 };
-export type IndustryDeps=Omit<Pinned.IndustryDeps,'db'|'manifests'>&{db:IndustryDb;manifests:ManifestStore};
+export type IndustryDeps=Omit<Pinned.IndustryDeps,'db'|'manifests'>&{db:IndustryDb;manifests:ManifestStore;factsBatch?:FactsBatchReader};
 export type IndustryDbErrorCode=Pinned.IndustryDbErrorCode|'invalid_cell_rule'|'invalid_membership_basis';
 export type IndustryDbError=Omit<Pinned.IndustryDbError,'code'>&{code:IndustryDbErrorCode};
 type ErrorConstructor=new(code:IndustryDbErrorCode,message?:string)=>IndustryDbError;
