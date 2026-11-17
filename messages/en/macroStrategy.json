@@ -177,5 +177,17 @@
     "role": {"latest": "Latest", "comparison": "Comparison"},
     "kind": {"revised": "Revised", "dropped": "Dropped at settlement", "unchanged": "Unchanged", "newly_available": "Newly available"},
     "subkind": {"later_period": "Later period", "backfill": "Backfill", "new_series": "New series"}
+  },
+  "cycleNotes": {
+    "title": "Key observations (fixed templates, no model writing)",
+    "disclaimer": "Generated from table values using fixed templates; no causal explanation or investment advice.",
+    "episode": "{direction}: {start} → {end}, {n} policy events, cumulative policy move {bp}.",
+    "flags": " Flags: {flags}.",
+    "interval": "{column}: from boundary {from} to boundary {to}, interval change {value}.",
+    "missing": "{column}: Missing ({reason})",
+    "largestRise": "Among available {unit} columns, the largest rise is {column}: {value}.",
+    "largestFall": "Among available {unit} columns, the largest fall is {column}: {value}.",
+    "coverage": "{n} / {total} columns have data.",
+    "openEvidence": "View evidence: {text}"
   }
 }
