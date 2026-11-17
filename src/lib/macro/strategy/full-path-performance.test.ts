@@ -2,6 +2,7 @@
 // No credentials or network; auth and PostgreSQL/Next storage backends are simulated.
 import {createClient} from '@supabase/supabase-js';
 import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
 import {closeSync,constants,openSync,realpathSync,writeFileSync} from 'node:fs';
 import {basename,dirname,join,resolve,sep} from 'node:path';
 import {afterEach,expect,it,vi} from 'vitest';
@@ -23,6 +24,9 @@ import {strategyMemo} from './memo';
 import {memoryStrategyPort} from './port';
 import {fedTargetFixture,fixture,monthly,obs,snap} from './testing/fixture';
 import {macroDbStrategyPort} from './wiring';
+import {strategyHistoriesReader} from './history-rpc';
+import {buildTransmissionManifest} from './transmission';
+import {buildPolicyResponseManifest} from './policy-response';
 
 const CREATED='2026-11-07T00:00:00.000Z';
 const series=['US_DGS10','CN_CGB_10Y','US_WTI','US_DTWEXBGS','CN_USDCNY_CP'];
@@ -40,7 +44,7 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
   macro_observations:observations.map(o=>({...o,locator:{fixture:true},code_version:'fixture',batch_id:'fixture'})),
   macro_snapshots:snapshots,
   macro_publish_state:[{region:'US',revision:1,input_revision:1},{region:'CN',revision:1,input_revision:1}],
-  macro_strategy_manifests:[],
+  macro_strategy_manifests:[],macro_strategy_views:[],
  };
  const calls:Call[]=[];
  const fetcher:typeof fetch=async(input,init)=>{
@@ -48,17 +52,34 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
   if(url.origin!=='https://fixture.invalid')throw new Error('non-fixture transport forbidden');
   const table=url.pathname.replace('/rest/v1/','');
   let result:unknown,total=0,offset=0,rowCount=0;
-  if(table==='rpc/macro_put_manifest_json'){
+  if(table==='rpc/macro_strategy_histories'||table==='rpc/macro_latest_observations'){
+   expect(req.headers.get('apikey')).toBe('fixture-anon-key');
+   const args=JSON.parse(body),ids:string[]=args.p_series??args.p_series_ids;
+   const groups=ids.map(series_id=>{
+    const found=rows.macro_observations.filter(r=>r.series_id===series_id&&r.status==='ok'&&String(r.available_at)<=new Date(args.p_as_of).toISOString()&&(!args.p_from||String(r.period_end)>=args.p_from)&&(!args.p_to||String(r.period_end)<=args.p_to));
+    const by=new Map<string,Row>();
+    for(const r of found){const old=by.get(String(r.period_end));if(!old||Number(r.version)>Number(old.version))by.set(String(r.period_end),r);}
+    return {series_id,raw_count:found.length,rows:[...by.values()].sort((a,b)=>String(a.period_end).localeCompare(String(b.period_end)))};
+   });
+   result=table==='rpc/macro_latest_observations'?groups.flatMap(g=>g.rows.slice(-1)):groups.map(g=>({...g,rows:g.rows.map(r=>[r.observation_id,r.period_end,r.value_text,r.version,r.available_at,r.ingested_at,r.retrieval_id,r.derived_from,r.transform])}));
+  }else if(table==='rpc/macro_put_strategy_view'){
+   expect(req.headers.get('apikey')).toBe('fixture-admin-key');
+   const args=JSON.parse(body);expect(sha256Hex(args.p_view_json)).toBe(args.p_view_sha256);
+   const stored=rows.macro_strategy_views.find(r=>r.view_key===args.p_view_key);
+   result={outcome:stored?(stored.view_sha256===args.p_view_sha256?'replayed':'conflict'):'inserted'};
+   if(!stored)rows.macro_strategy_views.push(Object.fromEntries(Object.entries(args).map(([k,v])=>[k.slice(2),v])));
+  }else if(table==='rpc/macro_put_manifest_json' ||table==='rpc/macro_put_manifest_gz'){
    expect(req.method).toBe('POST');
-   const args=JSON.parse(body);
-   expect(digest(args.p_body)).toBe(args.p_manifest_hash);
+   const args=JSON.parse(body),gz=table.endsWith('_gz');
+   const decoded=gz?JSON.parse(gunzipSync(Buffer.from(args.p_body_gz,'base64')).toString()):args.p_body;
+   expect(digest(decoded)).toBe(args.p_manifest_hash);
    let stored=rows.macro_strategy_manifests.find(r=>r.manifest_hash===args.p_manifest_hash);
-   if(stored)expect(stored.body).toEqual(args.p_body);
+   if(stored)expect(stored.body??JSON.parse(gunzipSync(Buffer.from(String(stored.body_gz).slice(2),'hex')).toString())).toEqual(decoded);
    else{
-    stored={manifest_id:`00000000-0000-4000-8000-${String(rows.macro_strategy_manifests.length+1).padStart(12,'0')}`,manifest_hash:args.p_manifest_hash,body:args.p_body,created_at:CREATED};
+    stored={manifest_id:`00000000-0000-4000-8000-${String(rows.macro_strategy_manifests.length+1).padStart(12,'0')}`,manifest_hash:args.p_manifest_hash,body:gz?null:decoded,...(gz?{body_gz:`\\x${Buffer.from(args.p_body_gz,'base64').toString('hex')}`,body_bytes:args.p_body_bytes}:{}),created_at:CREATED};
     rows.macro_strategy_manifests.push(stored);
    }
-   result=stored.manifest_id;
+   result=gz?{manifest_id:stored.manifest_id,outcome:'replayed'}:stored.manifest_id;
   }else{
    expect(req.method).toBe('GET');
    if(!(table in rows))throw new Error(`unexpected fixture table:${table}`);
@@ -106,7 +127,7 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
  const client=(key:string)=>createClient('https://fixture.invalid',key,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:boundedProbe}});
  const clients={admin:client('fixture-admin-key'),anon:client('fixture-anon-key')};
  const port=macroDbStrategyPort(supabaseMacroDb(clients));
- return {port,db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
+ return {fetch:boundedProbe,port,rpcPort:macroDbStrategyPort(supabaseMacroDb(clients),{historiesReader:strategyHistoriesReader(clients.anon)}),db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
   reference:memoryStrategyPort(fixture({observations,snapshots,catalog:[...port.catalog()],catalogVersion:port.catalogVersion(),rules:port.rules()}))};
 }
 
@@ -134,7 +155,8 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    const body=await response.text(),elapsedMs=performance.now()-start;
    expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('private, no-store');
    const parsed=JSON.parse(body);
-   const stored=t.rows.macro_strategy_manifests.find(r=>r.manifest_id===parsed.manifest_id)! as unknown as StoredManifest;
+   const raw=t.rows.macro_strategy_manifests.find(r=>r.manifest_id===parsed.manifest_id)!;
+   const stored={...raw,body:raw.body??JSON.parse(gunzipSync(Buffer.from(String(raw.body_gz).slice(2),'hex')).toString())} as unknown as StoredManifest;
    expect(stored).toBeDefined();expect(stored.body).toEqual(JSON.parse(canonicalJson(reference)));
    expect(stored.manifest_hash).toBe(digest(reference));
    expect(parsed).toEqual(buildCycleTable(stored));
@@ -150,10 +172,10 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    expect(t.calls.filter(c=>c.table==='macro_publish_state').map(c=>c.query).sort((a,b)=>a.region.localeCompare(b.region))).toEqual([
     {select:'revision,input_revision',region:'eq.CN'},{select:'revision,input_revision',region:'eq.US'},
    ]);
-   const cold=phase==='cold'||phase==='cache-reset-cold';
+   const cold=phase==='cold';
    if(cold){
     expect(t.peak()).toBe(HISTORY_PAGE_CONCURRENCY);
-    expect(byTable['rpc/macro_put_manifest_json']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
+    expect(byTable['rpc/macro_put_manifest_gz']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
     const histories=t.calls.filter(c=>c.table==='macro_observations');
     expect(t.historyHeaders.filter(h=>h==='count=exact')).toHaveLength(13);
     expect(new Set(histories.map(c=>c.series)).size).toBe(13);
@@ -166,12 +188,16 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
      const requests=histories.filter(c=>c.series===`eq.${id}`);
      expect(requests.map(c=>[c.offset,c.limit,c.rows])).toEqual([[0,1000,t.rows.macro_observations.filter(r=>r.series_id===id).length]]);
     }
-    expect(t.calls).toHaveLength(39);
+    expect(t.calls).toHaveLength(41);expect(byTable.macro_strategy_views).toBe(1);expect(byTable['rpc/macro_put_strategy_view']).toBe(1);
     expect(histories.reduce((sum,c)=>sum+c.rows,0)).toBe(reference.inputs.length);
     const metadata=t.calls.find(c=>c.table==='macro_strategy_manifests')!;
     expect(metadata.query).toEqual({select:'manifest_id,manifest_hash,created_at',manifest_id:`eq.${stored.manifest_id}`,limit:'1'});
     expect(metadata.metadata).toEqual([{manifest_id:stored.manifest_id,manifest_hash:stored.manifest_hash,created_at:CREATED}]);
     expect(sharedSets).toBe(1);
+   }else if(phase==='stored-view-cold'){
+    expect(t.calls).toHaveLength(5);expect(byTable.macro_strategy_views).toBe(1);expect(byTable.macro_observations??0).toBe(0);
+    expect(byTable['rpc/macro_put_manifest_gz']??0).toBe(0);expect(sharedSets).toBe(1);
+    expect(response.headers.get('x-macro-strategy-view')).toBe('stored');
    }else{expect(t.calls).toHaveLength(4);expect(sharedSets).toBe(0);}
    expect(sharedGets).toBe(phase==='local-warm'?0:1);
    expect(response.headers.get('x-macro-strategy-memo')).toBe(phase==='local-warm'?'hit':'miss');
@@ -183,9 +209,10 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
   strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('cold');
   for(let i=0;i<5;i++)await measure('local-warm');
   strategyMemo.clear();await measure('shared-warm-local-reset');
-  strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('cache-reset-cold');
+  strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('stored-view-cold');
  }
  expect(forbidden).not.toHaveBeenCalled();
+ console.info('cycle view cold comparison',JSON.stringify(samples.filter(s=>s.phase==='cold'||s.phase==='stored-view-cold').map(({boundary,phase,requests,request_body_bytes,response_body_bytes,handler_response_bytes})=>({boundary,phase,requests,request_body_bytes,response_body_bytes,handler_response_bytes}))));
  const output=process.env.MACRO_FULL_PATH_BENCHMARK_OUTPUT;
  if(output){
   const root=realpathSync('/tmp/osstack'),target=resolve(output),parent=realpathSync(dirname(target));
@@ -211,3 +238,95 @@ it.each([{offset:0,kind:'timeout'},{offset:1000,kind:'timeout'},{offset:0,kind:'
  expect(t.calls.some(c=>c.table.startsWith('rpc/macro_put_manifest'))).toBe(false);
  expect(t.historyHeaders.filter(h=>h==='count=exact')).toHaveLength(13);
  });
+
+// Cold read comparison uses the same fixture, client adapters and complete manifest hashes.
+it('compares legacy and RPC cold manifests and records requests and response bytes',async()=>{
+ const t=fixtureTransport(),samples:Record<string,unknown>[]=[];
+ const options={now:new Date(CREATED),codeVersion:'fixture-full-path-v1'};
+ const builds=[
+  ...(['US','CN'] as const).map(region=>({name:`transmission-${region}`,build:(port:typeof t.port)=>buildTransmissionManifest(port,{...options,region})})),
+  ...([1,3,6] as const).map(window=>({name:`policy-response-${window}`,build:(port:typeof t.port)=>buildPolicyResponseManifest(port,{...options,window})})),
+  ...(['event_day','first_trading_day','month_end'] as const).map(boundary=>({name:`cycle-table-${boundary}`,build:(port:typeof t.port)=>buildCycleTableManifest(port,{...options,boundary})})),
+ ];
+ for(const route of builds){
+  const hashes:string[]=[];const measurements:{requests:number;bytes:number}[]=[];
+  for(const [mode,port] of [['legacy',t.port],['rpc',t.rpcPort]] as const){
+   t.calls.length=0;const start=performance.now(),manifest=await route.build(port);
+   const hash=digest(manifest);hashes.push(hash);
+   const history=t.calls.filter(c=>c.table==='macro_observations'||c.table==='rpc/macro_strategy_histories');
+   const sample={route:route.name,mode,requests:history.length,bytes:history.reduce((sum,c)=>sum+c.responseBytes,0),ms:performance.now()-start,manifest_hash:hash};
+   samples.push(sample);measurements.push(sample);
+   if(mode==='rpc'&&route.name.startsWith('cycle-table'))expect(history.filter(c=>c.table==='rpc/macro_strategy_histories')).toHaveLength(1);
+  }
+  expect(hashes[1]).toBe(hashes[0]);
+  if(route.name.startsWith('cycle-table')){
+   expect(measurements[1].requests).toBeLessThan(measurements[0].requests/10);
+   expect(measurements[1].bytes).toBeLessThan(measurements[0].bytes/2);
+  }
+ }
+ console.info('cold history comparison',JSON.stringify(samples));
+ const output=process.env.MACRO_FULL_PATH_BENCHMARK_OUTPUT;
+ if(output){
+  const root=realpathSync('/tmp/osstack'),target=resolve(output+'.histories.json'),parent=realpathSync(dirname(target));
+  if(parent!==root&&!parent.startsWith(root+sep))throw new Error('benchmark output must be under /tmp/osstack/');
+  const fd=openSync(join(parent,basename(target)),constants.O_WRONLY|constants.O_CREAT|constants.O_TRUNC|constants.O_NOFOLLOW);
+  try{writeFileSync(fd,JSON.stringify({scope:'Simulated HTTP fixture, real adapters/builders; excludes PostgreSQL/RLS and network.',samples},null,2)+'\n');}finally{closeSync(fd);}
+ }
+},60000);
+
+it('measures B1 RPC on-demand cold versus B2 stored-view cold, byte for byte',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date(CREATED));
+ vi.stubEnv('MACRO_STRATEGY_ENABLED','1');vi.stubEnv('MACRO_JUDGMENTS_ENABLED','0');
+ const shared=new Map<string,{value:unknown;isStale:boolean}>();
+ vi.stubGlobal('__incrementalCache',{
+  generateSimpleCacheKey:async(key:string)=>sha256Hex(key),get:async(key:string)=>shared.get(key)??null,
+  set:async(key:string,value:unknown)=>{shared.set(key,{value,isStale:false});},
+ });
+ const t=fixtureTransport();deps.port=t.rpcPort;deps.db=t.db;
+ const samples:Record<string,unknown>[]=[];
+ for(const boundary of ['event_day','first_trading_day','month_end'] as const){
+  let builtText='';
+  for(const mode of ['on-demand-cold','stored-view-cold']){
+   strategyMemo.clear();shared.clear();t.calls.length=0;
+   const response=await GET(new Request(`https://fixture.invalid/api/macro/strategy/cycle-table?boundary=${boundary}`));
+   const text=await response.text();expect(response.status).toBe(200);
+   if(mode==='on-demand-cold'){
+    builtText=text;expect(response.headers.get('x-macro-strategy-view')).toBe('built');
+    expect(t.calls.filter(c=>c.table==='rpc/macro_strategy_histories')).toHaveLength(1);
+   }else{
+    expect(text).toBe(builtText);expect(response.headers.get('x-macro-strategy-view')).toBe('stored');
+    expect(t.calls).toHaveLength(5);
+    expect(t.calls.filter(c=>c.table==='macro_strategy_views')).toHaveLength(1);
+    expect(t.calls.some(c=>c.table.includes('histories')||c.table.includes('put_manifest')||c.table==='macro_observations')).toBe(false);
+   }
+   samples.push({boundary,mode,requests:t.calls.length,request_bytes:t.calls.reduce((n,c)=>n+c.requestBytes,0),response_bytes:t.calls.reduce((n,c)=>n+c.responseBytes,0),handler_response_bytes:Buffer.byteLength(text)});
+  }
+ }
+ console.info('B1/B2 cold view comparison',JSON.stringify(samples));
+ const output=process.env.MACRO_FULL_PATH_BENCHMARK_OUTPUT;
+ if(output){
+  const root=realpathSync('/tmp/osstack'),target=resolve(output+'.views.json'),parent=realpathSync(dirname(target));
+  if(parent!==root&&!parent.startsWith(root+sep))throw new Error('benchmark output must be under /tmp/osstack/');
+  const fd=openSync(join(parent,basename(target)),constants.O_WRONLY|constants.O_CREAT|constants.O_TRUNC|constants.O_NOFOLLOW);
+  try{writeFileSync(fd,JSON.stringify({scope:'Real cycle GET, B1 RPC and B2 view adapters, simulated HTTP fixture; includes four identity checks. Excludes real PostgreSQL, network and auth latency.',samples},null,2)+'\n');}finally{closeSync(fd);}
+ }
+},60000);
+
+it('profiles --compare with anon reads, pinned snapshots and full matching hashes',async()=>{
+ const t=fixtureTransport();
+ vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://fixture.invalid');vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY','fixture-anon-key');
+ vi.stubGlobal('fetch',t.fetch);
+ const output=vi.spyOn(console,'log').mockImplementation(()=>{});
+ try{
+  const {main}=await import('../../../../scripts/macro/strategy-latency');
+  await main(['--compare']);
+  const reports=output.mock.calls.map(c=>JSON.parse(String(c[0]))).filter(r=>'equal' in r);
+  expect(reports).toHaveLength(8);
+  for(const r of reports){
+   expect(r.equal).toBe(true);expect(r.legacy.hash).toMatch(/^[a-f0-9]{64}$/);expect(r.rpc.hash).toBe(r.legacy.hash);
+   expect(r.legacy.requests).toBeGreaterThan(0);expect(r.rpc.requests).toBeGreaterThan(0);
+   expect(r.legacy.kb).toBeGreaterThan(0);expect(r.rpc.ms).toBeGreaterThanOrEqual(0);
+  }
+  expect(t.calls.every(c=>c.method==='GET'||c.table.startsWith('rpc/macro_')&&!c.table.includes('put_'))).toBe(true);
+ }finally{output.mockRestore();}
+},60000);

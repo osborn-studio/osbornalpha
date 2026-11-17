@@ -13,6 +13,7 @@ import {canonicalJson,eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
 import {pgFactsDb} from '../facts/pg-facts-db';
 import {companyDbContract} from './db-contract';
 import type {CompanyContractHarness} from './db-contract';
+import {toCompanyDbError} from './db';
 import {pgCompanyDb,pgRpcClient} from './pg-company-db';
 import {readSnapshot,snapshotReader} from './snapshot-read';
 import {pgTableClient} from '../db/pg-table-client';
@@ -29,6 +30,7 @@ import {memorySnapshotObjectStore} from './evidence-index';
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES_MIGRATION='supabase/migrations/20261118090000_company_research.sql';
 const FUNCTIONS_MIGRATION='supabase/migrations/20261118091000_company_research_functions.sql';
+const CHUNK_MIGRATION='supabase/migrations/20261129090000_company_evidence_chunked_replace.sql';
 const RETRY_MIGRATION='supabase/migrations/20261124110000_company_digest_retry_selection.sql';
 const LOOKUP_MIGRATION='supabase/migrations/20261123110000_company_evidence_fact_lookup.sql';
 const FENCE_MIGRATION='supabase/migrations/20261118092000_company_evidence_fence.sql';
@@ -397,6 +399,9 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   {sig:'public.replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)',definer:true,roles:['service_role']},
   {sig:'public.company_digest_due(timestamptz,int,text)',definer:true,roles:['service_role']},
   {sig:'public.company_sweep_due(timestamptz,timestamptz,int,text)',definer:true,roles:['service_role']},
+  {sig:'public.upsert_company_fact_evidence(uuid,text,bigint,bigint,jsonb)',definer:true,roles:['service_role']},
+  {sig:'public.prune_company_fact_evidence(uuid,text,bigint,bigint,uuid[])',definer:true,roles:['service_role']},
+  {sig:'public.company_digest_backlog_detail(int)',definer:true,roles:['service_role']},
   {sig:'public.company_digest_backlog()',definer:true,roles:['service_role']},
   {sig:'public.company_fact_evidence(uuid[])',definer:true,roles:ALL},
   {sig:'public.company_read_snapshot(uuid,text,text[],date,date,date,boolean,int)',definer:false,roles:ALL},
@@ -433,8 +438,21 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
    await expect(replayMigration(admin,readFileSync(FENCE_MIGRATION,'utf8'))).resolves.toBeUndefined();
    await expect(replayMigration(admin,readFileSync(LOOKUP_MIGRATION,'utf8'))).resolves.toBeUndefined();
    await expect(replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
+   await expect(replayMigration(admin,readFileSync(CHUNK_MIGRATION,'utf8'))).resolves.toBeUndefined();
   }
   expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
+ });
+
+ it('chunked writer caps calls at 500, guards null prune and clamps backlog limits',async()=>{
+  const s=await fx.stream([{facts:[{}]}]);const a=await fx.one(`select public.begin_company_digest_attempt($1,'US',now()) v`,[s.iss]);
+  const up=(rows:unknown)=>inTx(admin,{role:'service_role'},tx=>tx.c.query(`select public.upsert_company_fact_evidence($1,'US',$2,1,$3::jsonb) v`,[s.iss,a,JSON.stringify(rows)]));
+  expect(await fails(up(Array(501).fill({})))).toMatchObject({message:'invalid_evidence',code:'22023',detail:'rows: at most 500 per call'});
+  expect((await up([])).rows[0].v).toEqual({upserted:0});
+  expect(await fails(inTx(admin,{role:'service_role'},tx=>tx.c.query(`select public.prune_company_fact_evidence($1,'US',$2,1,null)`,[s.iss,a])))).toMatchObject({message:'invalid_evidence',code:'22023',detail:'keep: array expected'});
+  for(const limit of [-1,0,1,20,100,101,null]){
+   const v=await fx.one(`select public.company_digest_backlog_detail($1) v`,[limit]) as {failedStreams:number;streams:unknown[]};
+   expect(v.streams.length).toBe(Math.min(v.failedStreams,Math.max(0,Math.min(limit??20,100))));
+  }
  });
 
  it('retry migration preserves the sweep function identity, owner, ACL and security on replay',async()=>{
@@ -902,6 +920,8 @@ async function companyHarness():Promise<CompanyContractHarness&{pool:Pool}>{
  const pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});   // a regression that blocks fails instead of hanging afterAll
  const fx=fixtures(pool);
  return {pool,db:pgCompanyDb(pool),facts:pgFactsDb(pool),
+  upsertEvidence:(i,m,a,r,rows)=>inTx(pool,{role:'service_role'},async tx=>(await tx.c.query(`select public.upsert_company_fact_evidence($1,$2,$3,$4,$5::jsonb) v`,[i,m,a,r,JSON.stringify(rows)])).rows[0].v).catch(e=>{throw toCompanyDbError(e);}),
+  pruneEvidence:(i,m,a,r,keep)=>inTx(pool,{role:'service_role'},async tx=>(await tx.c.query(`select public.prune_company_fact_evidence($1,$2,$3,$4,$5::uuid[]) v`,[i,m,a,r,keep])).rows[0].v).catch(e=>{throw toCompanyDbError(e);}),
   issuer:(name='ZZ Company Contract')=>fx.issuer(name),user:()=>fx.user(),
   batch:(producer='company-digest')=>fx.batch(producer,producer==='company-digest'?'company.digest':'facts.us'),
   close:async()=>{await pool.end();}};

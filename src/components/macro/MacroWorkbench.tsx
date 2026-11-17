@@ -5,6 +5,7 @@
 // snapshot with its collection status; they never show zeros.
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { MACRO_CATALOG } from '@/lib/macro/catalog';
 import { CORRELATION_VERSION } from '@/lib/macro/correlation';
 import { CYCLES_VERSION } from '@/lib/macro/cycles';
 import { EVENTS_VERSION } from '@/lib/macro/events';
@@ -14,10 +15,12 @@ import { ChangesCard } from './ChangesCard';
 import { CorrelationWorkbench } from './CorrelationWorkbench';
 import { IndicatorDetail } from './IndicatorDetail';
 import { IndicatorTable } from './IndicatorTable';
+import { KeyIndicatorCards } from './KeyIndicatorCards';
 // MACRO-P3
 import { strategyLinkTabs } from './strategy-links';
 // /MACRO-P3
 import { MacroJudgmentSlot } from './MacroJudgmentSlot';
+import { AllocationTemplateCard } from './AllocationTemplateCard';
 import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
 import { SourceFooter } from './SourceFooter';
 import { useMacroOverview } from './use-macro-overview';
@@ -34,6 +37,14 @@ function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: Overview
       {block(t('methodology.availabilityTitle'), t('methodology.availabilityBody'))}
       {block(t('methodology.sourcesTitle'), t('methodology.sourcesBody'))}
       {block(t('methodology.missingTitle'), t('methodology.missingBody'))}
+      <section id="data-gaps" className="card-base space-y-1">
+        <h3 className="text-sm font-semibold">{t('methodology.dataGapsTitle')}</h3>
+        <ul className="space-y-1 text-xs text-text-dim">
+          {MACRO_CATALOG.filter(d => d.status === 'missing' || d.status === 'restricted').map(d => (
+            <li key={d.id}>{d.name[locale]} · {t(`status.${d.status}`)} · {d.reason?.[locale]}</li>
+          ))}
+        </ul>
+      </section>
       {block(t('methodology.revisionsTitle'), t('methodology.revisionsBody'))}
       {block(t('methodology.eventsTitle'), t('methodology.eventsBody'))}
       <section className="card-base space-y-1">
@@ -129,6 +140,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
           {env && <><a href="#macro-updates">{t('changes.title')}</a><a href="#macro-indicators">{t('tabs.indicators')}</a><a href="#macro-sources">{t('sources.title')}</a></>}
         </nav><div className="macro-overview-main">
       {judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
+      {!judgmentsEnabled && <AllocationTemplateCard current={null} />}
 
       {tab === 'overview' && env && (
         <div className="space-y-3">
@@ -136,6 +148,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
             <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
+          <KeyIndicatorCards key={region} region={region} env={env} />
           <section id="macro-indicators" className="card-base space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{t('table.title')}</h2>

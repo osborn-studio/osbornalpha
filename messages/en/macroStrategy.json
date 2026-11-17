@@ -1,4 +1,5 @@
 {
+  "columns": {"label": "Visible columns", "available": "Available only", "all": "Full catalog", "hidden": "{n} columns hidden (restricted / not in catalog)", "plan": "Data gap plan"},
   "tabs": {"workbench": "Macro workbench", "transmission": "Transmission", "history": "History", "review": "Review"},
   "region": {"label": "Region", "US": "US", "CN": "China"},
   "meta": {"manifest": "Manifest {id}", "manifestLink": "Full manifest", "cutoff": "Cutoff {time}", "catalog": "Catalog {version}", "method": "Method {version}"},
@@ -16,9 +17,10 @@
   "state": {"observed": "Observed", "derived": "Derived", "assumption": "Assumption", "missing": "Missing", "restricted": "Restricted", "not_in_catalog": "Not in catalog"},
   "view": {"table": "Table view", "chart": "Chart", "flow": "Flow", "close": "Close"},
   "flow": {
+    "assumptions": "Mechanism assumptions ({n})",
+    "details": "Details and evidence",
     "title": "Live transmission flow",
     "legend": "Badges name each node's source; arrows are untested mechanism assumptions",
-    "edge": "Mechanism assumption: {text}",
     "openDerived": "View inputs",
     "openSeries": "View indicator",
     "derivedTitle": "Derived · {label}",

@@ -2,14 +2,22 @@
 import {readFileSync} from 'node:fs';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
-import {collectableOf} from '@/lib/macro/catalog';
+import {collectableSeriesOf as collectableOf} from '@/lib/macro/series-registry';
+import {DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION} from '@/lib/macro/display-catalog';
+import {parseFredCsv} from '@/lib/macro/parsers/fred-csv';
+import {monthEnd} from '@/lib/macro/periods';
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
 import type {MacroDeps} from '@/lib/macro/deps';
 import {memoryMacroDb} from '@/lib/macro/memory-db';
 import type {EvidenceInput} from '@/lib/macro/types';
 
-const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn()}));
+const mocks=vi.hoisted(()=>({deps:vi.fn(),codeVersion:vi.fn(),laterFirstPeriod:false,withDisplay:true}));
 vi.mock('@/lib/macro/deps',()=>({productionMacroDeps:mocks.deps}));
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.codeVersion}));
+vi.mock('@/lib/macro/series-registry',async(importOriginal)=>{
+ const actual=await importOriginal<typeof import('@/lib/macro/series-registry')>();
+ return {...actual,collectableSeriesOf:(adapter:Parameters<typeof actual.collectableSeriesOf>[0])=>actual.collectableSeriesOf(adapter).filter(d=>mocks.withDisplay||!d.id.match(/^US_(WALCL|RRPONTSYD|WTREGEN)/)).map(d=>mocks.laterFirstPeriod&&d.source?.seriesKey==='DFF'?{...d,firstPeriod:'2002-12-18'}:d)};
+});
 // Typed loosely (Record) so cases can resolve other receipts (stale / failed) or reject (fenced); 4 params like publishRegion.
 const publishMock=vi.hoisted(()=>vi.fn(async(_deps:unknown,region:string,_today?:string,_opts?:unknown):Promise<Record<string,unknown>>=>({status:'published',region,snapshot_id:'s-1',revision:1,observation_count:0,regime:'null',uncovered_weight:0,attempts:1,hook:'skipped',replayed:false})));
 vi.mock('@/lib/macro/snapshots',()=>({publishRegion:publishMock}));
@@ -35,7 +43,7 @@ function fakeEvidence(){const puts:EvidenceInput[]=[];return {puts,async put(e:E
 let fetchCalls:string[],failCodes:Set<string>,overrides:Map<string,string>,deps:MacroDeps,tables:ReturnType<typeof memoryTableClient>,evidence:ReturnType<typeof fakeEvidence>;
 beforeEach(()=>{
  vi.clearAllMocks();process.env.CRON_SECRET='cron-secret';
- early=false;fetchCalls=[];failCodes=new Set();overrides=new Map();
+ early=false;mocks.laterFirstPeriod=false;mocks.withDisplay=true;fetchCalls=[];failCodes=new Set();overrides=new Map();
  tables=memoryTableClient({ingest_batches:['batch_id'],dq_quarantine:['id'],dq_freshness:['dataset']});evidence=fakeEvidence();
  const fetch=(async(input:string|URL|Request)=>{
   const url=String(input);fetchCalls.push(url);const code=codeOfUrl(url);
@@ -71,7 +79,7 @@ describe('macro-sync cron',()=>{
   const body=await res.json();
   expect(body.preview).toBe(true);expect(body.ok).toBe(true);
   expect(fetchCalls.map(codeOfUrl).sort()).toEqual(FRED.map(d=>d.source!.seriesKey).sort());
-  expect(fetchCalls.every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
+  expect(fetchCalls.filter(u=>!['WALCL','RRPONTSYD','WTREGEN'].includes(codeOfUrl(u))).every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
   expect(body.counts.fetched).toBe(2*FRED.length);
   const dgs=body.series.find((s:{series_id:string})=>s.series_id==='US_DGS10_D');
   expect(dgs).toMatchObject({points:2,first:'2026-09-30',last:'2026-10-01',sample:[{period_end:'2026-09-30',value_text:'4.1'},{period_end:'2026-10-01',value_text:'4.2'}]});
@@ -114,6 +122,15 @@ describe('macro-sync cron',()=>{
   await GET(req());
   const dff=fetchCalls.find(u=>codeOfUrl(u)==='DFF')!,cpi=fetchCalls.find(u=>codeOfUrl(u)==='CPIAUCSL')!;
   expect(dff).toContain('cosd=2025-10-02');expect(cpi).toContain('cosd=2020-11-01');
+ });
+ it('uses a series firstPeriod to decide when its backfill is complete',async()=>{
+  mocks.laterFirstPeriod=true;
+  overrides.set('DFF','observation_date,DFF\n2003-01-03,4.0\n2026-09-30,4.1\n2026-10-01,4.2\n');
+  await GET(req());
+  expect(fetchCalls.find(u=>codeOfUrl(u)==='DFF')).toContain('cosd=2002-12-18');
+  fetchCalls=[];
+  await GET(req());
+  expect(fetchCalls.find(u=>codeOfUrl(u)==='DFF')).toContain('cosd=2025-10-02');
  });
  it('a failing series makes the batch partial; the rest is written and freshness stays ok',async()=>{
   failCodes.add('DFF');
@@ -180,7 +197,7 @@ describe('macro-sync cron',()=>{
  it('keeps the full window until the backfill reaches 2000: a series with only recent rows is refetched in full',async()=>{
   await GET(req());fetchCalls=[];
   await GET(req());
-  expect(fetchCalls.every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
+  expect(fetchCalls.filter(u=>!['WALCL','RRPONTSYD','WTREGEN'].includes(codeOfUrl(u))).every(u=>u.includes('cosd=2000-01-01'))).toBe(true);
  });
  it('a failed backfill write keeps the full window next run (T7-2)',async()=>{
   early=true;
@@ -207,4 +224,41 @@ describe('macro-sync cron',()=>{
   const cfg=JSON.parse(readFileSync(new URL('../../../../../vercel.json',import.meta.url),'utf8')) as {crons:{path:string;schedule:string}[]};
   expect(cfg.crons).toContainEqual({path:'/api/cron/macro-sync',schedule:'30 5 * * *'});
  });
+});
+
+it('fetches display fixtures at their first periods, mirrors both versions, and preserves the published regime manifest',async()=>{
+ const {publishRegion}=await vi.importActual<typeof import('@/lib/macro/snapshots')>('@/lib/macro/snapshots');
+ const upsert=vi.spyOn(deps.db,'upsertCatalog');
+ mocks.withDisplay=false;await GET(req());mocks.withDisplay=true;
+ const first=await publishRegion({db:deps.db,env:{}},'US','2026-11-06');
+ if(first.status!=='published')throw new Error('baseline publish');
+ const before=await deps.db.snapshot(first.snapshot_id),regime=await deps.db.regimeOf(first.snapshot_id);
+ for(const code of ['WALCL','RRPONTSYD','WTREGEN'])overrides.set(code,readFileSync(new URL(`../../../../lib/macro/fixtures/fred/${code}.csv`,import.meta.url),'utf8'));
+ fetchCalls=[];const response=await GET(req());expect(response.status).toBe(200);
+ const body=await response.json();let fixtureRows=0;
+ for(const d of DISPLAY_CATALOG.filter(d=>!d.derive)){
+  expect(fetchCalls.find(u=>codeOfUrl(u)===d.source!.seriesKey)).toContain(`cosd=${d.firstPeriod}`);
+  const code=d.source!.seriesKey;
+  const points=parseFredCsv(new TextEncoder().encode(overrides.get(code)!),{seriesId:d.id,code,period:d.period});
+  fixtureRows+=points.length;
+  const history=await deps.db.seriesHistory(d.id,{maxRows:20000});
+  expect(history.map(r=>({period_end:r.period_end,value_text:r.value_text})),code).toEqual(points.map(p=>({period_end:p.periodEnd,value_text:p.valueText})));
+  const stored=(deps.db as ReturnType<typeof memoryMacroDb>).allObservations().filter(r=>r.series_id===d.id);
+  expect(stored,code).toHaveLength(points.length);
+  expect(stored.every(r=>r.status==='ok'),code).toBe(true);
+  const lastByMonth=new Map(points.map(p=>[p.periodEnd.slice(0,7),p]));
+  const newestMonth=points.at(-1)!.periodEnd.slice(0,7);
+  const monthly=DISPLAY_CATALOG.find(m=>m.derive?.from===d.id)!;
+  const expected=[...lastByMonth].filter(([month])=>month<'2026-11'&&month<newestMonth).map(([month,p])=>({period_end:monthEnd(Number(month.slice(0,4)),Number(month.slice(5,7))),value_text:p.valueText}));
+  expect((await deps.db.seriesHistory(monthly.id,{maxRows:5000})).map(r=>({period_end:r.period_end,value_text:r.value_text})),monthly.id).toEqual(expected);
+ }
+ expect(body.native_counts).toMatchObject({inserted:fixtureRows,quarantined:0,failed:0});
+ expect(body.derived_counts).toMatchObject({quarantined:0,failed:0});
+ expect(upsert).toHaveBeenCalledWith(expect.anything(),CATALOG_VERSION,expect.anything());
+ expect(upsert).toHaveBeenCalledWith(DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION,expect.anything());
+ const second=await publishRegion({db:deps.db,env:{}},'US','2026-11-06');
+ if(second.status!=='published')throw new Error('display publish');
+ const after=await deps.db.snapshot(second.snapshot_id),afterRegime=await deps.db.regimeOf(second.snapshot_id);
+ expect(after?.catalog_version).toBe(CATALOG_VERSION);expect(after?.observation_ids).toEqual(before?.observation_ids);
+ expect(afterRegime&&{...afterRegime,snapshot_id:''}).toEqual(regime&&{...regime,snapshot_id:''});
 });

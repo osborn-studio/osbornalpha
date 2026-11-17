@@ -1,4 +1,6 @@
 // src/lib/macro/read-api.test.ts
+import {DISPLAY_CATALOG_VERSION} from './display-catalog';
+import {isDisplayOnly} from './series-registry';
 import {describe,expect,it} from 'vitest';
 import {CATALOG_VERSION,catalogById} from './catalog';
 import {memoryMacroDb} from './memory-db';
@@ -96,9 +98,11 @@ describe('seriesCatalog',()=>{
   for(const r of rows){
    expect(r.region).toBe('US');
    expect(r.weight).toBe(WEIGHTS_V1[r.series_id as string]??0);
-   expect(r.catalog_version).toBe(CATALOG_VERSION);
+   expect(r.catalog_version).toBe(isDisplayOnly(r.series_id as string)?DISPLAY_CATALOG_VERSION:CATALOG_VERSION);
    expect(typeof r.definition_version).toBe('number');
   }
+  expect(rows.find(r=>r.series_id==='US_WALCL_W')).toMatchObject({native_frequency:'weekly',catalog_version:DISPLAY_CATALOG_VERSION});
+  expect(rows.find(r=>r.series_id==='US_WALCL')).toMatchObject({native_frequency:'monthly',catalog_version:DISPLAY_CATALOG_VERSION});
   expect(rows.find(r=>r.series_id==='US_ISM_PMI')).toMatchObject({status:'missing',weight:15});
  });
 });

@@ -5,10 +5,10 @@
 import type {ReactNode} from 'react';
 import {useTranslations} from 'next-intl';
 
-export type NoticeKind='loading'|'stale'|'error'|'unlicensed'|'empty'|'reconstruction'|'partialUnpublished'|'replayMismatch'|'officialUnavailable'|'notEnabled'|'adminPreview'|'noJudgment'|'currentOnly'|'noMembers';
+export type NoticeKind='loading'|'stale'|'error'|'unlicensed'|'empty'|'reconstruction'|'partialUnpublished'|'replayMismatch'|'officialUnavailable'|'notEnabled'|'adminPreview'|'noJudgment'|'currentOnly'|'noMembers'|'snapshotConstituents';
 
 const TONE:Record<NoticeKind,string>={
-  loading:'',stale:'border-warn',error:'border-danger',unlicensed:'border-border',empty:'border-border',reconstruction:'border-warn',
+  snapshotConstituents:'border-warn',loading:'',stale:'border-warn',error:'border-danger',unlicensed:'border-border',empty:'border-border',reconstruction:'border-warn',
   partialUnpublished:'border-border',replayMismatch:'border-danger',officialUnavailable:'border-border',notEnabled:'border-border',
   adminPreview:'border-accent bg-[var(--accent-wash)]',noJudgment:'border-border',currentOnly:'border-warn',noMembers:'border-border',
 };

@@ -367,6 +367,7 @@ q "select region, snapshot_id, revision, status, created_at from macro_snapshots
 
 ## 14. 已知限制与设计取舍（实施 Task 18 时核实）
 
+- **概览展开历史不等于冻结历史**：关键指标卡标题和折叠迷你图来自快照 envelope；展开历史传入快照 `created_at` 作为 `asOf`，只保证观测 `available_at ≤ asOf`。现有 `seriesHistory(asOf)` 不按批次完成时刻筛选，内部点可能包含快照之后才完成批次的数据；它与快照的 `eligibleHistoryAsOf` 不同。末点 `observation_id` 与快照行不同会提示，但末点一致并不能证明内部点已冻结。后续 D1 可在 `views.ts` 投影快照 `history_ids` 后使用冻结历史。
 - **`available_at` 来自首次看到**：FRED 的 CSV 不带历史发布时间，所以每个观测的 `available_at` 是系统**首次取得该值**的时间（`availability_basis = 'first_seen'`），回填历史的 `available_at` 是回填那一刻，不是真实发布日。时点回放（`asOf`）因此只对上线之后的首次取得有意义；不要把回填值当作“当时已知”。
 - **派生期崩溃只丢计数**：`ingestEvidence` 之后、派生写入与检查点之间若进程崩溃，已写入的派生行不会丢，但该批次的计数少记这部分（重试时它们作为 duplicates 出现）；批次状态仍按真实可用原生行判定。无数据错误，只有计数偏差（已记录的残留，见 `20-implementation-log.md` 任务 9）。
 - **失败的分析不计配额**：`create_macro_analysis_run` 只统计 `ok` 的运行；失败运行靠请求校验与 `request_id` 幂等限制滥用（`analyses/route.ts` 已注明）。

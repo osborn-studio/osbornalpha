@@ -7,7 +7,7 @@ import {planClassificationNodes,runClassificationsSw} from './classifications';
 import type {ClassifyInputRow} from './classifications';
 import {memoryIndustryDb} from './memory-industry-db';
 import {fixtureTushareCall} from './providers/tushare-industry';
-import type {IndustryDeps,ManifestStore} from './types';
+import type {IndustryDeps,ManifestStore} from './types-us';
 
 const NOW='2026-11-09T02:00:00.000Z';
 const loc={api:'index_classify',params:{},page:1,offset:0,row:0};

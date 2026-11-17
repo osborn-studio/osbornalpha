@@ -260,6 +260,34 @@
     {
       "file": "20261120093000_industry_exact_pair_tolerance.sql",
       "sha256": "c29ecd95f18990120738909cfcab16534e9bfcdccce64a8d3d25e20225919bfc"
+    },
+    {
+      "file": "20261121090000_macro_manifest_json_transport.sql",
+      "sha256": "8a142a55b7269f4d43c45e1c70ce988addd83cd05af0d5821b49a3af7a9a3dcd"
+    },
+    {
+      "file": "20261123110000_company_evidence_fact_lookup.sql",
+      "sha256": "13200b68cefef07ec96cd4355b5d46441b36ab790405b6e7551c605b6d74edfc"
+    },
+    {
+      "file": "20261124110000_company_digest_retry_selection.sql",
+      "sha256": "ba3f2218e4f48c278f319e699df224046697bd84404ab2a89a0a9ca263831195"
+    },
+    {
+      "file": "20261126090000_macro_manifest_blob.sql",
+      "sha256": "08bab5a5146ee8527c96136fa85583b45c522a9eb6ffe148afa8693dd0ba9bfb"
+    },
+    {
+      "file": "20261126100000_macro_strategy_histories.sql",
+      "sha256": "7b1e9e56424ef4f7f75bee60c0cce253bfd94228074f89df4801782e69ac2ff8"
+    },
+    {
+      "file": "20261126110000_macro_strategy_views.sql",
+      "sha256": "c3bbd046fb2d7c3c01892b0f9cf1bf80ce197ede1be0f35e4e77b6f8c039668d"
+    },
+    {
+      "file": "20261126120000_macro_strategy_histories_definer.sql",
+      "sha256": "a8167a222f6b5d01738eeab263c92ccf5a1bff0bf91a5ef6de3304cef19fd0cc"
     }
   ]
 }

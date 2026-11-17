@@ -7,7 +7,7 @@
 - Return-destination sanitizing (#208): `next` keeps only a literal local path. Query strings are dropped (`/portfolio?s=…&token=…` → `next=/portfolio`) except allowlisted `/intel/industries` selectors (`scheme`, `metric`, `level`, `duration`, `view`, `periods`; one valid value each, re-emitted in that order). The `/en/<protected>` hop applies the same sanitizing. Auth/API paths and anything non-literal fall back to `/macro`; email login and `/auth/callback` honour the sanitized `next` (only `/reset-password` / `/en/reset-password` bypass it for recovery).
 - `/login` shows email + password inputs (Supabase password auth; OAuth buttons only for providers listed in `NEXT_PUBLIC_AUTH_OAUTH_PROVIDERS`).
 - API: `/api/portfolio` signed out → 401 `{"error":"not authenticated"}`. `/api/watchlist` without Supabase → 200 `{"error":"Supabase not configured (guest mode uses localStorage)"}`.
-- When Supabase env is **absent**, the gate is deliberately off (local dev), so the Macro Workbench shell renders at `/macro`.
+- When Supabase env is **absent**, the gate is deliberately off (local dev), so the Macro Workbench shell renders at `/macro` (its guest content is mapped in `macro-workbench.md`).
 - Not provable locally: an actual sign-in (so the post-login jump to the sanitized `next`), the `/login` → `/macro` bounce for a signed-in user, admin-only `/research` (403 for non-admins).
 
 ## How to get to it (user POV)

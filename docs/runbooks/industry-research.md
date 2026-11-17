@@ -16,12 +16,46 @@ I-3 独立前置验证：[`2026-11-07-industry-closeout.md`](../audits/2026-11-0
 | `memberships-sw` | 脚本 | `0 2 * * 1` | `TUSHARE_TOKEN` | `industry.sw2021.classifications`、`industry.sw2021.source`、`industry.sw2021.memberships`（均 weekly；三步各自一个批次） | `--job memberships-sw [--l1 801120.SI]...` |
 | `marks` | 脚本 | `0 2 * * 6` | `TUSHARE_TOKEN` | `industry.marks`（weekly） | `--job marks --apply --trade-date YYYY-MM-DD ...`（交易日必须显式给出：`trade_cal` 随 I-3 延后） |
 | `aggregate` | 脚本（Mac Studio launchd） | `0 3 * * 6` | apply 需 `FACTS_CN_ENABLED=1`（V4） | `industry.agg.sw2021`（weekly） | `--job aggregate [--facts-as-of YYYY-MM-DD]` |
+| `aggregate-sic` | **cron**（真正 dry-run） | `30 4 * * 0`（每周日） | 无（不受 CN 开关影响） | `industry.agg.sic`（weekly） | `--job aggregate-sic [--facts-as-of YYYY-MM-DD]` |
 | `official` / `valuation` | — | — | 延期（I-3）：返回 `skipped: deferred_i3` | — | — |
 
-- 所有脚本默认 dry-run（不写库）；`memberships-sic`、`marks`、`aggregate` 的运行函数没有 dry-run 模式，dry-run 只回 `dry_run_unsupported`（不调用运行函数），必须 `--apply`；`--apply` 写批次回执、需要 code version（`VERCEL_GIT_COMMIT_SHA` 或 git 检出）。退出码：0 成功，1 失败/partial，2 参数错误或门拒绝。
+- 所有脚本默认 dry-run（不写库）；`memberships-sic`、`marks` 的运行函数没有 dry-run 模式，dry-run 只回 `dry_run_unsupported`（不调用运行函数），必须 `--apply`；`--apply` 写批次回执、需要 code version（`VERCEL_GIT_COMMIT_SHA` 或 git 检出）。退出码：0 成功，1 失败/partial，2 参数错误或门拒绝。
 - cron 路由同一套门：Tushare 作业无 token → 503 `tushare_unavailable`；`facts-scope`/`aggregate` 未开关 → 403 `job_disabled`；`official`/`valuation` → 200 `skipped`。HTTP 回执只含码与计数，不含错误消息。
 - cron 与脚本不要同时跑同一 job（规格 §10）；延迟工作者由 `activate_industry_metric_run` 的 `obsolete_run` 兜底。
 - 每周回放抽样：`node --env-file=<file> --import tsx scripts/industry/replay-check.ts [--run <id>] --sample 50`（默认 seed = ISO 周；只读；任一格 `value_differs`/`manifest_unreadable` → 退出 1，按 §8 处理）。
+
+### US SIC 聚合（规格 §19）
+
+`aggregate-sic` 汇总快照日当前 SIC 成分的已披露 USD 财年数据；不是历史成分。最近三个已完成财年桶按财年结束年份归类。页面与抽屉标明 `membership_on` 和历史重建口径。无 active run 时保持分类导航。
+
+先完整计算并回放自检，零写入（不建 batch、不上传清单、不更新 freshness）：
+
+```sh
+node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate-sic
+```
+
+首次生产装载用脚本，记录耗时与 JSON 回执，再观察每周 cron：
+
+```sh
+node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate-sic --apply
+node --env-file=<prod.env> --import tsx scripts/industry/replay-check.ts --scheme sic --sample 50
+```
+
+US SIC cron 从运行开始计时，预算为 240 秒；`time_budget_exceeded` 表示应改用上述脚本命令运行。在事实读取提速前，应视 cron 为不可用。脚本不设此预算。
+
+回执 `groups` 是 code × 财年桶数量，`cells_ok/cells_missing` 是计算状态（显示阈值不会把 ok 改成 missing）；`manifest_mismatches` 必须为 0，`read_truncated` 记录截断发行人数。dry-run 的 `preview` 给出指标计数、缺因、`industriesMinMembers`、`displayableValueCells` 与样例；只有成员 ≥5 且 `n_with_data/n_members ≥0.8` 的 ok 格在页面显示数字。apply 成功时 `status=success`（runner 已激活 active run），失败码 `facts_scope_not_ready` 表示 US 宇宙成功事实源不足 50%。回放样本任一不一致退出 1。`--scheme` 默认仍为 `sw2021`；可加 `--run <id>` 检查指定 run。
+
+`aggregate`（SW）也有真正 dry-run：完整计算与清单自检、零写入；apply 仍需 `FACTS_CN_ENABLED=1`。
+
+```sh
+node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate
+```
+
+SIC 抽屉仅支持 `mode=original` 原样回放；`mode=recompute` 返回 501 `not_available`，页面隐藏重算按钮。
+
+`memberships-sw` 在库内无分类时 dry-run 会先在内存读取 L1/L2/L3，回执 `classifications.level_1/2/3` 是节点数，`planned_source_fetches` 是计划的 L1 × {Y,N} 初始请求数（分页会增加实际请求）；不写分类、来源记录、批次或 freshness。
+
+US 数字回滚：运行修正后的 `aggregate-sic --apply`，经完整性检查激活新一代并取代旧 run。当前 admin HTTP 路径 `/api/admin/industries/runs?scheme=sic`、`/api/admin/industries/replay?runId=&code=&periodEnd=` 都是只读；没有把 active aggregate run 标记 failed 的管理端点。service-role 的 `IndustryDb.failRun('aggregate',runId,reason)` / `fail_industry_run` 只接受 building run，不能用于撤回 active 数字。不要关闭 `scheme:sic:sec-current` 许可来回滚数字，该许可也控制分类与成分。
 
 ### 显式限定 A 股装载
 
@@ -133,5 +167,5 @@ env -u NEXT_PUBLIC_SUPABASE_URL -u NEXT_PUBLIC_SUPABASE_ANON_KEY -u SUPABASE_SER
 
 ## 10. 回滚
 
-- 页面/路由：回退本模块提交即可（`src/lib/industry/**`、`src/app/(app)/intel/industries/**`、`src/app/api/industries/**`、`src/app/api/admin/industries/**`、`src/app/api/cron/industry-sync/**`、`src/app/api/entities/[issuerId]/industries/**`、`src/components/industries/**`）；共享文件只需删除 `// INDUSTRY:BEGIN … // INDUSTRY:END` 块与 `vercel.json` 的 `industry-sync` 一项。
+- 页面/路由：回退本模块提交即可（`src/lib/industry/**`、`src/app/(app)/intel/industries/**`、`src/app/api/industries/**`、`src/app/api/admin/industries/**`、`src/app/api/cron/industry-sync/**`、`src/app/api/entities/[issuerId]/industries/**`、`src/components/industries/**`）；共享文件只需删除 `// INDUSTRY:BEGIN … // INDUSTRY:END` 块与 `vercel.json` 的 `industry-sync` 相应项。
 - 数据：迁移只增不删；先把三个 Tushare 数据集置 `internal`（§4），再停 cron（删 `vercel.json` 项）。

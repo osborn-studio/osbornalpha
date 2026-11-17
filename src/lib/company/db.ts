@@ -11,7 +11,7 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {isoTs} from '../facts/db';
 import {CompanyDbError,EVENT_KINDS} from './types';
-import type {CompanyDb,CoverageRow,DigestStateRow,DueStream,EventKind,EventRow,EvidenceRecord,Market,ReplaceResult,WatchRow} from './types';
+import type {CompanyDb,DigestBacklog,EvidenceIndexRow,CoverageRow,DigestStateRow,DueStream,EventKind,EventRow,EvidenceRecord,Market,ReplaceResult,WatchRow} from './types';
 export {CompanyDbError} from './types';
 export type {CompanyDb} from './types';
 
@@ -19,6 +19,12 @@ export type {CompanyDb} from './types';
 export const MAX_COMPANY_WATCHES=200;
 /** company_fact_evidence accepts at most this many ids per call. */
 export const EVIDENCE_IDS_PER_CALL=100;
+export const EVIDENCE_CHUNK_ROWS=250;
+export const EVIDENCE_SERVER_MAX_ROWS=500;
+/** Preflight across the whole stream before any chunk can write. */
+export function checkEvidenceDuplicates(rows:EvidenceIndexRow[]):void{
+ if(new Set(rows.map(r=>r.fact_id)).size!==rows.length)throw new CompanyDbError('invalid_evidence','invalid_evidence: rows: duplicate fact_id');
+}
 /** ids per `.in()` filter (URL length). */
 export const IN_CHUNK=100;
 export const MAX_EVENTS_PAGE=500;
@@ -159,6 +165,11 @@ export function evidenceFromJson(r:Record<string,unknown>):EvidenceRecord{
 export function dueFromJson(v:unknown):DueStream[]{
  return (Array.isArray(v)?v:[]).map((x:Record<string,unknown>)=>({issuerId:str(x.issuerId),market:x.market as Market,stateRev:Number(x.stateRev),digestedRev:Number(x.digestedRev)}));
 }
+export function backlogFromJson(v:unknown):DigestBacklog{
+ const x=obj(v);return {failedStreams:Number(x.failedStreams),activeStreams:Number(x.activeStreams),streams:(Array.isArray(x.streams)?x.streams:[]).map(r=>{
+  const s=obj(r);return {issuerId:str(s.issuerId),market:s.market as Market,consecutiveFailures:Number(s.consecutiveFailures),lastAttemptAt:isoOrNull(s.lastAttemptAt),nextAttemptAt:isoOrNull(s.nextAttemptAt)};
+ })};
+}
 export function replaceResultFromJson(v:unknown):ReplaceResult{
  const x=obj(v);return {upserted:Number(x.upserted),changed:Number(x.changed),retired:Number(x.retired),revived:Number(x.revived)};
 }
@@ -184,9 +195,15 @@ export function supabaseCompanyDb(client:SupabaseClient):CompanyDb{
    return replaceResultFromJson(await call('replace_company_digest',{p_issuer:issuer,p_market:market,p_batch:batch,p_attempt_id:attemptId,p_rebuild_id:rebuildId,p_based_on_rev:basedOnRev,p_sweep:sweep,p_events:events,p_coverage:coverage}));
   },
   async markDigestFailed(issuer,market,attemptId,now){return (await call('mark_company_digest_failed',{p_issuer:issuer,p_market:market,p_attempt_id:attemptId,p_now:now.toISOString()}))===true;},
-  async backlog(){return {failedStreams:Number(await call('company_digest_backlog',{}))};},
+  async backlog(){return backlogFromJson(await call('company_digest_backlog_detail',{}));},
   async digestState(issuer,market){const [r]=await rows(c.from('company_digest_state').select('*').eq('issuer_id',issuer).eq('market',market).limit(1));return r?digestStateFromRow(r):null;},
-  async replaceEvidence(issuer,market,attemptId,basedOnRev,input){const x=obj(await call('replace_company_fact_evidence',{p_issuer:issuer,p_market:market,p_attempt_id:attemptId,p_based_on_rev:basedOnRev,p_rows:input}));return {upserted:Number(x.upserted),deleted:Number(x.deleted)};},
+  async replaceEvidence(issuer,market,attemptId,basedOnRev,input){
+   checkEvidenceDuplicates(input);let upserted=0;
+   const fence={p_issuer:issuer,p_market:market,p_attempt_id:attemptId,p_based_on_rev:basedOnRev};
+   for(const part of chunkOf(input,EVIDENCE_CHUNK_ROWS))upserted+=Number(obj(await call('upsert_company_fact_evidence',{...fence,p_rows:part})).upserted);
+   const x=obj(await call('prune_company_fact_evidence',{...fence,p_keep:input.map(r=>r.fact_id)}));
+   return {upserted,deleted:Number(x.deleted)};
+  },
   async eventsOfIssuer(issuer,market,o){
    checkEventsQuery(o);
    const cur=o.cursor?decodeIssuerCursor(o.cursor):null;

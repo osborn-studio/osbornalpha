@@ -37,3 +37,10 @@ describe('GET /api/admin/industries/replay',()=>{
   expect((await (await get(`runId=${RUN_ID}&code=801080.SI&periodEnd=2025-12-31`)).json()).error).toBe('unknown_cell');
  });
 });
+
+it('admin preview accepts the SIC net-margin metric',async()=>{
+ mocks.requireAdmin.mockResolvedValue({id:'admin'});
+ mocks.db={...stubIndustryDb({runs:[runRow({scheme:'sic',version:'sec-current'})],cells:[cellRow({code:'3674',metric:'net_margin'})]}),unresolvedOf:async()=>[]};
+ const res=await get(`scheme=sic&runId=${RUN_ID}&code=3674&periodEnd=2025-12-31&metric=net_margin`);
+ expect(res.status).toBe(200);expect(await res.json()).toMatchObject({run:{scheme:'sic'},cells:[{metric:'net_margin'}]});
+});

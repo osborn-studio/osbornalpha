@@ -9,7 +9,7 @@ describe('strategyLinkTabs',()=>{
  it('is empty while the strategy flag is off',()=>{expect(strategyLinkTabs(false)).toEqual([]);});
  it('lists transmission, history, review with their routes while on',()=>{
   expect(strategyLinkTabs(true)).toEqual([
-   {key:'transmission',href:'/intel/macro/transmission'},{key:'history',href:'/intel/macro/history'},{key:'review',href:'/intel/macro/review'}]);
+   {key:'transmission',href:'/macro/transmission'},{key:'history',href:'/macro/history'},{key:'review',href:'/macro/review'}]);
   expect(STRATEGY_LINK_TABS).toHaveLength(3);
  });
 });

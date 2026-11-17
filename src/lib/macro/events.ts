@@ -2,18 +2,22 @@
 // Read-time derived macro events (spec §6.1, version macro-events/1). Pure: the same observations give the
 // same events. US policy events come from day-to-day changes of the official Fed target-range series
 // (DFEDTARU / DFEDTARL via FRED). They are labelled 'derived' with their effective date and are never called
-// "announcements". The FOMC meeting calendar is a separate 'calendar' kind (fomc.ts). China has no official
-// automatic event source while LPR/MLF are missing (spec §6.1).
+// "announcements". The FOMC meeting calendar is a separate 'calendar' kind (fomc.ts). CN quote events
+// use a separate macro-events-quote/1 version when a quote source is present (spec §6.1).
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {subtract} from './decimal';
 import type {ObservationRow} from './types';
 export const EVENTS_VERSION='macro-events/1';
+export const QUOTE_EVENTS_VERSION='macro-events-quote/1';
 export const US_TARGET_UPPER_ID='US_FED_TARGET_UPPER_D',US_TARGET_LOWER_ID='US_FED_TARGET_LOWER_D';
 export type EventInput=Pick<ObservationRow,'observation_id'|'period_end'|'value_text'>;
 export interface PolicyEvent{
  kind:'policy_target_change';region:'US';effective_date:string;upper_from:string;upper_to:string;lower_from:string;lower_to:string;change_bp:string;source:'derived';
  /** [upper prev, upper cur, lower prev, lower cur]: every input observation the event was derived from. */
  evidence:[string,string,string,string];version:string;
+}
+export interface RateQuoteEvent{
+ kind:'policy_rate_quote_change';region:'CN';series_id:string;effective_date:string;from:string;to:string;change_bp:string;source:'derived';evidence:[string,string];version:string;
 }
 /** Exact decimal × 100 (percentage points → basis points). */
 export const toBp=(delta:string):string=>canonicalDecimal(`${canonicalDecimal(delta)}e2`);
@@ -33,6 +37,17 @@ export function derivePolicyEvents(upper:readonly EventInput[],lower:readonly Ev
   out.push({kind:'policy_target_change',region:'US',effective_date:c.u.period_end,
    upper_from:canonicalDecimal(p.u.value_text),upper_to:canonicalDecimal(c.u.value_text),lower_from:canonicalDecimal(p.l.value_text),lower_to:canonicalDecimal(c.l.value_text),
    change_bp:toBp(decimalSign(du)!==0?du:dl),source:'derived',evidence:[p.u.observation_id,c.u.observation_id,p.l.observation_id,c.l.observation_id],version:EVENTS_VERSION});
+ }
+ return out;
+}
+/** CN policy-rate quote events from consecutive ascending quotes of one event-source series. */
+export function deriveRateQuoteEvents(seriesId:string,quotes:readonly EventInput[]):RateQuoteEvent[]{
+ assertAscending(quotes,seriesId);
+ const out:RateQuoteEvent[]=[];
+ for(let i=1;i<quotes.length;i++){
+  const p=quotes[i-1],c=quotes[i],d=subtract(c.value_text,p.value_text);
+  if(decimalSign(d)===0)continue;
+  out.push({kind:'policy_rate_quote_change',region:'CN',series_id:seriesId,effective_date:c.period_end,from:canonicalDecimal(p.value_text),to:canonicalDecimal(c.value_text),change_bp:toBp(d),source:'derived',evidence:[p.observation_id,c.observation_id],version:QUOTE_EVENTS_VERSION});
  }
  return out;
 }

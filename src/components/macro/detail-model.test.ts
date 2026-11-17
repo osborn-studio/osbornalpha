@@ -1,6 +1,6 @@
 // Indicator detail helpers (spec §3.3): windows, exact period changes, chart points, markers, asset tones.
 import {describe,expect,it} from 'vitest';
-import {ALL_START,assetChangeView,chartPoints,cycleKey,dateChunks,defaultWindow,diffByPeriod,fetchSeriesWindow,markersOf,sourceJsonOf,transformLabel,windowFrom,windowsFor,yoyOf} from './detail-model';
+import {ALL_START,assetChangeView,chartPoints,cycleKey,dateChunks,defaultWindow,diffByPeriod,fetchSeriesWindow,markersOf,recentEvents,sourceJsonOf,transformLabel,windowFrom,windowsFor,yoyOf} from './detail-model';
 import type {SeriesObsJson} from './view-model';
 const o=(pe:string,v:string,extra:Partial<SeriesObsJson>={}):SeriesObsJson=>({observation_id:pe,period_end:pe,value_text:v,version:1,available_at:'2026-01-01T00:00:00Z',availability_basis:'first_seen',retrieval_id:null,evidence_sha256:null,locator:null,transform:null,code_version:'c',...extra});
 const diff=(pe:string,v:string,prev:string):SeriesObsJson=>o(pe,v,{observation_id:null,version:null,computed:{kind:'diff',version:'macro-diff/1',inputs:[prev,pe]}});
@@ -46,7 +46,7 @@ describe('detail model',()=>{
  it('markers: derived events and FOMC meetings from the first plotted month, sorted',()=>{
   const ev=[{effective_date:'2024-09-18',change_bp:'-50'},{effective_date:'2019-08-01',change_bp:'-25'}] as Parameters<typeof markersOf>[0];
   const cal=[{start:'2024-09-17',end:'2024-09-18'}] as Parameters<typeof markersOf>[1];
-  expect(markersOf(ev,cal,'2024-09-30')).toEqual([{time:'2024-09-18',kind:'calendar',text:'FOMC'},{time:'2024-09-18',kind:'derived',text:'-50 bp'}]);
+  expect(markersOf(ev,cal,'2024-09-30',{calendar:true})).toEqual([{time:'2024-09-18',kind:'calendar',text:''},{time:'2024-09-18',kind:'derived',text:'-50 bp'}]);
  });
  it('cycle label keys distinguish policy cycles',()=>{
   expect(cycleKey({basis:'policy_events',direction:'up'})).toBe('detail.policyDirection.up');
@@ -62,5 +62,36 @@ describe('detail model',()=>{
   expect(sourceJsonOf({source:null})).toBeNull();
   expect(sourceJsonOf({source:{adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'a',en:'A'},seriesKey:'UNRATE',rights:'public_domain',attribution:{zh:'b',en:'B'}}}))
    .toEqual({publisher:{zh:'a',en:'A'},via:null,fetch_host:'fred.stlouisfed.org',adapter:'fred_csv',rights:'public_domain',attribution:{zh:'b',en:'B'}});
+ });
+});
+
+describe('snapshot history and marker layers',()=>{
+ it('passes the exact snapshot instant to every chunk and transform',async()=>{
+  const urls:string[]=[];const asOf='2026-11-01T12:34:56Z';
+  const fake=(async(url:string)=>{urls.push(url);return {ok:true,json:async()=>({observations:[]})};}) as unknown as typeof fetch;
+  for(const transform of ['raw','diff','yoy'] as const)await fetchSeriesWindow('US_DFF','2020-01-01','2026-11-01','day',transform,fake,asOf);
+  expect(urls.length).toBeGreaterThan(3);
+  for(const url of urls)expect(new URL(url,'https://x').searchParams.get('asOf')).toBe(asOf);
+ });
+ const e=(series_id:string,change_bp='-25',effective_date='2026-10-01')=>({kind:'quote_change',region:'CN',series_id,effective_date,change_bp});
+ const cal=[{start:'2026-10-01',end:'2026-10-01'},{start:'2026-10-01',end:'2026-10-01'},{start:'2026-09-30',end:'2026-10-01'}];
+ it('uses all derived identity fields and labels only changes of at least 25 bp in either direction',()=>{
+  const events=[e('1Y','24'),e('5Y','25'),{...e('1Y','-25'),kind:'other_change'},{...e('1Y','-24'),region:'US'}];
+  expect(markersOf(events,[],'2026-10-31').map(m=>m.text)).toEqual(['','25 bp','-25 bp','']);
+ });
+ it('defaults to derived only; deduplicates identities while retaining same-day tenors and calendar entries',()=>{
+  const events=[e('1Y'),e('1Y'),e('5Y','-10')];
+  expect(markersOf(events,cal,'2026-10-31')).toHaveLength(2);
+  const all=markersOf(events,cal,'2026-10-31',{calendar:true});
+  expect(all).toHaveLength(4);expect(all.filter(m=>m.kind==='derived').map(m=>m.text)).toEqual(['-25 bp','']);
+  expect(markersOf(events,cal,'2026-10-31',{derived:false,calendar:true})).toHaveLength(2);
+  expect(markersOf(events,cal,'2026-10-31',{derived:false})).toEqual([]);
+ });
+ it('lists the newest six, derived before calendar on a day, then identity; filters layers',()=>{
+  const events=[e('5Y'),e('1Y'),e('1Y'),e('old','25','2025-01-01'),e('new','25','2026-11-01')];
+  const rows=recentEvents(events,cal,{calendar:true});
+  expect(rows.map(r=>r.key)).toEqual(['quote_change|CN|new|2026-11-01','quote_change|CN|1Y|2026-10-01','quote_change|CN|5Y|2026-10-01','2026-09-30|2026-10-01','2026-10-01|2026-10-01','quote_change|CN|old|2025-01-01']);
+  expect(recentEvents(events,cal,{derived:false,calendar:true})).toHaveLength(2);
+  expect(recentEvents(Array.from({length:9},(_,i)=>e(String(i))),[],{})).toHaveLength(6);
  });
 });

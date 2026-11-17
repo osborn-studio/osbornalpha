@@ -1,0 +1,33 @@
+import React, {act} from 'react';
+import {create, type ReactTestRenderer} from 'react-test-renderer';
+import {afterEach,expect,it,vi} from 'vitest';
+import {IndicatorDetail} from './IndicatorDetail';
+import {catalogById} from '@/lib/macro/catalog';
+vi.mock('./use-macro-t',()=>({useMacroT:()=>({locale:'en',t:(k:string,v?:object)=>k+JSON.stringify(v??{})})}));
+vi.mock('./charts/MacroLineChart',()=>({MacroLineChart:(p:object)=>React.createElement('mock-chart',p)}));
+vi.mock('./SourceDrawer',()=>({SourceDrawer:()=>null}));
+(globalThis as {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT=true;
+let tree:ReactTestRenderer;
+afterEach(async()=>{if(tree)await act(async()=>tree.unmount());vi.unstubAllGlobals();});
+const data={def:catalogById('US_DFF'),seriesRead:'US_DFF',observations:[{observation_id:'chart-latest',period_end:'2026-09-30',value_text:'4.1',available_at:'2026-10-01T00:00:00Z'}],cycles:[],events:[{kind:'policy_target_change',region:'US',effective_date:'2026-09-18',change_bp:'-25',upper_from:'4.5',upper_to:'4.25',lower_from:'4.25',lower_to:'4'}],calendar:[{start:'2026-09-17',end:'2026-09-18'}]};
+it('anchors all history and transforms to snapshot time, shows mismatch, and toggles accessible marker pills',async()=>{
+ const fetcher=vi.fn(async()=>({ok:true,json:async()=>data}));vi.stubGlobal('fetch',fetcher);
+ await act(async()=>{tree=create(React.createElement(IndicatorDetail,{seriesId:'US_DFF',compact:true,asOf:'2026-10-02T12:00:00Z',snapshotObservationId:'snapshot-row'}));});
+ expect(fetcher.mock.calls.length).toBeGreaterThan(0);
+ for(const [url] of fetcher.mock.calls as unknown as [string][])expect(new URL(url,'https://x').searchParams.get('asOf')).toBe('2026-10-02T12:00:00Z');
+ const text=JSON.stringify(tree.toJSON());expect(text).toContain('keyCards.history');expect(text).toContain('keyCards.mismatch');expect(text).toContain('4.1');expect(text).toContain('markers.recent');
+ const pills=()=>tree.root.findAllByType('button').filter(b=>['markers.derived{}','markers.calendar{}'].includes(b.children.join('')));
+ expect(pills().map(b=>b.props['aria-pressed'])).toEqual([true,false]);
+ await act(async()=>{pills()[1].props.onClick();});
+ expect(tree.root.findByType('mock-chart' as never).props.markers).toHaveLength(2);
+ await act(async()=>{pills()[0].props.onClick();});
+ expect(tree.root.findByType('mock-chart' as never).props.markers.map((m:{kind:string})=>m.kind)).toEqual(['calendar']);
+ const diff=tree.root.findAllByType('button').find(b=>b.children.join('')==='detail.transforms.diff{}')!;
+ await act(async()=>{diff.props.onClick();});
+ for(const [url] of fetcher.mock.calls as unknown as [string][])expect(new URL(url,'https://x').searchParams.get('asOf')).toBe('2026-10-02T12:00:00Z');
+});
+it('does not show a mismatch for the same observation identity',async()=>{
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>data})));
+ await act(async()=>{tree=create(React.createElement(IndicatorDetail,{seriesId:'US_DFF',compact:true,asOf:'2026-10-02T12:00:00Z',snapshotObservationId:'chart-latest'}));});
+ expect(JSON.stringify(tree.toJSON())).not.toContain('keyCards.mismatch');
+});

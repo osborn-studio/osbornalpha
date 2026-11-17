@@ -67,3 +67,11 @@ describe('GET /api/industries',()=>{
   spy.mockRestore();
  });
 });
+
+it('validates SIC catalogue separately and retains raw ok values below display thresholds',async()=>{
+ const run=runRow({scheme:'sic',version:'sec-current',method_version:'industry-agg-us/1.0',expected_grid:{codes:['3674'],period_ends:['2025-12-31'],metrics:['net_margin'],membership_on:'2026-11-03',cell_rule:'fiscal_year_bucket/1'}});
+ mocks.deps.mockImplementation((now:Date)=>readDepsOf(stubIndustryDb({tree:[classRow({scheme:'sic',version:'sec-current',code:'3674'})],runs:[run],cells:[cellRow({code:'3674',metric:'net_margin',n_members:2,n_with_data:2,n_unresolved:0})]}),{now}));
+ const res=await get('scheme=sic&metric=net_margin');expect(res.status).toBe(200);
+ expect(await res.json()).toMatchObject({kind:'aggregate',metric:'net_margin',duration:'12M',header:{membershipOn:'2026-11-03'},cells:[{status:'ok',value:'0.478',nMembers:2,nWithData:2,display:'members'}]});
+ for(const qs of ['scheme=sic&metric=roe','scheme=sw2021&metric=net_margin','scheme=sic&metric=revenue_sum&duration=3M'])expect((await get(qs)).status).toBe(400);
+});

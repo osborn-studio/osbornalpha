@@ -1,0 +1,3 @@
+Updated [clock-view.ts](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f/src/lib/macro/clock-view.ts) and [clock-view.test.ts](/Volumes/AIMATE_WORK/Developer/CodeX/OsbornAlpha/.claude/worktrees/company-research-ebd56f/src/lib/macro/clock-view.test.ts). Stored support now accepts sparse finite regime values; contribution and manifest rows retain their strict four-key shape. The hand and real-classifier fixtures use sparse support, with tests for accepted sparse values and rejected extra or non-finite values.
+
+Vitest: **48 passed, 0 failed**. Typecheck and lint passed. Deviations: none. The only additional output was a Vite configuration warning. Existing unrelated worktree changes were left untouched; no commit was made.

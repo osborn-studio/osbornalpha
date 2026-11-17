@@ -1,4 +1,5 @@
 {
+  "columns": {"label": "显示列", "available": "仅可得", "all": "全部目录", "hidden": "已隐藏 {n} 列（受限/未入目录）", "plan": "补齐计划"},
   "tabs": {"workbench": "宏观工作台", "transmission": "传导", "history": "历史", "review": "复盘"},
   "region": {"label": "区域", "US": "美国", "CN": "中国"},
   "meta": {"manifest": "清单 {id}", "manifestLink": "清单全文", "cutoff": "截止 {time}", "catalog": "目录 {version}", "method": "方法 {version}"},
@@ -16,9 +17,10 @@
   "state": {"observed": "观测", "derived": "推导", "assumption": "假设", "missing": "缺失", "restricted": "受限", "not_in_catalog": "未纳入目录"},
   "view": {"table": "表格视图", "chart": "图", "flow": "传导图", "close": "关闭"},
   "flow": {
+    "assumptions": "机制假设（{n} 条）",
+    "details": "详情与依据",
     "title": "实时传导流",
     "legend": "徽章标明节点来源；箭头是机制假设，未经检验",
-    "edge": "机制假设：{text}",
     "openDerived": "查看输入",
     "openSeries": "查看指标",
     "derivedTitle": "推导 · {label}",

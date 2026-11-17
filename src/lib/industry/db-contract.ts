@@ -12,10 +12,10 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
 import {recordAttempt} from '../dq/freshness';
-import {IndustryDbError} from './types';
+import {IndustryDbError} from './types-us';
 import type {
  AggMetric,ClassificationRow,DatasetKey,IndustryDb,LicenseStatus,MarkInput,MembershipTarget,NewMetricRun,OfficialInput,SchemeVersion,SourceMembershipInput,StagedMetricCell,
-} from './types';
+} from './types-us';
 
 export interface IndustryContractHarness{
  db:IndustryDb;tables:TableClient;
@@ -81,6 +81,32 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    const res=await db.applyMemberships(b,iss,'sw2021',v,threeRows(rec.id,{valid_to:src.out_date,valid_to_available_date:src.out_date}),[rec.id],{method:'today',resolved_at:'2026-11-06'});
    return {b,iss,src,rec,res};
   };
+
+  it('US bucket activation: snapshot dependencies, complete annual grid, net_margin, and membership basis guards',async()=>{
+   const v=await h.version() as SchemeVersion,b=await h.batch(),iss=await h.issuer();
+   await db.upsertClassifications(b,[{scheme:'sic',version:v,code:'2000',level:1,name_zh:null,name_en:'US test',parent_code:null,attributes:{}}]);
+   await db.applyMemberships(b,iss,'sic',v,[target('2000',1,{valid_from:'2026-04-01',available_date:'2026-04-01',source:'edgar:submissions'})],[],{});
+   const grid={codes:['2000'],period_ends:['2025-12-31'],metrics:['revenue_sum','net_income_parent_sum','gross_margin','net_margin','revenue_yoy','net_income_yoy','member_count'] as AggMetric[],cell_rule:'fiscal_year_bucket/1',membership_on:'2026-04-01'};
+   const make=async(o:Partial<NewMetricRun>={})=>db.createMetricRun(newRun(v,b,{scheme:'sic',facts_as_of:'2026-04-01',knowledge_date:'2026-04-01',expected_grid:grid,...o}));
+   const {runId}=await make();
+   const hash=sha();await db.registerManifest(hash,'aggregate',10);
+   const rows=grid.metrics.map(metric=>cell({code:'2000',metric,period_end:'2025-12-31',n_members:1,unit:metric.endsWith('_sum')?'USD':metric==='member_count'?'count':'ratio',...(metric==='net_margin'?{status:'ok',missing_reason:null,value:'0.2',manifest_hash:hash,n_with_data:1}:{})}));
+   await db.stageMetricRows(runId,rows.slice(1));
+   await db.stageRunDependencies(runId,'aggregate',[{cell_key:'2000:2025-12-31',issuer_id:iss,state_rev:0}]);
+   expect(await code(db.activateMetricRun(runId))).toBe('incomplete_run');
+   await db.stageMetricRows(runId,rows.slice(0,1));
+   expect(await code(db.activateMetricRun(runId))).toBe('resolved');
+   expect((await db.metricRun(runId))!.expected_grid).toEqual(grid);
+   expect((await db.metricRowsOfRun(runId)).find(r=>r.metric==='net_margin')).toMatchObject({status:'ok',value:'0.2'});
+   for(const o of [{facts_as_of:'2026-03-31'},{history_class:'point_in_time' as const},{scheme:'sw2021' as const},{expected_grid:{...grid,membership_on:undefined}}]){
+    const r=await make(o);expect(await code(db.activateMetricRun(r.runId))).toBe('invalid_membership_basis');
+   }
+   const invalid=await make({expected_grid:{...grid,cell_rule:'unknown'}});
+   expect(await code(db.activateMetricRun(invalid.runId))).toBe('invalid_cell_rule');
+   const legacy=await db.createMetricRun(newRun(v,b,{expected_grid:{codes:['A1'],period_ends:['2024-06-30'],metrics:['member_count'],cell_rule:null,membership_on:null}}));
+   await db.stageMetricRows(legacy.runId,[cell({metric:'member_count',period_end:'2024-06-30',n_members:0})]);
+   expect(await code(db.activateMetricRun(legacy.runId))).toBe('resolved');
+  });
 
   it('licences: the SIC dataset is public by migration; a private key toggles; unknown keys and statuses are refused',async()=>{
    expect(await db.isDatasetPublic('scheme:sic:sec-current')).toBe(true);
