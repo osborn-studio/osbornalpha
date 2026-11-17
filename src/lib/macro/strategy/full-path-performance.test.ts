@@ -121,7 +121,7 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
  const client=(key:string)=>createClient('https://fixture.invalid',key,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:boundedProbe}});
  const clients={admin:client('fixture-admin-key'),anon:client('fixture-anon-key')};
  const port=macroDbStrategyPort(supabaseMacroDb(clients));
- return {port,rpcPort:macroDbStrategyPort(supabaseMacroDb(clients),{historiesReader:strategyHistoriesReader(clients.anon)}),db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
+ return {fetch:boundedProbe,port,rpcPort:macroDbStrategyPort(supabaseMacroDb(clients),{historiesReader:strategyHistoriesReader(clients.anon)}),db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
   reference:memoryStrategyPort(fixture({observations,snapshots,catalog:[...port.catalog()],catalogVersion:port.catalogVersion(),rules:port.rules()}))};
 }
 
@@ -261,4 +261,23 @@ it('compares legacy and RPC cold manifests and records requests and response byt
   const fd=openSync(join(parent,basename(target)),constants.O_WRONLY|constants.O_CREAT|constants.O_TRUNC|constants.O_NOFOLLOW);
   try{writeFileSync(fd,JSON.stringify({scope:'Simulated HTTP fixture, real adapters/builders; excludes PostgreSQL/RLS and network.',samples},null,2)+'\n');}finally{closeSync(fd);}
  }
+},60000);
+
+it('profiles --compare with anon reads, pinned snapshots and full matching hashes',async()=>{
+ const t=fixtureTransport();
+ vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://fixture.invalid');vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY','fixture-anon-key');
+ vi.stubGlobal('fetch',t.fetch);
+ const output=vi.spyOn(console,'log').mockImplementation(()=>{});
+ try{
+  const {main}=await import('../../../../scripts/macro/strategy-latency');
+  await main(['--compare']);
+  const reports=output.mock.calls.map(c=>JSON.parse(String(c[0]))).filter(r=>'equal' in r);
+  expect(reports).toHaveLength(8);
+  for(const r of reports){
+   expect(r.equal).toBe(true);expect(r.legacy.hash).toMatch(/^[a-f0-9]{64}$/);expect(r.rpc.hash).toBe(r.legacy.hash);
+   expect(r.legacy.requests).toBeGreaterThan(0);expect(r.rpc.requests).toBeGreaterThan(0);
+   expect(r.legacy.kb).toBeGreaterThan(0);expect(r.rpc.ms).toBeGreaterThanOrEqual(0);
+  }
+  expect(t.calls.every(c=>c.method==='GET'||c.table.startsWith('rpc/macro_')&&!c.table.includes('put_'))).toBe(true);
+ }finally{output.mockRestore();}
 },60000);

@@ -25,6 +25,10 @@ describe('projected history RPC',()=>{
   const {locator:_l,code_version:_c,batch_id:_b,...expected}=observationFromRow(raw);
   expect(got).toEqual([{series_id:'US_UNRATE',raw_count:2,rows:[expected]},{series_id:'EMPTY',raw_count:0,rows:[]}]);
  });
+ it.each([null,[null],[{series_id:'US_UNRATE',raw_count:1,rows:[]}],[{series_id:'US_UNRATE',raw_count:0,rows:[Array(9).fill(null)]}],[{series_id:'OTHER',raw_count:0,rows:[]}],[{series_id:'US_UNRATE',raw_count:0,rows:[]},{series_id:'US_UNRATE',raw_count:0,rows:[]}]] )('rejects incomplete or inconsistent RPC envelopes: %j',async data=>{
+  const client=createClient('https://fixture.invalid','anon-fixture',{global:{fetch:async()=>new Response(JSON.stringify(data),{headers:{'content-type':'application/json'}})}});
+  await expect(strategyHistoriesReader(client)(['US_UNRATE'],{asOf})).rejects.toMatchObject({code:'rpc_failed',message:'incomplete_series_history'});
+ });
  it('coalesces by cutoff and bounds, deduplicates series and chunks at 64',async()=>{
   const reader=vi.fn<HistoriesReader>(async ids=>ids.map(series_id=>({series_id,raw_count:0,rows:[]})));
   const port=macroDbStrategyPort(memoryMacroDb(),{historiesReader:reader});

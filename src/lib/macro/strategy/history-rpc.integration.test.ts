@@ -54,10 +54,15 @@ describe.skipIf(!enabled)('strategy history RPC on PostgreSQL under anon RLS',()
    ] as const){
     const native=version===1;
     await c.query(`insert into public.macro_observations(observation_id,series_id,period_end,value,value_text,version,available_at,ingested_at,status,retrieval_id,locator,derived_from,transform,code_version,batch_id)
-     values($1,$2,$3,$4,$4,$5,$6,'2026-11-01T00:00:00.123456Z',$7,$8,$9,$10,$11,'test',$12)`,
+     values($1,$2,$3,$4::text::numeric,$4::text,$5,$6,'2026-11-01T00:00:00.123456Z',$7,$8,$9,$10,$11,'test',$12)`,
     [randomUUID(),id,period,String(version),version,available,status,native?retrieval:null,native?{kind:'csv_row'}:null,native?null:[randomUUID()],native?null:'test_transform',batches[batch]]);
    }
   }
+  // One period with enough vintages to cross the final 16x cap (maxRows=1).
+  await c.query(`insert into public.macro_observations(observation_id,series_id,period_end,value,value_text,version,available_at,status,retrieval_id,locator,code_version,batch_id)
+   select gen_random_uuid(),'US_DGS2','2026-08-31',1,'1',v,
+    case when v=17 then '2026-10-02'::timestamptz else '2026-10-01'::timestamptz end,
+    'ok',$1,'{"kind":"csv_row"}'::jsonb,'test',$2 from generate_series(1,17) v`,[retrieval,batches.success]);
   await c.query('set local role anon');
   const fetcher:typeof fetch=async(input,init)=>{
    const req=new Request(input,init),url=new URL(req.url);
@@ -112,10 +117,16 @@ describe.skipIf(!enabled)('strategy history RPC on PostgreSQL under anon RLS',()
  it('retains period truncation semantics with real vintage counts',async()=>{
   for(const maxRows of [1,2,3])expect(await Promise.allSettled([rpc.seriesHistory('US_UNRATE',{asOf,maxRows})])).toEqual(await Promise.allSettled([legacy.seriesHistory('US_UNRATE',{asOf,maxRows})]));
  });
- it('is stable SQL, SECURITY INVOKER, fixed search_path, replayable and executable by all table reader roles',async()=>{
+ it('matches the raw-vintage cap ladder at and beyond its final rung',async()=>{
+  const bounded={asOf:'2026-10-01T00:00:00Z',maxRows:1};
+  expect(await rpc.seriesHistory('US_DGS2',bounded)).toEqual(await legacy.seriesHistory('US_DGS2',bounded));
+  expect((await read(['US_DGS2'],bounded))[0].raw_count).toBe(16);
+  for(const port of [legacy,rpc])await expect(port.seriesHistory('US_DGS2',{asOf,maxRows:1})).rejects.toThrow('truncated');
+ });
+ it('is stable, SECURITY INVOKER, fixed search_path, replayable and executable by all table reader roles',async()=>{
   await c.query('reset role');
   const info=(await c.query("select l.lanname,p.provolatile,p.prosecdef,p.proconfig from pg_proc p join pg_language l on l.oid=p.prolang where p.oid='public.macro_strategy_histories(text[],timestamptz,date,date)'::regprocedure")).rows[0];
-  expect(info).toMatchObject({lanname:'sql',provolatile:'s',prosecdef:false,proconfig:['search_path=public']});
+  expect(info).toMatchObject({lanname:'plpgsql',provolatile:'s',prosecdef:false,proconfig:['search_path=public']});
   for(const role of ['anon','authenticated','service_role']){
    expect((await c.query("select has_function_privilege($1,'public.macro_strategy_histories(text[],timestamptz,date,date)','EXECUTE') v",[role])).rows[0].v).toBe(true);
    await c.query(`set local role ${role}`);
