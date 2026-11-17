@@ -300,6 +300,26 @@
     {
       "file": "20261130090000_industry_us_aggregates.sql",
       "sha256": "0a3032da550de00eea19baf79ee62a05d71273c8c4b660c487a297d4abb781ba"
+    },
+    {
+      "file": "20261201090000_facts_read_batch.sql",
+      "sha256": "7ee8de0f24d843419cd565397d3fa83bcef0f0d62374ff2b410bb6bde170bb8d"
+    },
+    {
+      "file": "20261202090000_broker_research.sql",
+      "sha256": "1bc3242c0257328064fe166d6ab919d26b6db9b2a25f449d50ab558085de5821"
+    },
+    {
+      "file": "20261202091000_broker_research_functions.sql",
+      "sha256": "db8020160ab9633f1f5be1cca80da2a79be94a8aaf6b9818fc68489eff05de53"
+    },
+    {
+      "file": "20261202092000_broker_research_views.sql",
+      "sha256": "920df6bfc478bb996e44f4fdd049fe0e7b64ed125990f7708ee3caa73c032f19"
+    },
+    {
+      "file": "20261203090000_facts_read_batch_slice.sql",
+      "sha256": "2c1823b2d6f17575aed58c4e0eee496654c6060afbbdd0e7580b9a591e6fa338"
     }
   ]
 }
