@@ -14,7 +14,7 @@ import {memorySnapshotReader,readSnapshot} from './snapshot-read';
 
 companyDbContract('memoryCompanyDb contract',async()=>{
  const facts=memoryFactsDb();const db=memoryCompanyDb({facts});
- return {db,facts,
+ return {db,facts,upsertEvidence:(...a)=>db.upsertEvidence(...a),pruneEvidence:(...a)=>db.pruneEvidence(...a),
   issuer:async(name='ZZ Company')=>{const id=randomUUID();db.registerIssuer(id,name);return id;},
   user:async()=>randomUUID(),
   batch:async(producer='company-digest')=>{const id=randomUUID();db.registerBatch(id,{producer,status:'running',code_version:'test-sha',tool_versions:{node:'test'}});return id;}};
@@ -75,6 +75,32 @@ const rawEvent=(o:Record<string,unknown>)=>({event_id:'e'.repeat(64),issuer_id:r
  rebuild_id:randomUUID(),rebuild_batch_id:randomUUID(),...o});
 
 describe('supabaseCompanyDb wiring',()=>{
+ it('chunks 601 evidence rows in order and prunes last',async()=>{
+  const input=Array.from({length:601},()=>({fact_id:randomUUID()})) as never;
+  const s=stub({rpc:(fn,a)=>({data:fn==='upsert_company_fact_evidence'?{upserted:String((a.p_rows as unknown[]).length)}:{deleted:'7'},error:null})});
+  expect(await supabaseCompanyDb(s.client).replaceEvidence('i','US',9,4,input)).toEqual({upserted:601,deleted:7});
+  expect(s.calls.map(c=>c.fn)).toEqual([...Array(3).fill('upsert_company_fact_evidence'),'prune_company_fact_evidence']);
+  expect(s.calls.slice(0,3).map(c=>(c.args.p_rows as unknown[]).length)).toEqual([250,250,101]);
+  expect(s.calls.slice(0,3).flatMap(c=>c.args.p_rows)).toEqual(input);
+  for(const c of s.calls)expect(c.args).toMatchObject({p_issuer:'i',p_market:'US',p_attempt_id:9,p_based_on_rev:4});
+  expect(s.calls[3].args.p_keep).toEqual((input as {fact_id:string}[]).map(r=>r.fact_id));
+ });
+ it('stops on the second chunk with the same CompanyDbError and never prunes',async()=>{
+  const error=new CompanyDbError('stale_computation');let n=0;
+  const s=stub({rpc:()=>({data:{upserted:250},error:++n===2?error:null})});
+  await expect(supabaseCompanyDb(s.client).replaceEvidence('i','US',1,1,Array.from({length:601},()=>({fact_id:randomUUID()})) as never)).rejects.toBe(error);
+  expect(s.calls.map(c=>c.fn)).toEqual(['upsert_company_fact_evidence','upsert_company_fact_evidence']);
+ });
+ it('empty evidence only prunes',async()=>{
+  const s=stub({rpc:()=>({data:{deleted:3},error:null})});const db=supabaseCompanyDb(s.client);
+  expect(await db.replaceEvidence('i','US',1,1,[])).toEqual({upserted:0,deleted:3});
+  expect(s.calls).toEqual([{fn:'prune_company_fact_evidence',args:{p_issuer:'i',p_market:'US',p_attempt_id:1,p_based_on_rev:1,p_keep:[]}}]);
+ });
+ it('cross-chunk duplicates reject before any call',async()=>{
+  const s=stub();const db=supabaseCompanyDb(s.client);const rows=Array.from({length:601},()=>({fact_id:randomUUID()}));rows[600]=rows[0];
+  await expect(db.replaceEvidence('i','US',1,1,rows as never)).rejects.toMatchObject({code:'invalid_evidence',message:'invalid_evidence: rows: duplicate fact_id'});
+  expect(s.calls).toEqual([]);
+ });
  it('retains only bounded transport categories outside the original serialized error',async()=>{
   for(const [code,category] of [['57014','query_canceled'],['55P03','lock_unavailable'],['40P01','deadlock'],['40001','serialization_failure'],['23503','constraint_violation'],['PGRST999-private','unknown'],[undefined,'unknown']] as const){
    const raw={code,message:'private URL https://example.test/private',details:'private SQL and fact ID',where:'private backend CONTEXT'};
@@ -90,16 +116,16 @@ describe('supabaseCompanyDb wiring',()=>{
   expect(companyDbFailureCategory(new CompanyDbError('stale_attempt'))).toBe('stale_attempt');
  });
  it('calls the SQL functions with p_* arguments and normalises numbers',async()=>{
-  const s=stub({rpc:fn=>({data:fn==='replace_company_digest'?{upserted:'2',changed:'1',retired:'0',revived:'0'}:fn==='begin_company_digest_attempt'?'7':fn==='company_digest_backlog'?'3':
+  const s=stub({rpc:fn=>({data:fn==='replace_company_digest'?{upserted:'2',changed:'1',retired:'0',revived:'0'}:fn==='begin_company_digest_attempt'?'7':fn==='company_digest_backlog_detail'?{failedStreams:'3',activeStreams:'200',streams:[]}:
    fn==='company_digest_due'?[{issuerId:'i',market:'US',stateRev:'5',digestedRev:'2'}]:true,error:null})});
   const db=supabaseCompanyDb(s.client);const now=new Date('2026-11-06T00:00:00.000Z');
   expect(await db.beginAttempt('i','US',now)).toBe(7);
   const events=[filingPublishedOf({filing_id:'f',form_type:'10-K',fiscal_year:2023,fiscal_period:'FY',period_end:'2023-12-31',available_date:'2024-02-01',source_ref:'r'} as never,1)];
   expect(await db.replaceDigest('i','US','b',7,'r',5,true,events,coverageInput())).toEqual({upserted:2,changed:1,retired:0,revived:0});
   expect(await db.markDigestFailed('i','US',7,now)).toBe(true);
-  expect(await db.backlog()).toEqual({failedStreams:3});
+  expect(await db.backlog()).toEqual({failedStreams:3,activeStreams:200,streams:[]});
   expect(await db.digestDue(now,10)).toEqual([{issuerId:'i',market:'US',stateRev:5,digestedRev:2}]);
-  expect(s.calls.map(c=>c.fn)).toEqual(['begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','company_digest_backlog','company_digest_due']);
+  expect(s.calls.map(c=>c.fn)).toEqual(['begin_company_digest_attempt','replace_company_digest','mark_company_digest_failed','company_digest_backlog_detail','company_digest_due']);
   expect(s.calls[1].args).toEqual({p_issuer:'i',p_market:'US',p_batch:'b',p_attempt_id:7,p_rebuild_id:'r',p_based_on_rev:5,p_sweep:true,p_events:events,p_coverage:coverageInput()});
   expect(s.calls[0].args).toEqual({p_issuer:'i',p_market:'US',p_now:'2026-11-06T00:00:00.000Z'});
  });
@@ -150,14 +176,14 @@ const hex=(c:string)=>c.repeat(64);
 const rawWatch=(o:Record<string,unknown>={})=>({user_id:'u',issuer_id:'i',note:null,muted:false,created_at:'2026-11-06T10:00:00+00:00',updated_at:'2026-11-06T10:00:00+00:00',...o});
 describe('supabaseCompanyDb wiring (more)',()=>{
  it('replaceEvidence passes the fence arguments; sweepDue and listCoverage use their functions',async()=>{
-  const s=stub({rpc:fn=>({data:fn==='replace_company_fact_evidence'?{upserted:'2',deleted:'1'}:fn==='company_sweep_due'?[{issuerId:'i',market:'CN',stateRev:'4',digestedRev:'4'}]:{rows:[],total:'0'},error:null})});
+  const s=stub({rpc:fn=>({data:fn==='prune_company_fact_evidence'?{deleted:'1'}:fn==='company_sweep_due'?[{issuerId:'i',market:'CN',stateRev:'4',digestedRev:'4'}]:{rows:[],total:'0'},error:null})});
   const db=supabaseCompanyDb(s.client);const now=new Date('2026-11-06T00:00:00.000Z');const older=new Date('2026-11-05T00:00:00.000Z');
-  expect(await db.replaceEvidence('i','US',9,4,[])).toEqual({upserted:2,deleted:1});
+  expect(await db.replaceEvidence('i','US',9,4,[])).toEqual({upserted:0,deleted:1});
   expect(await db.sweepDue(older,now,50,'CN')).toEqual([{issuerId:'i',market:'CN',stateRev:4,digestedRev:4}]);
   expect(await db.listCoverage({market:'US',issuerIds:['a']},'name',{offset:20,limit:10})).toEqual({rows:[],total:0});
   expect(await db.listCoverage({},'latest_period_end',{offset:0,limit:5})).toEqual({rows:[],total:0});
   expect(s.calls).toEqual([
-   {fn:'replace_company_fact_evidence',args:{p_issuer:'i',p_market:'US',p_attempt_id:9,p_based_on_rev:4,p_rows:[]}},
+   {fn:'prune_company_fact_evidence',args:{p_issuer:'i',p_market:'US',p_attempt_id:9,p_based_on_rev:4,p_keep:[]}},
    {fn:'company_sweep_due',args:{p_older_than:'2026-11-05T00:00:00.000Z',p_now:'2026-11-06T00:00:00.000Z',p_limit:50,p_market:'CN'}},
    {fn:'company_list_coverage',args:{p_market:'US',p_issuer_ids:['a'],p_sort:'name',p_offset:20,p_limit:10}},
    {fn:'company_list_coverage',args:{p_market:null,p_issuer_ids:null,p_sort:'latest_period_end',p_offset:0,p_limit:5}},

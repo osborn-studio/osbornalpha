@@ -1,4 +1,5 @@
 // src/app/api/macro/routes.test.ts
+import {DISPLAY_CATALOG_VERSION} from '@/lib/macro/display-catalog';
 import {beforeEach,describe,expect,it,vi} from 'vitest';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {MacroDbError} from '@/lib/macro/db';
@@ -217,4 +218,14 @@ describe('GET /api/macro/evidence/[sha256]',()=>{
   expect((await get('ABC')).status).toBe(400);
   expect((await get('f'.repeat(64))).status).toBe(404);
  });
+});
+
+it('reads display definitions under their own catalog version and still rejects unknown ids',async()=>{
+ for(const id of ['US_WALCL','US_WALCL_W']){
+  const res=await series(req(`/series/${id}`),{params:Promise.resolve({id})});
+  expect(res.status).toBe(200);const body=await res.json();
+  expect(body.catalogVersion).toBe(DISPLAY_CATALOG_VERSION);expect(body.def.id).toBe(id);
+  if(id==='US_WALCL_W')expect(body.def.nativeFrequency).toBe('weekly');
+ }
+ expect((await series(req('/series/UNKNOWN'),{params:Promise.resolve({id:'UNKNOWN'})})).status).toBe(404);
 });

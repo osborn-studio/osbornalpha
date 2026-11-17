@@ -41,7 +41,9 @@ export const contributionText=(c:RegimeContribution):string=>Object.entries(c.co
 export type ClockView={selected:import('@/lib/macro/judgment-contract').Regime|null;card:JudgmentCard|null;reason:string|null};
 /** Only the latest-view public F4 categorical card may select a quadrant. Never parse the headline. */
 export function clockFrom(cards:JudgmentCard[],region:'US'|'CN',snapshotId?:string|null):ClockView{
- const matching=cards.filter(c=>c.methodology.id==='macro_regime'&&c.methodology.version==='v2');
+ const candidates=cards.filter(c=>c.methodology.id==='macro_regime'&&/^v[1-9]\d*$/.exec(c.methodology.version)?.[0]===c.methodology.version);
+ const highest=candidates.reduce((version,c)=>{const n=BigInt(c.methodology.version.slice(1));return n>version?n:version;},BigInt(0));
+ const matching=candidates.filter(c=>BigInt(c.methodology.version.slice(1))===highest);
  if(matching.length!==1)return {selected:null,card:null,reason:matching.length?'ambiguous':'missing'};
  const card=matching[0];
  const no=(reason:string):ClockView=>({selected:null,card,reason});
