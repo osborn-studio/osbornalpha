@@ -521,6 +521,7 @@ function pgTransport(pool:Pool,sessionUser:()=>string|null):StrategyTransport{
  };
  return {
   rpc:(fn,args)=>inRole('admin',async c=>{
+   if(fn==='macro_put_strategy_view')return (await c.query('select public.macro_put_strategy_view($1::jsonb) v',[JSON.stringify(args)])).rows[0].v as unknown;
    if(fn==='macro_put_manifest_gz')return (await c.query('select public.macro_put_manifest_gz($1::jsonb) v',[JSON.stringify(args)])).rows[0].v as unknown;
    const keys=Object.keys(args);
    const values=keys.map(k=>JSONB_ARGS.has(k)&&args[k]!==null&&args[k]!==undefined?JSON.stringify(args[k]):args[k]??null);
@@ -634,4 +635,51 @@ describe.skipIf(!enabled)('large manifest persistence on real PostgreSQL',()=>{
   expect((await db.manifest(String(legacy)))!.body).toEqual(body);
  },30000);
 
+});
+
+// B2 uses random view keys and a self-created manifest: suites share this database.
+describe.skipIf(!enabled)('immutable strategy view RPC and privileges',()=>{
+ let pool:Pool;
+ beforeAll(()=>{const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});});
+ afterAll(async()=>{await pool?.end();});
+ const direct=(args:unknown)=>pool.query('select public.macro_put_strategy_view($1::jsonb) v',[JSON.stringify(args)]).then(r=>r.rows[0].v);
+ const args=async()=>{
+  const db=strategyDbOver(pgTransport(pool,()=>null)),m=await db.putManifest(testManifest('cycle_table'));
+  const text=JSON.stringify({manifest_id:m.manifest_id,view:{text:'中文'}});
+  return {p_view_key:sha256Hex(randomUUID()),p_kind:'cycle_table',p_identity:{salt:randomUUID()},p_manifest_id:m.manifest_id,p_view_json:text,p_view_sha256:sha256Hex(text),p_code_version:'test-code'};
+ };
+ it('validates the exact unnamed JSON argument and checksum in PostgreSQL itself',async()=>{
+  const a=await args();
+  expect((await pool.query("select proargnames is null v from pg_proc where oid='public.macro_put_strategy_view(jsonb)'::regprocedure")).rows[0].v).toBe(true);
+  for(const key of Object.keys(a)){
+   const missing={...a};delete (missing as Record<string,unknown>)[key];
+   await expect(direct(missing)).rejects.toMatchObject({message:'invalid_argument'});
+   await expect(direct({...a,[key]:null})).rejects.toMatchObject({message:'invalid_argument'});
+  }
+  for(const bad of [null,[],42,{...a,extra:true},{...a,p_view_key:'A'.repeat(64)},{...a,p_view_sha256:'0'.repeat(64)},{...a,p_kind:'review'},{...a,p_identity:[]},{...a,p_manifest_id:'bad'},{...a,p_view_json:42},{...a,p_code_version:''}]){
+   await expect(direct(bad)).rejects.toMatchObject({message:'invalid_argument'});
+  }
+  const t=pgTransport(pool,()=>null);
+  const results=await Promise.all([t.rpc('macro_put_strategy_view',a),t.rpc('macro_put_strategy_view',a)]);
+  expect(results.map(r=>(r as {outcome:string}).outcome).sort()).toEqual(['inserted','replayed']);
+  expect(await direct({...a,p_view_json:'other',p_view_sha256:sha256Hex('other')})).toEqual({outcome:'conflict'});
+  expect((await pool.query('select view_json from public.macro_strategy_views where view_key=$1',[a.p_view_key])).rows[0].view_json).toBe(a.p_view_json);
+ });
+ it('has RLS, no public reads or execution, service select only, and an idempotent migration',async()=>{
+  const sql=readFileSync('supabase/migrations/20261126110000_macro_strategy_views.sql','utf8');await replayMigration(pool,sql);
+  expect((await pool.query("select relrowsecurity from pg_class where oid='public.macro_strategy_views'::regclass")).rows[0].relrowsecurity).toBe(true);
+  const a=await args();await direct(a);
+  for(const role of ['anon','authenticated','service_role']){
+   for(const privilege of ['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']){
+    expect((await pool.query("select has_table_privilege($1,'public.macro_strategy_views',$2) v",[role,privilege])).rows[0].v).toBe(role==='service_role'&&privilege==='SELECT');
+   }
+   expect((await pool.query("select has_function_privilege($1,'public.macro_put_strategy_view(jsonb)','EXECUTE') v",[role])).rows[0].v).toBe(role==='service_role');
+   if(role==='service_role')continue;
+   for(const sql of ['select * from public.macro_strategy_views','select public.macro_put_strategy_view($1::jsonb)']){
+    const c=await pool.connect();
+    try{await c.query('begin');await c.query(`set local role ${role}`);await expect(c.query(sql,sql.includes('$1')?[JSON.stringify(a)]:[])).rejects.toMatchObject({code:'42501'});}
+    finally{await c.query('rollback');c.release();}
+   }
+  }
+ });
 });

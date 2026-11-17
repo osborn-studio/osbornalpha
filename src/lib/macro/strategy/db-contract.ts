@@ -53,6 +53,27 @@ export function strategyDbContract(label:string,setup:()=>Promise<StrategyDbHarn
    promptVersion:'macro-explain-prompt/1',validatorVersion:'macro-explain-validator/1',rawOutput:raw,validation:{ok:state==='accepted'},rendered:state==='accepted'?RENDERED:null,
    failureCodes:o.failureCodes??(state==='accepted'?[]:['numeral']),accounting:{tokens:10},finalizePayload:o.finalizePayload??null});
 
+  it('strategy views: round trip, replay and conflict never overwrite; invalid keys and hashes reject',async()=>{
+   const manifest=await db.putManifest(testManifest('cycle_table'));
+   const view_json=JSON.stringify({manifest_id:manifest.manifest_id,view:{text:'中文',rows:[1,null]}});
+   const row={view_key:sha256Hex(randomUUID()),kind:'cycle_table' as const,identity:{test:randomUUID()},manifest_id:manifest.manifest_id,view_json,view_sha256:sha256Hex(view_json),code_version:'test-code'};
+   expect(await db.getStrategyView(row.view_key)).toBeNull();
+   expect(await db.putStrategyView(row)).toEqual({outcome:'inserted'});
+   expect(await db.getStrategyView(row.view_key)).toMatchObject(row);
+   expect(await db.getStrategyViews([row.view_key,sha256Hex(randomUUID())])).toHaveLength(1);
+   expect(await db.putStrategyView(row)).toEqual({outcome:'replayed'});
+   const different=JSON.stringify({other:true});
+   expect(await db.putStrategyView({...row,view_json:different,view_sha256:sha256Hex(different)})).toEqual({outcome:'conflict'});
+   expect(await db.getStrategyView(row.view_key)).toMatchObject(row);
+   for(const change of [{view_sha256:'0'.repeat(64)},{view_key:'INVALID'},{kind:'review'},{identity:null},{code_version:''},{extra:true}]){
+    expect(await code(db.putStrategyView({...row,...change} as typeof row))).toBe('invalid_argument');
+   }
+   for(const key of Object.keys(row)){
+    const missing={...row};delete (missing as Record<string,unknown>)[key];
+    expect(await code(db.putStrategyView(missing))).toBe('invalid_argument');
+   }
+  });
+
   it('putManifest: identity is sha256 of the canonical body; idempotent; any field change is a new manifest; anon read; unknown → null',async()=>{
    const body=testManifest('transmission');
    const a=await db.putManifest(body);

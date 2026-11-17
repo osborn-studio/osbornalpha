@@ -6,13 +6,13 @@
 // off nothing reaches F4 and the body has no f4 key. Neither region has an active snapshot → 404 no_published_snapshot.
 import {NextResponse} from 'next/server';
 import type {TransmissionResponse} from '@/lib/macro/strategy/contract';
-import {buildPlaybooks,selectF4Mark} from '@/lib/macro/strategy/playbooks';
+import {selectF4Mark} from '@/lib/macro/strategy/playbooks';
 import {canCacheFacts,factView,memoKey,readMemoState} from '@/lib/macro/strategy/memo';
 import {memoHeaders,codeVersionOrNull,errorResponse,failureResponse,judgmentSection,readGate,readParams,regionOf,strategyDb} from '@/lib/macro/strategy/route-helpers';
-import {buildTransmission,buildTransmissionManifest} from '@/lib/macro/strategy/transmission';
+import {NoPublishedSnapshot,transmissionFacts} from '@/lib/macro/strategy/fact-views';
 
 export const dynamic='force-dynamic';
-class NoPublishedSnapshot extends Error{}
+
 
 export async function GET(req:Request){
  const g=await readGate();if(!g.ok)return g.res;
@@ -23,12 +23,9 @@ export async function GET(req:Request){
   const {port}=g;
   const state=await readMemoState(port);
   if(state.snapshots.US===null&&state.snapshots.CN===null)throw new NoPublishedSnapshot();
-  const {value,outcome}=await factView(canCacheFacts(state)?memoKey({kind:'transmission',params:{region},state,codeVersion}):'',state,async()=>{
-   const body=await buildTransmissionManifest(port,{now:new Date(),codeVersion,region,snapshots:state.snapshots});
-   if(!body)throw new NoPublishedSnapshot();
-   const stored=await strategyDb().putManifest(body);
-   return {manifest_id:stored.manifest_id,transmission:buildTransmission(stored),playbooks:buildPlaybooks(stored.body,region),snapshotId:stored.body.snapshots[region]?.snapshot_id??null};
-  });
+  const db=strategyDb();
+  const {value,outcome,source}=await factView(canCacheFacts(state)?memoKey({kind:'transmission',params:{region},state,codeVersion}):'',state,
+   ()=>transmissionFacts({port,db,codeVersion,state,now:()=>new Date()},region),undefined,db);
   const {transmission,playbooks,snapshotId}=value;
   const j=await judgmentSection(async f4=>{
    const card=await f4.latestRegimeCard(region);
@@ -38,6 +35,6 @@ export async function GET(req:Request){
   const out:TransmissionResponse=j.judgment_status==='ok'
    ?{transmission,playbooks,judgment_status:'ok',f4:j.value}
    :{transmission,playbooks,judgment_status:j.judgment_status};
-  return NextResponse.json(out,{headers:memoHeaders(outcome)});
+  return NextResponse.json(out,{headers:memoHeaders(outcome,source)});
  }catch(e){if(e instanceof NoPublishedSnapshot)return errorResponse('no_published_snapshot','no published snapshot yet',404);return failureResponse(e);}
 }

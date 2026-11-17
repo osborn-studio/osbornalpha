@@ -44,7 +44,7 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
   macro_observations:observations.map(o=>({...o,locator:{fixture:true},code_version:'fixture',batch_id:'fixture'})),
   macro_snapshots:snapshots,
   macro_publish_state:[{region:'US',revision:1,input_revision:1},{region:'CN',revision:1,input_revision:1}],
-  macro_strategy_manifests:[],
+  macro_strategy_manifests:[],macro_strategy_views:[],
  };
  const calls:Call[]=[];
  const fetcher:typeof fetch=async(input,init)=>{
@@ -62,7 +62,13 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
     return {series_id,raw_count:found.length,rows:[...by.values()].sort((a,b)=>String(a.period_end).localeCompare(String(b.period_end)))};
    });
    result=table==='rpc/macro_latest_observations'?groups.flatMap(g=>g.rows.slice(-1)):groups.map(g=>({...g,rows:g.rows.map(r=>[r.observation_id,r.period_end,r.value_text,r.version,r.available_at,r.ingested_at,r.retrieval_id,r.derived_from,r.transform])}));
-  }else if(table==='rpc/macro_put_manifest_json'||table==='rpc/macro_put_manifest_gz'){
+  }else if(table==='rpc/macro_put_strategy_view'){
+   expect(req.headers.get('apikey')).toBe('fixture-admin-key');
+   const args=JSON.parse(body);expect(sha256Hex(args.p_view_json)).toBe(args.p_view_sha256);
+   const stored=rows.macro_strategy_views.find(r=>r.view_key===args.p_view_key);
+   result={outcome:stored?(stored.view_sha256===args.p_view_sha256?'replayed':'conflict'):'inserted'};
+   if(!stored)rows.macro_strategy_views.push(Object.fromEntries(Object.entries(args).map(([k,v])=>[k.slice(2),v])));
+  }else if(table==='rpc/macro_put_manifest_json' ||table==='rpc/macro_put_manifest_gz'){
    expect(req.method).toBe('POST');
    const args=JSON.parse(body),gz=table.endsWith('_gz');
    const decoded=gz?JSON.parse(gunzipSync(Buffer.from(args.p_body_gz,'base64')).toString()):args.p_body;
@@ -166,7 +172,7 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
    expect(t.calls.filter(c=>c.table==='macro_publish_state').map(c=>c.query).sort((a,b)=>a.region.localeCompare(b.region))).toEqual([
     {select:'revision,input_revision',region:'eq.CN'},{select:'revision,input_revision',region:'eq.US'},
    ]);
-   const cold=phase==='cold'||phase==='cache-reset-cold';
+   const cold=phase==='cold';
    if(cold){
     expect(t.peak()).toBe(HISTORY_PAGE_CONCURRENCY);
     expect(byTable['rpc/macro_put_manifest_gz']).toBe(1);expect(byTable.macro_strategy_manifests).toBe(1);
@@ -182,12 +188,16 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
      const requests=histories.filter(c=>c.series===`eq.${id}`);
      expect(requests.map(c=>[c.offset,c.limit,c.rows])).toEqual([[0,1000,t.rows.macro_observations.filter(r=>r.series_id===id).length]]);
     }
-    expect(t.calls).toHaveLength(39);
+    expect(t.calls).toHaveLength(41);expect(byTable.macro_strategy_views).toBe(1);expect(byTable['rpc/macro_put_strategy_view']).toBe(1);
     expect(histories.reduce((sum,c)=>sum+c.rows,0)).toBe(reference.inputs.length);
     const metadata=t.calls.find(c=>c.table==='macro_strategy_manifests')!;
     expect(metadata.query).toEqual({select:'manifest_id,manifest_hash,created_at',manifest_id:`eq.${stored.manifest_id}`,limit:'1'});
     expect(metadata.metadata).toEqual([{manifest_id:stored.manifest_id,manifest_hash:stored.manifest_hash,created_at:CREATED}]);
     expect(sharedSets).toBe(1);
+   }else if(phase==='stored-view-cold'){
+    expect(t.calls).toHaveLength(5);expect(byTable.macro_strategy_views).toBe(1);expect(byTable.macro_observations??0).toBe(0);
+    expect(byTable['rpc/macro_put_manifest_gz']??0).toBe(0);expect(sharedSets).toBe(1);
+    expect(response.headers.get('x-macro-strategy-view')).toBe('stored');
    }else{expect(t.calls).toHaveLength(4);expect(sharedSets).toBe(0);}
    expect(sharedGets).toBe(phase==='local-warm'?0:1);
    expect(response.headers.get('x-macro-strategy-memo')).toBe(phase==='local-warm'?'hit':'miss');
@@ -199,9 +209,10 @@ it('measures full fixture cold/warm cycle path and preserves complete frozen pro
   strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('cold');
   for(let i=0;i<5;i++)await measure('local-warm');
   strategyMemo.clear();await measure('shared-warm-local-reset');
-  strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('cache-reset-cold');
+  strategyMemo.clear();shared.clear();expect(strategyMemo.stats().size).toBe(0);expect(shared.size).toBe(0);await measure('stored-view-cold');
  }
  expect(forbidden).not.toHaveBeenCalled();
+ console.info('cycle view cold comparison',JSON.stringify(samples.filter(s=>s.phase==='cold'||s.phase==='stored-view-cold').map(({boundary,phase,requests,request_body_bytes,response_body_bytes,handler_response_bytes})=>({boundary,phase,requests,request_body_bytes,response_body_bytes,handler_response_bytes}))));
  const output=process.env.MACRO_FULL_PATH_BENCHMARK_OUTPUT;
  if(output){
   const root=realpathSync('/tmp/osstack'),target=resolve(output),parent=realpathSync(dirname(target));
@@ -260,6 +271,44 @@ it('compares legacy and RPC cold manifests and records requests and response byt
   if(parent!==root&&!parent.startsWith(root+sep))throw new Error('benchmark output must be under /tmp/osstack/');
   const fd=openSync(join(parent,basename(target)),constants.O_WRONLY|constants.O_CREAT|constants.O_TRUNC|constants.O_NOFOLLOW);
   try{writeFileSync(fd,JSON.stringify({scope:'Simulated HTTP fixture, real adapters/builders; excludes PostgreSQL/RLS and network.',samples},null,2)+'\n');}finally{closeSync(fd);}
+ }
+},60000);
+
+it('measures B1 RPC on-demand cold versus B2 stored-view cold, byte for byte',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date(CREATED));
+ vi.stubEnv('MACRO_STRATEGY_ENABLED','1');vi.stubEnv('MACRO_JUDGMENTS_ENABLED','0');
+ const shared=new Map<string,{value:unknown;isStale:boolean}>();
+ vi.stubGlobal('__incrementalCache',{
+  generateSimpleCacheKey:async(key:string)=>sha256Hex(key),get:async(key:string)=>shared.get(key)??null,
+  set:async(key:string,value:unknown)=>{shared.set(key,{value,isStale:false});},
+ });
+ const t=fixtureTransport();deps.port=t.rpcPort;deps.db=t.db;
+ const samples:Record<string,unknown>[]=[];
+ for(const boundary of ['event_day','first_trading_day','month_end'] as const){
+  let builtText='';
+  for(const mode of ['on-demand-cold','stored-view-cold']){
+   strategyMemo.clear();shared.clear();t.calls.length=0;
+   const response=await GET(new Request(`https://fixture.invalid/api/macro/strategy/cycle-table?boundary=${boundary}`));
+   const text=await response.text();expect(response.status).toBe(200);
+   if(mode==='on-demand-cold'){
+    builtText=text;expect(response.headers.get('x-macro-strategy-view')).toBe('built');
+    expect(t.calls.filter(c=>c.table==='rpc/macro_strategy_histories')).toHaveLength(1);
+   }else{
+    expect(text).toBe(builtText);expect(response.headers.get('x-macro-strategy-view')).toBe('stored');
+    expect(t.calls).toHaveLength(5);
+    expect(t.calls.filter(c=>c.table==='macro_strategy_views')).toHaveLength(1);
+    expect(t.calls.some(c=>c.table.includes('histories')||c.table.includes('put_manifest')||c.table==='macro_observations')).toBe(false);
+   }
+   samples.push({boundary,mode,requests:t.calls.length,request_bytes:t.calls.reduce((n,c)=>n+c.requestBytes,0),response_bytes:t.calls.reduce((n,c)=>n+c.responseBytes,0),handler_response_bytes:Buffer.byteLength(text)});
+  }
+ }
+ console.info('B1/B2 cold view comparison',JSON.stringify(samples));
+ const output=process.env.MACRO_FULL_PATH_BENCHMARK_OUTPUT;
+ if(output){
+  const root=realpathSync('/tmp/osstack'),target=resolve(output+'.views.json'),parent=realpathSync(dirname(target));
+  if(parent!==root&&!parent.startsWith(root+sep))throw new Error('benchmark output must be under /tmp/osstack/');
+  const fd=openSync(join(parent,basename(target)),constants.O_WRONLY|constants.O_CREAT|constants.O_TRUNC|constants.O_NOFOLLOW);
+  try{writeFileSync(fd,JSON.stringify({scope:'Real cycle GET, B1 RPC and B2 view adapters, simulated HTTP fixture; includes four identity checks. Excludes real PostgreSQL, network and auth latency.',samples},null,2)+'\n');}finally{closeSync(fd);}
  }
 },60000);
 
