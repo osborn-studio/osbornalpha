@@ -6,7 +6,7 @@ import {memoryTableClient} from '@/lib/db/memory-table-client';
 import {memoryMacroDb} from '@/lib/macro/memory-db';
 import {macroReadApi} from '@/lib/macro/read-api';
 import {evidencePath} from '@/lib/macro/evidence';
-import {collectableOf} from '@/lib/macro/catalog';
+import {collectableSeriesOf as collectableOf} from '@/lib/macro/series-registry';
 import {macroDb,macroInputsDb,loadMacroFixture} from '@/lib/judgments/testing/macro-fixture';
 import {productionMacroJudgmentHook} from '@/lib/judgments/on-macro-published';
 import {compensateMacro} from '@/lib/judgments/compensate';

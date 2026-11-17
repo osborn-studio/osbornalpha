@@ -197,6 +197,14 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   expect(await q(`select region,revision::text,input_revision::text from public.macro_publish_state order by region`)).toEqual(before);   // the seed never resets state
  },60000);
 
+ it('replays the display frequency migration and validates weekly catalog rows',async()=>{
+  const sql=readFileSync('supabase/migrations/20261127090000_macro_display_frequency.sql','utf8');
+  await replayMigration(admin,sql);await replayMigration(admin,sql);
+  const id=sid('WEEKLY');await catalog([def(id,{nativeFrequency:'weekly',period:'day'})]);
+  expect(await one('select native_frequency v from public.macro_series where id=$1',[id])).toBe('weekly');
+  await expect(catalog([def(sid('BOGUS'),{nativeFrequency:'bogus'})])).rejects.toThrow();
+ });
+
  it('refuses direct writes and service RPCs to anon and authenticated',async()=>{
   for(const role of ['anon','authenticated']){
    await asRole(role,async c=>{

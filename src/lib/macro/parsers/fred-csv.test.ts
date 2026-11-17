@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
-import {MACRO_CATALOG} from '../catalog';
+import {ALL_SERIES} from '../series-registry';
 import {canonical} from '../decimal';
 import {FredParseError,parseFredCsv} from './fred-csv';
 
@@ -68,22 +68,20 @@ describe('parseFredCsv (synthetic)',()=>{
 // from FRED on 2026-11-06 with the same URLs; Step 3 says how to confirm them against the recorded files.
 interface ManifestEntry{code:string;series_id:string;url:string;fetched_at:string;sha256:string;content_type:string;http_status:number}
 const manifest:ManifestEntry[]=JSON.parse(readFileSync(new URL('../fixtures/fred/manifest.json',import.meta.url),'utf8'));
-// WP-D catalog rows arrive in PR-3; their recorded fixtures are already staged here.
-const STAGED_WPD=['WALCL','RRPONTSYD','WTREGEN'];
 const fixture=(code:string)=>new Uint8Array(readFileSync(new URL(`../fixtures/fred/${code}.csv`,import.meta.url)));
-const defOf=(code:string)=>{const d=MACRO_CATALOG.find(x=>x.source?.adapter==='fred_csv'&&x.source.seriesKey===code&&!x.derive&&!x.aliasOf);if(!d)throw new Error(`no def for ${code}`);return d;};
+const defOf=(code:string)=>{const d=ALL_SERIES.find(x=>x.source?.adapter==='fred_csv'&&x.source.seriesKey===code&&!x.derive&&!x.aliasOf);if(!d)throw new Error(`no def for ${code}`);return d;};
 const parse=(code:string)=>{const d=defOf(code);return parseFredCsv(fixture(code),{seriesId:d.id,code,period:d.period});};
 const row=(code:string,periodEnd:string)=>parse(code).find(p=>p.periodEnd===periodEnd);
 
 describe('parseFredCsv (recorded fixtures)',()=>{
  it('has one fixture per active native FRED series, each matching its manifest hash and URL',()=>{
-  const want=MACRO_CATALOG.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf).map(d=>d.source!.seriesKey).sort();
-  expect(manifest.map(m=>m.code).sort()).toEqual([...want,...STAGED_WPD].sort());
+  const want=ALL_SERIES.filter(d=>d.source?.adapter==='fred_csv'&&d.status==='active'&&!d.derive&&!d.aliasOf).map(d=>d.source!.seriesKey).sort();
+  expect(manifest.map(m=>m.code).sort()).toEqual(want);
   for(const m of manifest){
    expect(createHash('sha256').update(fixture(m.code)).digest('hex'),m.code).toBe(m.sha256);
    expect(m.url).toBe(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${m.code}&cosd=2015-01-01`);
    expect(m.http_status).toBe(200);
-   if(!STAGED_WPD.includes(m.code))expect(parse(m.code).length,m.code).toBeGreaterThan(100);
+   expect(parse(m.code).length,m.code).toBeGreaterThan(100);
   }
  });
  it('reads exact value texts and lines of known rows',()=>{
@@ -115,7 +113,7 @@ describe('parseFredCsv (recorded fixtures)',()=>{
 
 describe('weekly and sparse daily FRED series (WP-D fixtures)',()=>{
  const fx=(code:string)=>new Uint8Array(readFileSync(join(process.cwd(),'src/lib/macro/fixtures/fred',`${code}.csv`)));
- for(const code of STAGED_WPD){
+ for(const code of ['WALCL','RRPONTSYD','WTREGEN']){
   it(`${code}: recorded bytes match the manifest hash, URL and HTTP status`,()=>{
    const entry=manifest.find(m=>m.code===code);
    expect(entry,code).toBeDefined();

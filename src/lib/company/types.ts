@@ -75,6 +75,8 @@ export interface ReadSnapshotOptions{concepts:string[]|null;asOf:string;from?:st
 export class CompanyDbError extends Error{constructor(public code:'stale_computation'|'stale_attempt'|'invalid_event'|'unknown_stream'|'watch_limit'|'invalid_read'|'invalid_evidence'|'internal',message?:string){super(message??code);this.name='CompanyDbError';}}
 
 export interface InboxRow extends EventRow{read:boolean}
+export interface FailedDigestStream{issuerId:string;market:Market;consecutiveFailures:number;lastAttemptAt:string|null;nextAttemptAt:string|null}
+export interface DigestBacklog{failedStreams:number;activeStreams:number;streams:FailedDigestStream[]}
 export interface CompanyDb{
  // digest (service_role)
  digestDue(now:Date,limit:number,market?:Market):Promise<DueStream[]>;   // market filter applies before the limit (plan audit Q6)
@@ -82,7 +84,7 @@ export interface CompanyDb{
  beginAttempt(issuer:string,market:Market,now:Date):Promise<number>;
  replaceDigest(issuer:string,market:Market,batch:string,attemptId:number,rebuildId:string,basedOnRev:number,sweep:boolean,events:EventInput[],coverage:CoverageInput):Promise<ReplaceResult>;
  markDigestFailed(issuer:string,market:Market,attemptId:number,now:Date):Promise<boolean>;
- backlog():Promise<{failedStreams:number}>;
+ backlog():Promise<DigestBacklog>;
  digestState(issuer:string,market:Market):Promise<DigestStateRow|null>;
  replaceEvidence(issuer:string,market:Market,attemptId:number,basedOnRev:number,rows:EvidenceIndexRow[]):Promise<{upserted:number;deleted:number}>;   // evidence fence: stale_computation / stale_attempt like replaceDigest
  // reads behind the evidence gate (service_role; routes assemble + gate server-side, §0 #64)

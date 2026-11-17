@@ -15,13 +15,13 @@ afterEach(()=>{vi.restoreAllMocks();vi.unstubAllGlobals();vi.unstubAllEnvs();});
 function setup(handler:()=>Response|Promise<Response>){
  vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://fixture.invalid');vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY','synthetic-key');
  const fetcher=vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
-  expect(String(input)).toBe(endpoint);expect(init?.method).toBe('POST');return handler();
+  expect(String(input)).toBe(endpoint.replace('replace_company_fact_evidence','prune_company_fact_evidence'));expect(init?.method).toBe('POST');return handler();
  });
  vi.stubGlobal('fetch',fetcher);
  const info=vi.spyOn(console,'info').mockImplementation(()=>{}),error=vi.spyOn(console,'error').mockImplementation(()=>{});
  const deps=productionDigestDeps({deadline:null,codeVersion:'a'.repeat(40)});
  const mark=vi.fn(async()=>true),replace=vi.fn(async()=>({upserted:0,changed:0,retired:0,revived:0}));
- deps.db={...deps.db,beginAttempt:async()=>1,markDigestFailed:mark,replaceDigest:replace,backlog:async()=>({failedStreams:0})};
+ deps.db={...deps.db,beginAttempt:async()=>1,markDigestFailed:mark,replaceDigest:replace,backlog:async()=>({failedStreams:0,activeStreams:1,streams:[]})};
  deps.tables=memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset'],ingest_batches:['batch_id']});
  deps.facts={scopeRows:async()=>[{issuer_id:ISSUER,market:'US',state_rev:1}] as never,scopeAll:async()=>[]};
  deps.readSnapshot=async()=>({rows:[],filings:[],stateRev:1,truncated:false});deps.reader=memorySnapshotObjectStore(new Map());
@@ -115,3 +115,13 @@ describe('evidence fetch observation boundaries',()=>{
   });
  });
 });
+
+ it.each(['upsert_company_fact_evidence','prune_company_fact_evidence'])('correlates %s and clears on every matching response',async fn=>{
+  let response=failed(A);const fetcher=companyEvidenceFetch(async()=>response);
+  await withEvidenceRequest(async()=>{
+   await fetcher(endpoint,{method:'POST'});expect(evidenceRequestId()).toBe(A);
+   response=failed(B);await fetcher(endpoint.replace('replace_company_fact_evidence',fn),{method:'POST'});expect(evidenceRequestId()).toBe(B);
+   response=failed(null);await fetcher(endpoint.replace('replace_company_fact_evidence',fn),{method:'POST'});expect(evidenceRequestId()).toBeUndefined();
+   response=new Response('{}');await fetcher(endpoint.replace('replace_company_fact_evidence',fn),{method:'POST'});expect(evidenceRequestId()).toBeUndefined();
+  });
+ });

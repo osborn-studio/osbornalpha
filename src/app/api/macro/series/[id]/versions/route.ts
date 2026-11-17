@@ -3,7 +3,9 @@
 // history). Each version carries its retrieval receipt, evidence object, locator, transform and code_version; derived
 // versions also list each input with the same fields. An unreadable input is reported as missing, never dropped.
 // Session first, then strict parameters; public reference data (anon RLS reads).
-import {catalogById} from '@/lib/macro/catalog';
+import {CATALOG_VERSION} from '@/lib/macro/catalog';
+import {DISPLAY_CATALOG_VERSION} from '@/lib/macro/display-catalog';
+import {isDisplayOnly,seriesById} from '@/lib/macro/series-registry';
 import type {MacroDb} from '@/lib/macro/db';
 import {ParamError,dateParam,errorResponse,failureResponse,macroRouteDeps,okJson,paramErrorResponse,readParams,requireSessionUser} from '@/lib/macro/route-helpers';
 import type {ObservationRow} from '@/lib/macro/types';
@@ -20,7 +22,7 @@ async function provenance(db:Pick<MacroDb,'retrieval'|'evidenceObject'>,r:Observ
 export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
  const auth=await requireSessionUser();if(!auth.ok)return auth.response;
  const {id}=await params;
- const def=catalogById(id);
+ const def=seriesById(id);
  if(!def)return errorResponse('unknown_series','series is not in the catalog',404);
  let periodEnd:string;
  try{
@@ -37,6 +39,6 @@ export async function GET(req:Request,{params}:{params:Promise<{id:string}>}){
   const inputRows=inputIds.length?await db.observationsByIds(inputIds):[];
   const inputs=new Map(await Promise.all(inputRows.map(async r=>[r.observation_id,await provenance(db,r)] as const)));
   const versions=await Promise.all(rows.map(async r=>({...await provenance(db,r),inputs:(r.derived_from??[]).map(i=>inputs.get(i)??{observation_id:i,missing:true as const})})));
-  return okJson({series_id:def.id,read_series_id:readId,period_end:periodEnd,versions});
+  return okJson({catalogVersion:isDisplayOnly(def.id)?DISPLAY_CATALOG_VERSION:CATALOG_VERSION,series_id:def.id,read_series_id:readId,period_end:periodEnd,versions});
  }catch(e){return failureResponse(e,'macro-versions');}
 }

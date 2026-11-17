@@ -7,18 +7,20 @@
 // tombstones, revival, first_seen_at preservation, payload_changed_at only on a hash change, the
 // evidence-row checks and whitelist, the 200-watch cap, receipt checks and cascade. Inputs pass through
 // JSON first (what PostgREST would send). A call is validated completely before anything is written
-// (SQL: one transaction). Every method runs through one promise chain per instance (serialised).
+// (SQL: one transaction per step). Server steps run through one promise chain per instance.
 // registerBatch / registerIssuer stand in for ingest_batches / issuers.
 import {numericEquals} from '../facts/memory-facts-db';
 import type {MemoryFactsDb} from '../facts/memory-facts-db';
 import type {FactRow,FilingRow,ScopeRow} from '../facts/types';
 import {compareCodePoints,eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
-import {MAX_COMPANY_WATCHES,MAX_COVERAGE_PAGE,checkEventIds,checkEventsQuery,decodeInboxCursor,decodeIssuerCursor,inboxPage,issuerPage,sortCoverage,tsKey,watchPatch} from './db';
+import {EVIDENCE_CHUNK_ROWS,EVIDENCE_SERVER_MAX_ROWS,checkEvidenceDuplicates,chunkOf,MAX_COMPANY_WATCHES,MAX_COVERAGE_PAGE,checkEventIds,checkEventsQuery,decodeInboxCursor,decodeIssuerCursor,inboxPage,issuerPage,sortCoverage,tsKey,watchPatch} from './db';
 import {CompanyDbError} from './types';
 import type {CompanyDb,CoverageInput,CoverageRow,DigestStateRow,EventInput,EventRow,EvidenceIndexRow,EvidenceRecord,Market,WatchRow} from './types';
 
 export interface MemoryBatch{producer:string;status:'running'|'success'|'partial'|'failed'|'rejected';code_version:string|null;tool_versions:Record<string,unknown>}
 export interface MemoryCompanyDb extends CompanyDb{
+ upsertEvidence(issuer:string,market:Market,attemptId:number,basedOnRev:number,rows:EvidenceIndexRow[]):Promise<{upserted:number}>;
+ pruneEvidence(issuer:string,market:Market,attemptId:number,basedOnRev:number,keep:string[]):Promise<{deleted:number}>;
  /** Fixes "now" (first_seen_at, rebuilt_at, "today"); null returns to the wall clock. */
  setNow(iso:string|null):void;
  registerBatch(id:string,b?:Partial<MemoryBatch>):void;
@@ -227,6 +229,11 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
   if(!st||!Number.isInteger(attemptId)||attemptId<1||attemptId>st.attempt_seq)throw internal('invalid_attempt');
   return st;
  };
+ const evidenceFence=(issuer:string,market:Market,attemptId:number,basedOnRev:number)=>{
+   const sc=scopeOf(issuer,market);if(!sc)throw noStream();
+   if(basedOnRev!==sc.state_rev)throw new CompanyDbError('stale_computation','stale_computation');   // evidence fence
+   if(attemptId===null||attemptId<(states.get(sk(issuer,market))?.last_success_attempt_id??0))throw new CompanyDbError('stale_attempt','stale_attempt');
+ };
  const raw:CompanyDb={
   async digestDue(at,limit,market){
    const t=at.toISOString();
@@ -299,23 +306,16 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
    st.last_failed_attempt_id=attemptId;st.consecutive_failures+=1;st.next_attempt_at=new Date(at.getTime()+hours*3600_000).toISOString();st.last_status='failed';st.updated_at=now();
    return true;
   },
-  async backlog(){return {failedStreams:[...states.values()].filter(s=>s.last_status==='failed').length};},
+  async backlog(){
+   const failed=[...states.values()].filter(s=>s.last_status==='failed');
+   return {failedStreams:failed.length,activeStreams:facts.scope().filter(s=>s.state_rev>0).length,streams:clone(failed.sort((a,b)=>b.consecutive_failures-a.consecutive_failures||cmp(a.issuer_id,b.issuer_id)||cmp(a.market,b.market)).slice(0,20).map(s=>({issuerId:s.issuer_id,market:s.market,consecutiveFailures:s.consecutive_failures,lastAttemptAt:s.last_attempt_at,nextAttemptAt:s.next_attempt_at})))};
+  },
   async digestState(issuer,market){const s=states.get(sk(issuer,market));return s?clone(s):null;},
   async replaceEvidence(issuer,market,attemptId,basedOnRev,rows){
-   const sc=scopeOf(issuer,market);if(!sc)throw noStream();
-   if(basedOnRev!==sc.state_rev)throw new CompanyDbError('stale_computation','stale_computation');   // evidence fence
-   if(attemptId<(states.get(sk(issuer,market))?.last_success_attempt_id??0))throw new CompanyDbError('stale_attempt','stale_attempt');
-   const wire=JSON.parse(JSON.stringify(rows)) as unknown;
-   if(!Array.isArray(wire))evd('rows: array expected');
-   const x=ctx(issuer,market);
-   for(const r of wire)checkEvidence(x,r);
-   const list=wire as EvidenceIndexRow[];
-   if(new Set(list.map(r=>r.fact_id)).size!==list.length)evd('rows: duplicate fact_id');
-   const keep=new Set(list.map(r=>r.fact_id));
-   for(const r of list)evidence.set(r.fact_id,{...r,captured_at:r.captured_at===null?null:new Date(r.captured_at).toISOString(),issuer_id:issuer,market});
-   let deleted=0;
-   for(const [id,r] of evidence)if(r.issuer_id===issuer&&r.market===market&&!keep.has(id)){evidence.delete(id);deleted++;}
-   return {upserted:list.length,deleted};
+   checkEvidenceDuplicates(rows);let upserted=0;
+   for(const part of chunkOf(rows,EVIDENCE_CHUNK_ROWS))upserted+=(await db.upsertEvidence(issuer,market,attemptId,basedOnRev,part)).upserted;
+   const {deleted}=await db.pruneEvidence(issuer,market,attemptId,basedOnRev,rows.map(r=>r.fact_id));
+   return {upserted,deleted};
   },
   async eventsOfIssuer(issuer,market,o){
    checkEventsQuery(o);
@@ -405,7 +405,24 @@ export function memoryCompanyDb(opts:{facts:MemoryFactsDb}):MemoryCompanyDb{
  let chain:Promise<unknown>=Promise.resolve();
  const serialize=<A extends unknown[],T>(fn:(...a:A)=>Promise<T>)=>(...a:A):Promise<T>=>{const next=chain.then(()=>fn(...a));chain=next.catch(()=>undefined);return next;};
  const db={...raw} as MemoryCompanyDb;
- for(const k of ASYNC_METHODS)(db as unknown as Record<string,unknown>)[k]=serialize(raw[k] as unknown as (...a:unknown[])=>Promise<unknown>);
+ for(const k of ASYNC_METHODS)if(k!=='replaceEvidence')(db as unknown as Record<string,unknown>)[k]=serialize(raw[k] as unknown as (...a:unknown[])=>Promise<unknown>);
+ db.upsertEvidence=serialize(async(issuer:string,market:Market,attemptId:number,basedOnRev:number,rows:EvidenceIndexRow[])=>{
+  evidenceFence(issuer,market,attemptId,basedOnRev);
+  const wire=JSON.parse(JSON.stringify(rows)) as unknown;
+  if(!Array.isArray(wire))evd('rows: array expected');
+  if(wire.length>EVIDENCE_SERVER_MAX_ROWS)evd('rows: at most 500 per call');
+  const x=ctx(issuer,market);for(const r of wire)checkEvidence(x,r);
+  const list=wire as EvidenceIndexRow[];checkEvidenceDuplicates(list);
+  for(const r of list)evidence.set(r.fact_id,{...r,captured_at:r.captured_at===null?null:new Date(r.captured_at).toISOString(),issuer_id:issuer,market});
+  return {upserted:list.length};
+ });
+ db.pruneEvidence=serialize(async(issuer:string,market:Market,attemptId:number,basedOnRev:number,keep:string[])=>{
+  evidenceFence(issuer,market,attemptId,basedOnRev);
+  if(keep===null)evd('keep: array expected');
+  const ids=new Set(keep);let deleted=0;
+  for(const [id,r] of evidence)if(r.issuer_id===issuer&&r.market===market&&!ids.has(id)){evidence.delete(id);deleted++;}
+  return {deleted};
+ });
  db.setNow=iso=>{fixedNow=iso===null?null:new Date(iso).toISOString();};
  db.registerBatch=(id,b={})=>{batches.set(id,{producer:'company-digest',status:'running',code_version:'test-sha',tool_versions:{node:'test'},...b});};
  db.registerIssuer=(id,name)=>{names.set(id,name);};

@@ -4,7 +4,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 
 const requests=new AsyncLocalStorage<{id?:string}>();
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const EVIDENCE_PATH='/rest/v1/rpc/replace_company_fact_evidence';
+const EVIDENCE_PATHS=new Set(['replace_company_fact_evidence','upsert_company_fact_evidence','prune_company_fact_evidence'].map(fn=>`/rest/v1/rpc/${fn}`));
 export function withEvidenceRequest<T>(run:()=>Promise<T>):Promise<T>{return requests.run({},run);}
 export function evidenceRequestId():string|undefined{return requests.getStore()?.id;}
 
@@ -14,7 +14,7 @@ export function companyEvidenceFetch(fetcher:typeof fetch=fetch):typeof fetch{
   const response=await fetcher(input,init);
   try{
    const scope=requests.getStore();
-   if(scope&&init?.method==='POST'&&new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname===EVIDENCE_PATH){
+   if(scope&&init?.method==='POST'&&EVIDENCE_PATHS.has(new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname)){
     // Clear on each matching response so a later response cannot inherit an earlier ID.
     scope.id=undefined;
     if(!response.ok){const id=response.headers.get('sb-request-id');if(id?.length===36&&UUID.test(id))scope.id=id;}
