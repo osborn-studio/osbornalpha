@@ -1,7 +1,7 @@
 // src/components/macro/correlation-presets.ts
-// The 8 prefilled correlation forms (spec §3.4 "热门分析"). They only fill the form: no stored runs, no automatic
-// recompute. workbench-options.test.ts checks every preset is a valid request.
+// Shared definitions for default result cards and prefilled forms. No stored runs are created by preset reads.
 import type {AnalysisSpec} from '@/lib/macro/correlation';
+export const PRESETS_VERSION='macro-presets/1';
 export type PresetForm=Omit<AnalysisSpec,'request_id'>;
 export interface Preset{id:'p1'|'p2'|'p3'|'p4'|'p5'|'p6'|'p7'|'p8';region:'US'|'CN';form:PresetForm}
 export const PRESETS:readonly Preset[]=[

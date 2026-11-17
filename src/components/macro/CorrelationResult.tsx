@@ -2,6 +2,7 @@
 // CorrelationResult — one stored analysis run (spec §3.4, §7): numbers, the rule-generated sentence, charts with table
 // views (scatter → table below 640px), and the frozen-input receipt (cutoff, catalog version, inputs hash, counts).
 import type { AnalysisResult, AnalysisSpec, EventResult, FrozenInputs, PairResult, RollingResult } from '@/lib/macro/correlation';
+import type { PresetCard } from '@/lib/macro/preset-contract';
 import type { AnalysisKind, Bilingual } from '@/lib/macro/types';
 import { DataTableToggle } from './charts/DataTableToggle';
 import { MacroLineChart } from './charts/MacroLineChart';
@@ -12,7 +13,7 @@ import { useMacroT, type MacroT } from './use-macro-t';
 import { pick, type Locale } from './view-model';
 
 export interface RunJson {
-  run_id: string; request_id: string; kind: AnalysisKind; spec: AnalysisSpec; inputs: FrozenInputs; inputs_hash: string;
+  run_id: string; request_id: string; kind: AnalysisKind; spec: AnalysisSpec; inputs: FrozenInputs; inputs_hash: string; data_hash: string;
   results: (AnalysisResult & { explanation: Bilingual }) | null; code_version: string; method_version: string; status: 'ok' | 'failed'; error: string | null; created_at: string;
 }
 const f = (v: number, d = 2) => v.toFixed(d);
@@ -126,13 +127,13 @@ function Body({ res, t, locale }: { res: AnalysisResult & { explanation: Bilingu
   );
 }
 
-export function CorrelationResult({ run }: { run: RunJson }) {
+export function CorrelationResult({ run, mode = 'saved' }: { run: RunJson | PresetCard; mode?: 'saved' | 'preset' }) {
   const { t, locale } = useMacroT();
   return (
     <div className="card-base space-y-3">
       <div className="flex flex-wrap items-baseline gap-2">
-        <h3 className="text-sm font-semibold">{t('correlation.result.title')}</h3>
-        <span className="font-mono text-[11px] text-text-dim">{run.run_id} · {formatInstant(run.created_at)}</span>
+        <h3 className="text-sm font-semibold">{mode === 'preset' && 'preset_id' in run ? t(`correlation.presetNames.${run.preset_id}`) : t('correlation.result.title')}</h3>
+        <span className="font-mono text-[11px] text-text-dim">{run.run_id ? `${run.run_id} · ` : ''}{formatInstant(run.created_at)}</span>
       </div>
       {run.status === 'failed' || !run.results
         ? <div className="text-xs text-warn">{t('correlation.result.failed', { code: run.error ?? 'unknown' })}</div>

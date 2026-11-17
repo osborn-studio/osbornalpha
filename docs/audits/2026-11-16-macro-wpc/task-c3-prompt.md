@@ -1,0 +1,19 @@
+You are Codex gpt-6.1-sol in this repository worktree (OsbornAlpha, Next.js 15 / React 19, macro workbench). Do NOT commit, stash or switch branches. At the end print: files changed, test results, anything you could not do.
+
+Contract: docs/audits/2026-11-16-macro-wpc/spec-section-4.md (written before main moved). Where it disagrees with the code on this branch, the code's structure wins: the route is `/macro` (not `/intel/macro`), keep existing component/file names, reuse existing helpers. Read the existing code first.
+
+Hard rules:
+- Failing test first for every behaviour, then implementation. Keep zh and en messages in step (messages/zh/*.json, messages/en/*.json).
+- NEVER edit: src/lib/macro/{catalog,regime,regime-selection,types,decimal,judgment-contract}.ts, src/lib/judgments/**, supabase/**, src/lib/macro/providers/**, parsers/**, fixtures/**, scripts/macro/**. No migrations. No new dependencies.
+- Never write the literal string MACRO_JUDGMENTS_ENABLED in any file under src/components/macro.
+- Missing data stays missing: never draw or print 0 for a missing value; restricted/missing sources are labelled as such.
+- No numbers invented; every displayed number comes from the existing API/DTO.
+- Styling: existing tokens/CSS variables only, radius <= 6px, no gradients/glow/purple; rise/fall colours only for asset returns.
+- Must pass: `npm run typecheck`, `npm run lint`, and `npm test -- src/components/macro src/lib/macro "src/app/(app)/macro" src/app/api/macro` (the test `src/lib/macro/replay.test.ts` may time out locally; ignore only that one).
+
+Parallel-run rules: other Codex runs are working in sibling worktrees on other parts. Stay strictly inside your part. In messages/zh/*.json and messages/en/*.json add new keys ONLY inside one new namespace block named as stated in your task, appended as the LAST top-level-or-section key of the file you extend; do not reorder or reformat existing keys. Prompt/report files live in docs/audits/2026-11-16-macro-wpc/.
+TASK C3 (spec 4.4 default correlation result cards). Namespace for new messages: `correlation.preset` (inside the existing correlation section). Do NOT touch overview, IndicatorDetail, MacroLineChart or strategy files.
+Implement exactly as 4.4 describes: shared `src/lib/macro/analysis-service.ts::prepareAnalysis` extracted from the existing POST analyses route (POST behaviour unchanged, its existing tests untouched and green; idempotency lookup stays in the route before reads); `correlation-presets.ts` (`PRESETS_VERSION='macro-presets/1'`, the eight presets; verify every series id against the catalog — if an id in the spec does not exist, use the catalog's real id for the same series and say so in your report; if no such series exists the preset becomes a failed card, never a substitute); `GET /api/macro/analyses/presets?region=` with auth, region validation, code-version 503, no-snapshot response, deterministic request ids (use the repo's existing uuid/hash utility; if uuidv5 is unavailable without a new dependency, derive a deterministic id with node:crypto sha-1 per RFC 4122 v5), LRU 32 + single-flight memo with `X-Macro-Presets-Memo` header and stable `computed_at`; `dataHash(inputs)` in analysis-spec.ts; presets never call the quota RPC and never persist a run. UI: the correlation tab shows the preset result cards by default (reuse CorrelationResult in a `preset` mode), failed presets render as failed cards with the reason, a button "重新计算并保存" issues the existing POST and shows `correlation.preset.inputsChanged` only when data_hash differs. Skip the benchmark script (scripts/macro is not ours). Tests per the last bullet of 4.4.
+
+
+RESUME NOTE: a previous run of this exact task was interrupted. The working tree already contains its uncommitted partial work (see `git status`). Read it, keep what is right, and finish the task on top of it; do not start over and do not revert it.
