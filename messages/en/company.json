@@ -9,7 +9,8 @@
     "ai": "Model views (uncalibrated)",
     "signals": "Signals",
     "holdings": "Holdings",
-    "ariaLabel": "Company views"
+    "ariaLabel": "Company views",
+    "more": "More"
   },
   "header": {
     "marketCN": "China A",
@@ -49,7 +50,10 @@
     "inWatchlist": "In watchlist",
     "replayError": "Latest filing for the replay date failed to load ({code})",
     "freshnessError": "Data status failed to load ({code})",
-    "adminTag": "Admin"
+    "adminTag": "Admin",
+    "scope": "This page states only what the issuer has disclosed; judgments live in the Judgments tab.",
+    "breadcrumbResearch": "Company research",
+    "breadcrumbDirectory": "Directory"
   },
   "replay": {
     "button": "Replay asOf ▾",
@@ -192,7 +196,15 @@
     "openUnitHistory": "Open disclosure history in {unit}",
     "selectEvidence": "Show evidence for this row",
     "withheldRow": "Not shown: {reason}",
-    "retry": "Retry"
+    "retry": "Retry",
+    "issuer": "Issuer / ticker",
+    "concept": "Concept",
+    "currentDisclosure": "Current",
+    "supersededDisclosure": "Superseded",
+    "citationEdgar": "Value shown because the filing citation gate passed (edgar). No licence terms are asserted.",
+    "citationLinked": "Value shown because the filing citation gate passed (linked). No licence terms are asserted.",
+    "citationUnknown": "Citation-gate status is unavailable.",
+    "citationAttribution": "Source attribution follows the selected filing and evidence snapshot."
   },
   "metrics": {
     "materialized": "Materialized · basedOnRev {rev} · formula_version {version}",
@@ -292,10 +304,10 @@
   },
   "judgments": {
     "emptyTitle": "The judgment layer (F4) is not live yet",
-    "empty": "Only judgment cards registered and settleable in F4 render here. Recommendations are not shown.",
+    "empty": "Only registered, settleable F4 judgment cards are rendered here. Until the layer launches, this tab remains available with this explanation.",
     "none": "No judgment cards for this issuer.",
-    "replayFailed": "Replay read failed: response view ≠ as_known or asOf differs from the request; judgments are not rendered.",
-    "loadFailed": "Judgments failed to load ({code}).",
+    "replayFailed": "Replay failed to load",
+    "loadFailed": "Judgments failed to load ({code})",
     "uncalibrated": "uncalibrated",
     "calibrated": "calibrated",
     "noPercent": "No percentage shown ({calibration})",
@@ -311,7 +323,9 @@
     "calibrationLink": "Calibration record ↗",
     "inputs": "Evidence inputs",
     "inputFallback": "Input {n}",
-    "retrospective": "Registered retrospectively"
+    "retrospective": "Registered retrospectively",
+    "loadFailedBody": "The header and facts tabs remain available. No fallback data source is used.",
+    "replayFailedBody": "The response view or as-of date does not match the request. Judgments are not rendered."
   },
   "tracking": {
     "slotTitle": "Tracking timeline",
@@ -417,7 +431,8 @@
     "loading": "Loading…",
     "invalidQ": "Letters, digits, spaces, \".\" and \"-\" only (max 24 characters); no request was made.",
     "freshnessUnavailable": "Freshness unavailable",
-    "moreTickers": "Other tickers: {list}"
+    "moreTickers": "Other tickers: {list}",
+    "scope": "Directory of issuers with disclosed facts on file; only companies already in the store are listed."
   },
   "sourceDrawer": {
     "title": "Source document",
@@ -448,6 +463,20 @@
     "download": "Download copy",
     "signIn": "Sign in to download a copy.",
     "downloadFailed": "The copy could not be downloaded.",
-    "citationMissing": "Citation is unavailable."
+    "citationMissing": "Citation is unavailable.",
+    "snippet": "Quoted text",
+    "visibility": "Visibility",
+    "publicDocument": "Public document",
+    "rightsUnknown": "No document licence terms are supplied by this response.",
+    "attribution": "Source attribution follows the linked document."
+  },
+  "chain": {
+    "industry": "02 Industry",
+    "foreign": "04 Foreign research",
+    "reports": "04 Reports covering it",
+    "error": "lookup failed",
+    "retry": "Retry",
+    "loading": "Loading",
+    "industryLink": "← 02 Industry: "
   }
 }

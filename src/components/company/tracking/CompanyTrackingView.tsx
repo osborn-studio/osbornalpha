@@ -10,12 +10,13 @@ import { useTranslations } from 'next-intl';
 import { Button, Card } from '@/components/ui';
 import { useToast } from '@/components/Toast';
 import { foldSameIssuerDay } from '@/lib/company/inbox';
-import type { Market } from '@/lib/company/types';
+import type { Market, WithheldCounts } from '@/lib/company/types';
 import { fetchCompanyEvents, fetchInbox, isWatching, markRowsRead, TrackingApiError, type WatchCard } from '@/lib/company/tracking-client';
 import { LoadGenerations, guardedLoad } from './guarded-load';
 import { InboxEventRow, type DisplayEvent } from './InboxEventRow';
 import { markPageFlow, marketRows, shouldApply } from './mark-scope';
 import { TrackButton } from './TrackButton';
+import { TrackingContent } from './tracking-view-state';
 import { subscribeWatchChanged } from './watch-sync';
 
 export interface CompanyTrackingViewProps { issuerId: string; ticker: string; market: Market; asOf: string | null }
@@ -26,6 +27,7 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
   const replay = asOf !== null;
   const [watching, setWatching] = useState<boolean | null>(null);
   const [rows, setRows] = useState<DisplayEvent[]>([]);
+  const [withheld, setWithheld] = useState<WithheldCounts | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -45,22 +47,24 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
   // declared before the load effect so it runs first. Cleanup (unmount / next scope) invalidates as well.
   useEffect(() => {
     gens.invalidate();
-    setRows([]); setCursor(null); setError(null); setLoading(false);
+    setRows([]); setCursor(null); setError(null); setLoading(false); setWithheld(null);
     return () => { gens.invalidate(); };
   }, [gens, issuerId, ticker, market, asOf, watching]);
 
   const load = useCallback((from: string | null): Promise<void> => {
     if (!replay && watching === null) return Promise.resolve();
+    let pageWithheld: WithheldCounts | null = null;
     return guardedLoad<DisplayEvent>(gens, from, async (c) => {
       if (!replay && watching) {
         const r = await fetchInbox({ issuerId, cursor: c, limit: 50 });
         return { rows: marketRows(r.rows, market), nextCursor: r.nextCursor };   // inbox filters by issuer only; keep the selected stream. The cursor is preserved even when the filtered page is empty.
       }
       const r = await fetchCompanyEvents(ticker, { asOf, cursor: c, limit: 50 });
+      pageWithheld = r.withheld;
       return { rows: marketRows(r.rows, market).map((e) => ({ ...e, read: true })), nextCursor: r.nextCursor };   // no read state outside the inbox
     }, {
       setLoading,
-      page: (f, r) => { setRows((prev) => (f ? [...prev, ...r.rows] : r.rows)); setCursor(r.nextCursor); setError(null); },
+      page: (f, r) => { setRows((prev) => (f ? [...prev, ...r.rows] : r.rows)); setCursor(r.nextCursor); setError(null); setWithheld(pageWithheld); },
       fail: setError,
     }, (e) => (e instanceof TrackingApiError ? e.code : 'internal'));
   }, [gens, watching, replay, issuerId, ticker, asOf, market]);
@@ -71,7 +75,7 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
     issuerId, names: { zh: null, en: null }, tickers: [], primaryTicker: { [market]: ticker }, streams: [], hkOnly: false,
     note: null, muted: false, createdAt: '', updatedAt: '', unread: null, unreadLabel: null,
   }), [issuerId, market, ticker]);
-  const canMark = !replay && watching === true && rows.some((r) => !r.read);
+  const canMark = !error && !replay && watching === true && rows.some((r) => !r.read);
 
   return (
     <div className="space-y-2" data-testid="company-tracking">
@@ -92,16 +96,16 @@ export function CompanyTrackingView({ issuerId, ticker, market, asOf }: CompanyT
           {t('company.markRead')}
         </Button>
       </div>
-      {error && <Card className="text-[13px]" role="alert">{t('inbox.error', { code: error })} <Button variant="ghost" size="sm" onClick={() => load(null)}>{t('inbox.retry')}</Button></Card>}
-      {!error && rows.length === 0 && !loading && <Card className="text-[13px] text-text-dim">{t('inbox.empty')}</Card>}
+      <TrackingContent error={error} loading={loading} rowCount={rows.length} ticker={ticker} asOf={asOf} retry={() => { void load(null); }} withheld={withheld}>
       {rows.length > 0 && (
         <Card className="p-0">
           <ul>{groups.map((g) => <InboxEventRow key={g.key} head={g.head} rest={g.rest} card={card} showIssuer={false} />)}</ul>
         </Card>
       )}
+      </TrackingContent>
       <div className="text-center">
         {loading && <span className="text-xs text-text-dim">{t('inbox.loading')}</span>}
-        {!loading && cursor && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => load(cursor)}>{t('inbox.loadMore')}</Button>}
+        {!error && !loading && cursor && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={() => load(cursor)}>{t('inbox.loadMore')}</Button>}
       </div>
     </div>
   );

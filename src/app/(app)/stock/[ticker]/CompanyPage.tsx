@@ -6,7 +6,8 @@
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { useState } from 'react';
-import { Disclaimer } from '@/components/Disclaimer';
+import { ResearchFooter } from '@/components/research-ui';
+import { companySources } from '@/components/company/company-sources';
 import { usePerspectives, useQuote } from '@/lib/hooks/useQuote';
 import { JUDGMENTS_FLAG, REPLAY_UNSUPPORTED, type ViewId } from '@/lib/company/client';
 import type { CompanyPageData } from '@/lib/company/page-data';
@@ -30,7 +31,7 @@ import { LibraryReportsBlock } from '@/app/(app)/intel/foreign-research/componen
 // FOREIGN ↑
 
 export interface CompanyPageProps {
-  data: CompanyPageData; view: ViewId; asOf: string | null; highlight: string | null; focus?: FocusTarget | null; isAdmin: boolean; locale: 'zh' | 'en';
+  foreignPublic: boolean; data: CompanyPageData; view: ViewId; asOf: string | null; highlight: string | null; focus?: FocusTarget | null; isAdmin: boolean; locale: 'zh' | 'en';
 }
 
 export function CompanyPage(props: CompanyPageProps) {
@@ -58,7 +59,7 @@ export function CompanyPage(props: CompanyPageProps) {
   return <CompanyShell {...props} />;
 }
 
-function CompanyShell({ data, view, asOf, highlight, focus = null, isAdmin, locale }: CompanyPageProps) {
+function CompanyShell({ data, view, asOf, highlight, focus = null, isAdmin, locale, foreignPublic }: CompanyPageProps) {
   const ticker = data.publicTicker ?? data.ticker;
   // Lifted here (button-triggered, quota-costing) so leaving and returning to the AI tab keeps results and in-flight runs.
   const pers = usePerspectives(ticker);
@@ -98,7 +99,7 @@ function CompanyShell({ data, view, asOf, highlight, focus = null, isAdmin, loca
 
   return (
     <div className="flex flex-col gap-4">
-      <CompanyHeader data={data} view={view} asOf={asOf} locale={locale} />
+      <CompanyHeader data={data} view={view} asOf={asOf} locale={locale} foreignPublic={foreignPublic} />
       {asOf && <ReplayBar ticker={ticker} view={view} asOf={asOf} extra={extra} />}
       <ViewTabs ticker={ticker} view={view} asOf={asOf} right={asOf ? undefined : <ReplayOpener ticker={ticker} view={view} />} />
       <DrawerHost ticker={ticker} asOf={asOf} admin={isAdmin && adminView && view === 'statements'}>
@@ -107,7 +108,7 @@ function CompanyShell({ data, view, asOf, highlight, focus = null, isAdmin, loca
         {view === 'overview' && !asOf && <div className="mt-5"><LibraryReportsBlock ticker={ticker} /></div>}
         {/* FOREIGN ↑ */}
       </DrawerHost>
-      <Disclaimer />
+      <ResearchFooter sources={companySources(data.market, ticker)} methodsHref="/intel/methods" />
     </div>
   );
 }

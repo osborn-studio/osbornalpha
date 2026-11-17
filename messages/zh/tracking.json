@@ -107,5 +107,18 @@
     "tracking": "跟踪中 ✓",
     "live": "按回放日现算，不含首次可见时间",
     "markRead": "标记已读"
+  },
+  "availability": {
+    "title": "事件暂不可用",
+    "companyBody": "事件时间线读取失败（{code}）。披露文件仍可在“文件”页签查看；这里不显示部分事件，也不显示“无事件”。",
+    "filings": "去文件页签",
+    "empty": "该期间无事件",
+    "withheld": "{n} 项事件数值未放行（引用核对未完成 {pending} · 证据不完整 {incomplete}）",
+    "inboxBody": "收件箱读取失败（{code}）。",
+    "partial": "部分不可用",
+    "company": "公司",
+    "latest": "最近事件",
+    "status": "状态",
+    "degraded": "降级显示：每家公司只显示最近 20 条，不分页。"
   }
 }
