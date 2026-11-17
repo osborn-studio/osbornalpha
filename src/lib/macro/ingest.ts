@@ -44,7 +44,7 @@ export class IngestAbort extends Error{
 export const abortError=(e:IngestAbort):BatchError=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key};
 const isFenced=(e:unknown)=>e instanceof MacroDbError&&e.code==='fenced';
 
-export const DATASET_OF:Record<Adapter,'macro.fred'|'macro.akshare'>={fred_csv:'macro.fred',akshare:'macro.akshare'};
+export const DATASET_OF:Record<Adapter,'macro.fred'|'macro.akshare'|'macro.bis'>={fred_csv:'macro.fred',akshare:'macro.akshare',bis_sdmx_csv:'macro.bis'};
 export const DATASET_OF_REGION:Record<Region,'macro.fred'|'macro.akshare'>={US:'macro.fred',CN:'macro.akshare'};
 export const WRITE_CHUNK=1000;
 /** Input periods read per derived series (complete history; daily inputs since 2000 are ≈ 7 000). */

@@ -16,6 +16,7 @@ export const PUBLIC_RPCS={
 export const SERVICE_RPCS={
  calibration_cohort_internal:'(text,text,date,date,timestamptz,uuid,integer)',
  sync_methodology:'(jsonb,text,text)',
+ retire_methodology:'(text,text,text,text)',
  register_judgment:'(jsonb,jsonb)',
  claim_due_judgments:'(integer,integer)',
  claim_judgment:'(uuid,integer)',

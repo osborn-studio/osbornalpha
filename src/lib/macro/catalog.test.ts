@@ -22,7 +22,7 @@ describe('MACRO_CATALOG invariants',()=>{
   for(const d of MACRO_CATALOG){
    if(d.status!=='active'||!d.source)continue;
    if(d.source.adapter==='akshare')expect({id:d.id,host:d.source.fetchHost,ok:AKSHARE_HOSTS.has(d.source.fetchHost)}).toEqual({id:d.id,host:d.source.fetchHost,ok:true});
-   else expect(d.source.fetchHost).toBe('fred.stlouisfed.org');
+   else expect(d.source.fetchHost).toBe(d.source.adapter==='bis_sdmx_csv'?'stats.bis.org':'fred.stlouisfed.org');
   }
  });
  it('missing ⇒ source null + reason; restricted ⇒ third_party rights + reason; active ⇒ source and no reason',()=>{
@@ -70,7 +70,7 @@ describe('MACRO_CATALOG invariants',()=>{
   const lag=(id:string)=>catalogById(id)!.releaseLagDays;
   expect([lag('US_CPI_YOY'),lag('US_UNRATE'),lag('US_PPI_FD_YOY'),lag('CN_CPI_YOY'),lag('CN_PPI_YOY'),lag('CN_PMI_MFG'),lag('CN_GDP_YOY'),lag('CN_M2_YOY'),lag('CN_EXPORT_YOY')]).toEqual([15,7,15,12,12,1,20,15,10]);
   for(const d of MACRO_CATALOG)if(d.nativeFrequency==='daily'||d.nativeFrequency==='event'||d.derive?.kind==='month_end')expect({id:d.id,lag:d.releaseLagDays}).toEqual({id:d.id,lag:undefined});
-  expect(MACRO_CATALOG.filter(d=>d.status==='missing').map(d=>d.id).sort()).toEqual(['CN_AFRE_STOCK_YOY','CN_LPR_1Y','CN_MLF_1Y','US_ISM_PMI']);
+  expect(MACRO_CATALOG.filter(d=>d.status==='missing').map(d=>d.id).sort()).toEqual(['CN_AFRE_STOCK_YOY','CN_MLF_1Y','US_ISM_PMI']);
   expect(MACRO_CATALOG.filter(d=>d.status==='restricted').map(d=>d.id).sort()).toEqual(['CN_CSI300','US_DJIA','US_NASDAQCOM','US_SP500','US_VIX','US_VIX_D']);
   expect(catalogById('CN_USDCNY_CP_D')!.unit).toBe('cny_per_100usd');
  });
@@ -90,7 +90,7 @@ describe('catalog helpers',()=>{
   expect(indicatorsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY','US_ISM_PMI','US_VIX']);
   expect(indicatorsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP','CN_LPR_1Y','CN_MLF_1Y','CN_AFRE_STOCK_YOY']);
   expect(regimeInputsOf('US').map(d=>d.id)).toEqual(['US_DFF','US_DGS10','US_DTWEXBGS','US_CPI_YOY','US_UNRATE','US_PPI_FD_YOY']);
-  expect(regimeInputsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP']);
+  expect(regimeInputsOf('CN').map(d=>d.id)).toEqual(['CN_CPI_YOY','CN_PPI_YOY','CN_PMI_MFG','CN_GDP_YOY','CN_M2_YOY','CN_EXPORT_YOY','CN_CGB_10Y','CN_USDCNY_CP','CN_LPR_1Y']);
   for(const r of ['US','CN'] as const)for(const d of regimeInputsOf(r))expect(d.nativeFrequency).not.toBe('daily');
  });
  it('collectableOf lists active native (own-evidence) series per adapter',()=>{
@@ -124,3 +124,5 @@ describe('CATALOG_VERSION',()=>{
 describe('judgment contract mirror',()=>{
  it('keeps the F4 regime tie-break order',()=>{expect(REGIMES).toEqual(['recovery','overheat','stagflation','recession']);});
 });
+
+it('BIS activates only the monthly LPR with a new catalog version',()=>{expect(collectableOf('bis_sdmx_csv').map(d=>d.id)).toEqual(['CN_LPR_1Y']);expect(catalogById('CN_LPR_1Y')).toMatchObject({status:'active',releaseLagDays:10,definitionVersion:2,weight:10,source:{adapter:'bis_sdmx_csv',fetchHost:'stats.bis.org',seriesKey:'WS_CBPOL|M.CN'}});expect(CATALOG_VERSION).not.toBe('macro-catalog/30bcaa2a33c5');});

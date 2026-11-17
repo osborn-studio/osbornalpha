@@ -69,3 +69,11 @@ describe('supabaseEvidenceStore',()=>{
   expect(calls).toEqual([]);
  });
 });
+
+it('stores exact BIS bytes and sidecar under the adapter path',async()=>{
+ const e=input('a,b\n',{adapter:'bis_sdmx_csv',fetchUrl:'https://stats.bis.org/data',fetchHost:'stats.bis.org'}),store=memoryEvidenceStore();
+ expect(await store.put(e)).toEqual({objectPath:`bis_sdmx_csv/${e.sha256}.csv`,status:'stored'});
+ expect(store.read(`bis_sdmx_csv/${e.sha256}.csv`)).toEqual(e.bytes);
+ expect(await store.put(e)).toMatchObject({status:'exists'});
+ const {client,calls}=uploadStub([]);await supabaseEvidenceStore(client).put(e);expect(calls[0][1]).toBe(`bis_sdmx_csv/${e.sha256}.csv`);
+});

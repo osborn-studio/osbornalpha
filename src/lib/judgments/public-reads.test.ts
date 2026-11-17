@@ -70,7 +70,7 @@ describe('readMethodologyDoc',()=>{
  it('reads the registry path under docs/methodologies and checks its sha256',async()=>{
   expect(await readMethodologyDoc('docs/methodologies/macro_regime/v1.md',sha256(Buffer.from('# macro')))).toEqual({markdown:'# macro',sha256_matches:true});
   expect(await readMethodologyDoc('docs/methodologies/macro_regime/v1.md','0'.repeat(64))).toEqual({markdown:'# macro',sha256_matches:false});
-  expect(await readMethodologyDoc('docs/methodologies/macro_regime/v2.md','0'.repeat(64))).toEqual({markdown:null,sha256_matches:false});
+  expect(await readMethodologyDoc('docs/methodologies/macro_regime/v3.md','0'.repeat(64))).toEqual({markdown:null,sha256_matches:false});
  });
  it('never leaves docs/methodologies',async()=>{
   for(const p of ['../etc/passwd','docs/methodologies/../../secret.md','docs/methodologies/macro_regime/v1.txt'])expect(await readMethodologyDoc(p,'0'.repeat(64))).toEqual({markdown:null,sha256_matches:false});
