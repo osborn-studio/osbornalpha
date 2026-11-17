@@ -38,6 +38,7 @@ const FAMILIES:Record<string,readonly string[]>={
  region:['US','CN'],
 };
 describe('macroStrategy messages',()=>{
+ it('has no flow.edge prefix template',()=>{expect(zh.has('flow.edge')).toBe(false);expect(en.has('flow.edge')).toBe(false);});
  it('zh and en have the same keys',()=>{expect([...zh.keys()].sort()).toEqual([...en.keys()].sort());});
  it('placeholders match per key',()=>{for(const [k,v] of zh)expect([k,ph(v)]).toEqual([k,ph(en.get(k)!)]);});
  it('every rendered enum value has a message',()=>{

@@ -7,13 +7,14 @@ import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { NodeView, TransmissionView } from '@/lib/macro/strategy/contract';
 import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
-import { flowRows, nodeDisplay } from './strategy-view-model';
+import { edgeNotes, flowRows, nodeDisplay } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
 
 export function TransmissionFlow({ view }: { view: TransmissionView }) {
   const { t, locale } = useStrategyT();
   const [table, setTable] = useState(false);
   const [open, setOpen] = useState<NodeView | null>(null);
+  const notes = edgeNotes(view, locale);
   const openDisplay = open ? nodeDisplay(open, locale) : null;
   return (
     <Panel className="space-y-3">
@@ -56,11 +57,15 @@ export function TransmissionFlow({ view }: { view: TransmissionView }) {
             <li key={s.stage} className="space-y-2">
               <div className="text-[11px] text-text-dim">{i + 1}. {s.label[locale]}</div>
               {s.nodes.map((n) => <NodeCard key={n.id} node={n} onOpen={setOpen} />)}
-              {s.edge ? <p className="text-[11px] text-text-dim">{t('flow.edge', { text: s.edge.text[locale] })}</p> : null}
+              {s.edge ? <span aria-hidden="true" className="block text-text-dim"><span className="lg:hidden">↓</span><span className="hidden lg:inline">→</span></span> : null}
             </li>
           ))}
         </ol>
       )}
+      <details className="text-xs text-text-dim">
+        <summary className="cursor-pointer">{t('flow.assumptions', { n: notes.length })}</summary>
+        <ul className="mt-2 space-y-1">{notes.map((text, i) => <li key={i}>{text}</li>)}</ul>
+      </details>
       <EvidencePairDrawer open={open !== null} title={openDisplay ? t('flow.derivedTitle', { label: openDisplay.label }) : ''} onClose={() => setOpen(null)}>
         {open && openDisplay ? (
           <div className="space-y-2">
@@ -83,14 +88,17 @@ function NodeCard({ node, onOpen }: { node: NodeView; onOpen: (n: NodeView) => v
       <Tag>{t(d.badgeKey)}</Tag>
       <div className="mt-1 text-xs">{d.label}</div>
       {d.value !== null ? <div className="font-mono text-[15px] tabular-nums">{d.value}{d.unit}</div> : null}
-      {d.formula ? <div className="font-mono text-[10px] tabular-nums text-text-dim">{d.formula}</div> : null}
       {d.period ? <div className="font-mono text-[10px] text-text-dim">{d.period}</div> : null}
-      {d.reason ? <div className="text-[10px] text-text-dim">{d.reason}</div> : null}
-      {d.drill || d.seriesId ? (
-        <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
-          {d.drill ? <button type="button" className="text-accent hover:underline" onClick={() => onOpen(node)}>{t('flow.openDerived')}</button> : null}
-          {d.seriesId ? <Link className="text-accent hover:underline" href={`/intel/macro/${d.seriesId}`}>{t('flow.openSeries')}</Link> : null}
-        </div>
+      {d.formula || d.reason || d.drill || d.seriesId ? (
+        <details className="mt-1 text-[11px]">
+          <summary className="cursor-pointer text-text-dim">{t('flow.details')}</summary>
+          {d.formula ? <div className="font-mono text-[10px] tabular-nums text-text-dim">{d.formula}</div> : null}
+          {d.reason ? <div className="text-[10px] text-text-dim">{d.reason}</div> : null}
+          <div className="mt-1 flex flex-wrap gap-2">
+            {d.drill ? <button type="button" className="text-accent hover:underline" onClick={() => onOpen(node)}>{t('flow.openDerived')}</button> : null}
+            {d.seriesId ? <Link className="text-accent hover:underline" href={`/macro/${d.seriesId}`}>{t('flow.openSeries')}</Link> : null}
+          </div>
+        </details>
       ) : null}
     </div>
   );

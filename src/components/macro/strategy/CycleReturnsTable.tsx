@@ -7,8 +7,11 @@ import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { Boundary, CycleTableView, ObsRef } from '@/lib/macro/strategy/contract';
 import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
-import { MISSING, barGeometry, columnMedians, cycleCell, cycleCellOf, cycleGroups, cycleScale, episodeView, episodesEmptyKey, formatRaw, shortId, strategyApi, toneClass, toneLevel } from './strategy-view-model';
+import { MISSING, barGeometry, columnMedians, cycleCell, cycleCellOf, cycleGroups, cycleScale, episodeView, episodesEmptyKey, formatRaw, shortId, strategyApi, toneClass, toneLevel, visibleColumns } from './strategy-view-model';
 import { useStrategyT } from './use-strategy-t';
+
+import { ColumnToggle } from './ColumnToggle';
+import { useColumnMode } from './use-column-mode';
 
 const BOUNDARIES: readonly Boundary[] = ['event_day', 'first_trading_day', 'month_end'];
 
@@ -16,7 +19,11 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
   const { t, locale } = useStrategyT();
   const [drill, setDrill] = useState<{ title: string; refs: ObsRef[] } | null>(null);
   const [mediansAsTable, setMediansAsTable] = useState(false);
-  const medians = columnMedians(view);
+  const [mode, setMode] = useColumnMode();
+  const columnInfo = new Map(visibleColumns(view, mode).map(c => [c.id, c]));
+  const visible = new Set(columnInfo.keys());
+  const columns = view.columns.filter(c => visible.has(c.id));
+  const medians = columnMedians(view).filter(c => visible.has(c.id));
   return (
     <div className="space-y-3">
       <Panel className="space-y-2">
@@ -28,6 +35,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
             ))}
           </div>
         </div>
+        <ColumnToggle mode={mode} onMode={setMode} hidden={view.columns.length - columns.length} />
         <p className="text-xs text-text-dim">{t(`history.boundaryDef.${view.boundary}`)}</p>
         <p className="text-[11px] text-text-dim">{t('history.coverageNote')}</p>
         {view.gaps.length > 0 ? (
@@ -42,7 +50,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                 <thead>
                   <tr className="text-right text-text-dim">
                     <th className="px-1.5 py-1 text-left font-medium">{t('history.episode')}</th>
-                    {view.columns.map((c) => <th key={c.id} className="px-1.5 py-1 font-medium">{c.label[locale]} {c.change_kind === 'pct' ? '%' : 'bp'}</th>)}
+                    {columns.map((c) => <th key={c.id} className="px-1.5 py-1 font-medium">{c.label[locale]} {c.change_kind === 'pct' ? '%' : 'bp'}{columnInfo.get(c.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(c.id)!.hidden_reason}`)}</span> : null}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -55,7 +63,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                           <div className="font-mono text-[10px] tabular-nums text-text-dim">{ev.line}</div>
                           {ev.flags.length > 0 ? <div className="mt-0.5 flex flex-wrap gap-1">{ev.flags.map((f) => <Tag key={f} tone="accent">{t(f)}</Tag>)}</div> : null}
                         </th>
-                        {view.columns.map((col) => {
+                        {columns.map((col) => {
                           const c = cycleCell(cycleCellOf(view, e, col.id), t);
                           const body = (
                             <>
@@ -78,9 +86,9 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
               </table>
             </div>
             <div className="space-y-3 sm:hidden">
-              {cycleGroups(view, t, locale).map((g) => (
+              {cycleGroups(view, t, locale).filter(g => visible.has(g.id)).map((g) => (
                 <section key={g.id} className="rounded border border-border p-2">
-                  <h3 className="text-xs font-semibold">{g.label}</h3>
+                  <h3 className="text-xs font-semibold">{g.label}{columnInfo.get(g.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(g.id)!.hidden_reason}`)}</span> : null}</h3>
                   <ul className="mt-1 space-y-1 text-xs">
                     {g.rows.map((r) => (
                       <li key={r.key} className="flex justify-between gap-2">
@@ -134,7 +142,7 @@ export function CycleReturnsTable({ view, boundary, onBoundary }: { view: CycleT
                 <g key={c.id}>
                   <text x={0} y={y + 15} fontSize={11} fill="var(--text-dim)">{c.label[locale]}</text>
                   <line x1={170} x2={170} y1={y + 2} y2={y + 22} stroke="var(--border)" />
-                  <rect x={120 + g.x} y={y + 6} width={g.width} height={12} fill={c.median !== null && c.median < 0 ? 'var(--down)' : 'var(--up)'} fillOpacity={0.55} />
+                  {c.median !== null ? <rect x={120 + g.x} y={y + 6} width={g.width} height={12} fill={c.median !== null && c.median < 0 ? 'var(--down)' : 'var(--up)'} fillOpacity={0.55} /> : null}
                   <text x={240} y={y + 15} fontSize={11} fill="var(--text)" fontFamily="var(--font-mono)">
                     {t('history.medianLine', { value: c.median === null ? MISSING : formatRaw(c.median, c.kind), n: c.n })}
                   </text>
