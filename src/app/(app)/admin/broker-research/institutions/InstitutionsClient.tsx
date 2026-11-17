@@ -1,10 +1,12 @@
 'use client';
 // Institution scales (insert / close) and analyst bylines (spec §4.5, §4.9; D6). Metadata-only client props.
+import {StateBadge,StateCell} from '@/components/research-ui';
+import {institutionSummary} from './institutions-model';
 import {adminJson} from '../_shared/admin-fetch';
 import {useState} from 'react';
 import {useRouter} from 'next/navigation';
 import {useTranslations} from 'next-intl';
-import {PUBLIC_RATINGS} from '@/lib/broker-research/public-dto';
+import {PUBLIC_RATINGS} from '@/lib/broker-research/public-types';
 import {BTN,CARD,CHIP,H1,H2,INPUT,TD,TH,TINY} from '@/app/(app)/intel/foreign-research/components/ui';
 
 // Structural metadata props keep server DB contracts and dependencies out of the client graph.
@@ -17,6 +19,8 @@ export interface InstitutionDetail{
 type Post=(path:string,body:unknown)=>Promise<boolean>;
 export function InstitutionsClient({details}:{details:InstitutionDetail[]}){
  const t=useTranslations('foreign-research.admin.institutions'),router=useRouter();
+ const [selected,setSelected]=useState(details[0]?.institution.institution_id??'');
+ const active=details.find(d=>d.institution.institution_id===selected)??details[0];
  const [error,setError]=useState<string|null>(null),[busy,setBusy]=useState(false),[name,setName]=useState('');
  async function post(path:string,body:unknown):Promise<boolean>{
   setBusy(true);setError(null);
@@ -33,7 +37,21 @@ export function InstitutionsClient({details}:{details:InstitutionDetail[]}){
    <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-text-dim">{t('nameEn')}<input className={INPUT} required maxLength={200} value={name} onChange={e=>setName(e.target.value)}/></label>
    <button className={BTN} disabled={busy||!name.trim()}>{t('add')}</button>
   </form>
-  {details.length===0?<p className={TINY}>{t('none')}</p>:details.map(d=><InstitutionCard key={d.institution.institution_id} d={d} busy={busy} post={post}/>)}
+  {details.length===0?<p className={TINY}>{t('none')}</p>:<>
+   <div className="overflow-x-auto rounded border border-border"><table className="w-full min-w-[680px] text-sm">
+    <thead><tr>{['institution','scale','analysts','reports','licence','edit'].map(k=><th scope="col" className={TH} key={k}>{t(`columns.${k}`)}</th>)}</tr></thead>
+    <tbody>{details.map(d=>{const summary=institutionSummary(d,new Date().toISOString().slice(0,10));return <tr className="border-t border-border" key={d.institution.institution_id}>
+     <td className={TD}>{d.institution.name_en}</td>
+     <td className={TD}>{summary.mapped?t('mapped',{n:summary.mapped}):<StateBadge state="missing" detail={t('noScale')}/>}</td>
+     <td className={TD}>{summary.analysts}</td>
+     <td className={TD}><StateCell state="missing" detail={t('unavailable')}/></td>
+     <td className={TD}><StateBadge state="missing" detail={t('unavailable')}/></td>
+     <td className={TD}><button type="button" className={BTN} aria-pressed={active?.institution.institution_id===d.institution.institution_id} onClick={()=>setSelected(d.institution.institution_id)}>{t('columns.edit')}</button></td>
+    </tr>;})}</tbody>
+   </table></div>
+   <p className={TINY}>{t('readLimit')}</p>
+   {active?<InstitutionCard key={active.institution.institution_id} d={active} busy={busy} post={post}/>:null}
+  </>}
  </div>;
 }
 function InstitutionCard({d,busy,post}:{d:InstitutionDetail;busy:boolean;post:Post}){
@@ -41,7 +59,7 @@ function InstitutionCard({d,busy,post}:{d:InstitutionDetail;busy:boolean;post:Po
  const base=`/institutions/${d.institution.institution_id}`;
  const [scale,setScale]=useState({raw_label:'',normalized:'neutral' as Rating,source_url:'',valid_from:''});
  const [closeTo,setCloseTo]=useState(''),[analyst,setAnalyst]=useState('');
- return <section className={`${CARD} flex flex-col gap-3`}>
+ return <section data-institution-editor className={`${CARD} flex flex-col gap-3`}>
   <div className="flex flex-wrap items-center gap-2"><h2 className={H2}>{d.institution.name_en}</h2>{d.institution.name_zh?<span className={TINY}>{d.institution.name_zh}</span>:null}{d.institution.aliases.map(a=><span key={a} className={CHIP}>{a}</span>)}</div>
   <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-xs">
    <caption className="sr-only">{t('title')} — {d.institution.name_en}</caption>
@@ -54,7 +72,7 @@ function InstitutionCard({d,busy,post}:{d:InstitutionDetail;busy:boolean;post:Po
    <select className={`${INPUT} w-36`} aria-label={t('scales.normalized')} value={scale.normalized} onChange={e=>setScale({...scale,normalized:e.target.value as Rating})}>{PUBLIC_RATINGS.map(r=><option key={r} value={r}>{tr(r)}</option>)}</select>
    <input type="url" className={`${INPUT} w-64 max-w-full`} required aria-label={t('scales.source')} placeholder="https://" value={scale.source_url} onChange={e=>setScale({...scale,source_url:e.target.value})}/>
    <input type="date" className={`${INPUT} w-40`} required aria-label={t('scales.validFrom')} value={scale.valid_from} onChange={e=>setScale({...scale,valid_from:e.target.value})}/>
-   <button className={BTN} disabled={busy||!scale.raw_label.trim()||!scale.source_url||!scale.valid_from}>{t('scales.add')}</button>
+   <button className={BTN} disabled={busy||!scale.raw_label.trim()||!scale.source_url||!scale.valid_from}>{t('saveMapping')}</button>
   </form>
   <label className="flex flex-col gap-1 text-xs text-text-dim">{t('scales.closeOn')}<input type="date" className={`${INPUT} w-40`} value={closeTo} onChange={e=>setCloseTo(e.target.value)}/></label>
   <p className={TINY}>{t('scales.note')}</p>

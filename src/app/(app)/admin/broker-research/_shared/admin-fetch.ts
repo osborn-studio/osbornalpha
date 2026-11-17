@@ -23,7 +23,7 @@ export async function adminJson<T=unknown>(method:'GET'|'POST'|'PATCH',path:stri
 }
 
 // Serializable, client-safe admin page contracts. No server loader imports.
-import type {AccessLogInput,LicenceRow,ReportRow,SettingsRow} from '@/lib/broker-research/types';
+import type {AccessLogInput,LicenceRow,ReportRow,SettingsRow} from '@/lib/broker-research/public-types';
 type Row=Record<string,unknown>;
 export interface GoldReceiptView{receiptId:string;ranAt:string|null;passed:boolean;nDocs:number;corpusMatches:boolean;codeVersion:string|null;
  tuple:{extractorVersion:string|null;modelId:string|null;registryHash:string|null;promptVersion:string|null;schemaVersion:string|null};

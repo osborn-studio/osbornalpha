@@ -7,7 +7,7 @@
 import {useEffect,useRef,useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
-import type {LicenceRow,PublicationRow} from '@/lib/broker-research/types';
+import type {LicenceRow,PublicationRow} from '@/lib/broker-research/public-types';
 import {shortId} from '@/app/(app)/intel/foreign-research/components/format';
 import {BTN,CALLOUT,H2,TINY} from '@/app/(app)/intel/foreign-research/components/ui';
 import {BTN_GHOST,BTN_PRIMARY,ERROR_BAR} from './review-model';

@@ -8,9 +8,9 @@
 import {createContext,useCallback,useContext,useEffect,useRef,useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
-import {effectiveValue} from '@/lib/broker-research/effective';
-import type {FieldName,FieldRow,ReportScope,ReviewPayload,SnippetPurpose} from '@/lib/broker-research/types';
-import {SNIPPET_PURPOSES} from '@/lib/broker-research/public-dto';
+import {effectiveValue} from '@/lib/broker-research/public-types';
+import type {FieldName,FieldRow,ReportScope,ReviewPayload,SnippetPurpose} from '@/lib/broker-research/public-types';
+import {SNIPPET_PURPOSES} from '@/lib/broker-research/public-types';
 import {shortId} from '@/app/(app)/intel/foreign-research/components/format';
 import {BTN,CALLOUT,CARD,CARD_FLUSH,CHIP,INPUT,TINY} from '@/app/(app)/intel/foreign-research/components/ui';
 import {BTN_GHOST,BTN_PRIMARY,CHIP_ACCENT,CHIP_DANGER,CHIP_WARN,DOT,ERROR_BAR,FIELD_LABEL,H3} from './review-model';

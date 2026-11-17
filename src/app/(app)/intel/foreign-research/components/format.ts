@@ -1,6 +1,6 @@
 // Pure decimal display and SVG geometry helpers (spec §9.3); Number is only for coordinates.
-import type {FieldName,SnippetPurpose} from '@/lib/broker-research/types';
-import type {PublicCitationDto,PublicReportDto,PublicSnippetDto,PublicTargetDto,PublicTitleDto} from '@/lib/broker-research/public-dto';
+import type {FieldName,SnippetPurpose} from '@/lib/broker-research/public-types';
+import type {PublicCitationDto,PublicReportDto,PublicSnippetDto,PublicTargetDto,PublicTitleDto} from '@/lib/broker-research/public-types';
 const DEC=/^-?\d+(?:\.\d+)?$/;
 export const MINUS='−';
 export function groupThousands(s:string):string{const neg=s.startsWith('-'),[i,f]=(neg?s.slice(1):s).split('.');return `${neg?MINUS:''}${i.replace(/\B(?=(\d{3})+(?!\d))/g,',')}${f===undefined?'':'.'+f}`;}

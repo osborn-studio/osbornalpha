@@ -1,6 +1,6 @@
 // src/app/(app)/admin/broker-research/licences/licence-form.ts
 // Licence form state ⇄ LicenceInput (spec §4.1; D2/D3 defaults: N ≤ 500, every public flag false).
-import type {LicenceInput,LicenceKind,LicenceRow} from '@/lib/broker-research/types';
+import type {LicenceInput,LicenceKind,LicenceRow} from '@/lib/broker-research/public-types';
 
 export const LICENCE_KINDS:LicenceKind[]=['terminal_subscription','direct_from_broker','owner_authored','other'];
 export const FLAGS=['allows_llm_processing','allows_public_metadata','allows_public_snippets','allows_public_summary','allows_public_target_price'] as const;

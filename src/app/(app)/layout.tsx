@@ -1,6 +1,10 @@
 import { redirect } from 'next/navigation';
 import { TopBar } from '@/components/TopBar';
 import { ResearchChain } from '@/components/research-ui/ResearchChain';
+// FOREIGN ↓ Chain availability from the cached public settings flag.
+import {DEFAULT_CHAIN_AVAILABILITY} from '@/components/research-ui/chain';
+import {readForeignPublicEnabled} from '@/lib/broker-research/public-flag';
+// FOREIGN ↑
 import { TabBar } from '@/components/TabBar';
 import { CopilotFab } from '@/components/CopilotFab';
 import { TimezoneProvider } from '@/components/TimezoneProvider';
@@ -17,11 +21,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const { data: { user } } = await sb.auth.getUser();
     if (!user) redirect('/login');
   }
+  // FOREIGN ↓
+  const availability = {...DEFAULT_CHAIN_AVAILABILITY, foreign: await readForeignPublicEnabled()};
+  // FOREIGN ↑
   return (
     <TimezoneProvider>
       <FirstLoginTracker />
+      {/* // FOREIGN ↓ */}
       <TopBar />
-      <ResearchChain />
+      <ResearchChain availability={availability} />
+      {/* // FOREIGN ↑ */}
       <main className="mx-auto w-full max-w-[1600px] p-3 lg:p-4">{children}</main>
       <TabBar />
       <CopilotFab />

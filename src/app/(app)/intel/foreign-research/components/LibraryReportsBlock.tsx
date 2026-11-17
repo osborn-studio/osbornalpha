@@ -4,7 +4,7 @@
 import {useEffect,useState} from 'react';
 import Link from 'next/link';
 import {useTranslations} from 'next-intl';
-import type {PublicReportDto} from '@/lib/broker-research/public-dto';
+import type {PublicReportDto} from '@/lib/broker-research/public-types';
 import {RatingBadge} from './RatingBadge';
 import {TargetValue} from './TargetValue';
 import {reportHref} from './ReportsTable';
@@ -33,7 +33,7 @@ export function LibraryReportsView({ticker,reports,count}:{ticker:string;reports
        <td className={`${TD} whitespace-nowrap pl-3 font-mono text-text-dim`}>{r.publishedDate??'—'}</td>
        <td className={`${TD} whitespace-nowrap`}>{r.institution?.nameEn??'—'}</td>
        <td className={TD}><Link href={reportHref(r.reportId)} className="text-text hover:text-accent">{r.title.text}</Link></td>
-       <td className={TD}>{pt?<RatingBadge value={pt.rating.normalized}/>:null}</td>
+       <td className={TD}>{pt?<RatingBadge value={pt.rating.normalized} raw={pt.rating.raw}/>:null}</td>
        <td className={`${TD} whitespace-nowrap pr-3 text-right`}>{pt?<TargetValue target={pt.target} targetPricePublic={r.targetPricePublic} currencyFirst/>:null}</td>
       </tr>);})}
     </tbody></table>
