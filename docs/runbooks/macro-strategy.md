@@ -228,3 +228,35 @@ console.log((await fetch('/api/macro/strategy/deviations?region=US')).status);  
 1. Unset the flag and redeploy: `vercel env rm MACRO_STRATEGY_ENABLED production` then the 8.3 deploy. Pages, fact routes, explanations and the review cron answer 404 again; the six P3 tables and any published reviews stay (inert and read-only through the RPCs; never drop them).
 2. A bad published review: rerun that month after the fix (the pointer only moves forward, section 3); do not edit rows.
 3. Data problems are P1 problems: roll the snapshot back with macro-sync §8 / §13.6. Record every rollback in `docs/audits/`.
+
+## Persisted fact views (B2)
+
+`macro_strategy_views` stores only the whole pure fact value (including its `manifest_id`), as UTF-8 JSON text and a SHA-256 checksum. The key hashes the existing schema-namespaced memo identity: kind, params, both active snapshots' id/revision/created_at, each region's publish revision and input_revision, catalog version and deploy code version. Rows are immutable; an RPC replay compares checksums and a conflict never overwrites evidence. Only service_role can select or execute `macro_put_strategy_view(jsonb)`; anon/authenticated have no access. Judgments, sessions, explanations and quota data are never stored. Missing revision evidence bypasses the view store and both cache layers.
+
+A cold request reads one view row after the existing live identity checks. A miss builds and persists a manifest, evaluates the facts and serializes the whole fact value once for storage and response replay. Store failures/conflicts log fixed labels and serve the fresh build. A corrupt row is a miss. `X-Macro-Strategy-View: stored|built` reports the origin of the cached fact value; `X-Macro-Strategy-Memo: hit|miss|coalesced` keeps its process-cache meaning.
+
+Release order: apply migrations `20261126090000` (gzip manifests), `20261126100000` (history RPC), then `20261126110000` (views), and confirm the PostgREST schema reload **before deploying the app revision**. The migrations notify PostgREST to reload; confirm the new RPCs are discoverable with the service role. Migration locks are recorded only after production apply.
+
+Call the warmer **once right after every deploy** (the code version changes every view key):
+
+```sh
+curl -fsS -H "Authorization: Bearer $CRON_SECRET" "$SITE/api/cron/macro-strategy-warm"
+```
+
+The authenticated GET has a 60-second maximum duration and runs every ten minutes (`*/10 * * * *`). It reads memo state once, checks all eight keys with one select and builds missing views with at most two workers: transmission US/CN, policy-response windows 1/3/6, cycle-table event_day/first_trading_day/month_end. The receipt is `{outcomes:[{kind,params,outcome,ms}]}` with `present|built|failed|skipped`; one failed view does not stop the others. Disabled strategy returns eight skipped outcomes without allocating storage/read dependencies; uncacheable state also skips. Snapshot publication does not call the warmer itself: after a publish, an ingest or a deploy the next scheduled run (at most ten minutes later) or the first request builds the missing views.
+
+Verify with an administrative connection (view table is service-only):
+
+```sql
+-- Latest manifest of each kind and the stored encoding.
+select distinct on (kind) kind, manifest_id, created_at,
+       case when body_gz is null then 'jsonb' else 'gzip' end as encoding,
+       body_bytes
+from public.macro_strategy_manifests
+order by kind, created_at desc, manifest_id desc;
+
+select kind, count(*) as views, max(created_at) as latest,
+       max(octet_length(view_json)) as max_view_bytes
+from public.macro_strategy_views
+ group by kind order by kind;
+```

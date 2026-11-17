@@ -24,10 +24,9 @@ const entries=new Map<string,{value:unknown;isStale:boolean}>();
 let counts:Record<string,number>;
 const bump=(key:string)=>{counts[key]=(counts[key]??0)+1;};
 const routes=[
- {name:'transmission-US',path:'transmission?region=US',handler:transmission},
- {name:'transmission-CN',path:'transmission?region=CN',handler:transmission},
- {name:'policy-response',path:'policy-response?window=3',handler:policyResponse},
- {name:'cycle-table',path:'cycle-table?boundary=event_day',handler:cycleTable},
+ ...(['US','CN'] as const).map(region=>({name:`transmission-${region}`,path:`transmission?region=${region}`,handler:transmission})),
+ ...([1,3,6] as const).map(window=>({name:`policy-response-${window}`,path:`policy-response?window=${window}`,handler:policyResponse})),
+ ...(['event_day','first_trading_day','month_end'] as const).map(boundary=>({name:`cycle-table-${boundary}`,path:`cycle-table?boundary=${boundary}`,handler:cycleTable})),
 ];
 const samples:{route:string;scenario:string;ms:number;bytes:number;status:number;memo:string|null;hash:string}[]=[];
 const phases:{route:string;scenario:string;requests:number;counts:Record<string,number>}[]=[];
@@ -58,10 +57,13 @@ afterEach(()=>{vi.useRealTimers();vi.unstubAllEnvs();vi.unstubAllGlobals();strat
 
 it('measures authenticated real handlers, cache work budgets and cold concurrency without network',async()=>{
  for(const route of routes){
+  let builtText:string|undefined;
   async function call(scenario:string,status=200){
    const start=performance.now();
    const response=await route.handler(new Request(`http://fixture.invalid/api/macro/strategy/${route.path}`));
    const body=await response.text(),ms=performance.now()-start;
+   if(scenario==='cold')builtText=body;
+   if(scenario==='stored-cold-concurrent'){expect(response.headers.get('x-macro-strategy-view')).toBe('stored');expect(body).toBe(builtText);}
    expect(response.status).toBe(status);
    expect(response.headers.get('cache-control')).toMatch(/no-store/);
    const sample={route:route.name,scenario,ms,bytes:Buffer.byteLength(body),status:response.status,
@@ -77,7 +79,7 @@ it('measures authenticated real handlers, cache work budgets and cold concurrenc
   }
   strategyMemo.clear();entries.clear();
   const [cold]=await phase('cold',1);expect(counts.putManifest).toBe(1);
-  const historyBudget=route.name==='policy-response'?8:route.name==='cycle-table'?13:0;
+  const historyBudget=route.name.startsWith('policy-response')?8:route.name.startsWith('cycle-table')?13:0;
   expect(counts.seriesHistory??0).toBe(historyBudget);
   const warm=await phase('warm',12);expect(counts.putManifest??0).toBe(0);expect(counts.seriesHistory??0).toBe(0);
   expect(warm.every(s=>s.memo==='hit'&&s.hash===cold.hash)).toBe(true);
@@ -85,8 +87,8 @@ it('measures authenticated real handlers, cache work budgets and cold concurrenc
   const [shared]=await phase('shared-warm-local-reset',1);
   expect(shared.hash).toBe(cold.hash);expect(counts.putManifest??0).toBe(0);expect(counts.seriesHistory??0).toBe(0);
   strategyMemo.clear();entries.clear();
-  const batch=await phase('cold-concurrent',8,true);expect(counts.putManifest).toBe(1);
-  expect(counts.seriesHistory??0).toBe(historyBudget);
+  const batch=await phase('stored-cold-concurrent',8,true);expect(counts.putManifest??0).toBe(0);
+  expect(counts.seriesHistory??0).toBe(0);
   expect(batch.filter(s=>s.memo==='miss')).toHaveLength(1);expect(batch.filter(s=>s.memo==='coalesced')).toHaveLength(7);
   expect(batch.every(s=>s.hash===cold.hash)).toBe(true);
   deps.user.mockImplementation(async()=>{bump('auth');return {data:{user:{id:'fixture-account-b'}},error:null};});

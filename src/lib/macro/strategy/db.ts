@@ -24,7 +24,30 @@ export const RECOVERY_SCAN=50;
 export const MANIFEST_GZ_THRESHOLD_BYTES=1_000_000;
 
 export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'cutoff_mismatch'|'invalid_argument'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
+export type FactViewKind='transmission'|'policy_response'|'cycle_table';
+export interface StrategyView{view_key:string;kind:FactViewKind;identity:Record<string,unknown>;manifest_id:string;view_json:string;view_sha256:string;code_version:string}
+export type StrategyViewWrite={outcome:'inserted'|'replayed'|'conflict'};
+const VIEW_KINDS=['transmission','policy_response','cycle_table'];
+const HEX64=/^[0-9a-f]{64}$/;
+const VIEW_KEYS=['view_key','kind','identity','manifest_id','view_json','view_sha256','code_version'];
+function validateView(a:StrategyView):void{
+ if(Object.keys(a).length!==VIEW_KEYS.length||!VIEW_KEYS.every(k=>k in a)||!HEX64.test(a.view_key)||!VIEW_KINDS.includes(a.kind)
+  ||typeof a.identity!=='object'||a.identity===null||Array.isArray(a.identity)||typeof a.manifest_id!=='string'||!UUID.test(a.manifest_id)
+  ||typeof a.view_json!=='string'||!HEX64.test(a.view_sha256)||sha256Hex(a.view_json)!==a.view_sha256
+  ||typeof a.code_version!=='string'||a.code_version.length<1||a.code_version.length>128)throw new StrategyDbError('invalid_argument');
+}
+/** Diagnostics contain fixed labels only, including when the logger itself fails. */
+export function logStrategyView(label:'corrupt'|'read-failed'|'store-failed'|'conflict'|'warm-failed'):void{
+ try{console.error(`[macro-strategy-view-${label}]`);}catch{}
+}
+function viewFrom(r:Record<string,unknown>):StrategyView|null{
+ if(typeof r.view_json!=='string'||typeof r.view_sha256!=='string'||!HEX64.test(r.view_sha256)||sha256Hex(r.view_json)!==r.view_sha256||!VIEW_KINDS.includes(String(r.kind))){logStrategyView('corrupt');return null;}
+ return {view_key:String(r.view_key),kind:r.kind as FactViewKind,identity:r.identity as Record<string,unknown>,manifest_id:String(r.manifest_id),view_json:r.view_json,view_sha256:r.view_sha256,code_version:String(r.code_version)};
+}
 export interface StrategyDb{
+ getStrategyView(viewKey:string):Promise<StrategyView|null>;
+ getStrategyViews(viewKeys:string[]):Promise<StrategyView[]>;
+ putStrategyView(view:StrategyView):Promise<StrategyViewWrite>;
  putManifest(body:StrategyManifest):Promise<StoredManifest>;   // computes manifest_hash = sha256Hex(canonicalJson(body)); RPC macro_put_manifest; idempotent by hash
  manifest(id:string):Promise<StoredManifest|null>;                                                          // anon
  reviewCurrent(region:Region,month:string):Promise<{result:ReviewResult;generation:number;cutoff:string}|null>;   // anon
@@ -55,7 +78,7 @@ export interface StrategyDb{
 }
 
 // ---------------------------------------------------------------- transport
-export type StrategyTable='macro_strategy_manifests'|'macro_review_results'|'macro_review_current'|'macro_explanation_runs'|'macro_explanations';
+export type StrategyTable='macro_strategy_views'|'macro_strategy_manifests'|'macro_review_results'|'macro_review_current'|'macro_explanation_runs'|'macro_explanations';
 export type ReadRole='anon'|'admin'|'session';
 export interface SelectSpec{columns?:readonly string[];table:StrategyTable;eq:Record<string,string>;in?:{column:string;values:string[]};order:{column:string;ascending:boolean}[];limit:number}
 /** rpc runs as service_role and rejects with the database error (message = code for raised errors); select runs under `role`. */
@@ -179,6 +202,22 @@ export function strategyDbOver(t:StrategyTransport):StrategyDb{
    }
    });
   },
+  async getStrategyView(viewKey){
+   if(!HEX64.test(viewKey))return null;
+   const [r]=await select('admin',{table:'macro_strategy_views',eq:{view_key:viewKey},order:[],limit:1});
+   return r?viewFrom(r):null;
+  },
+  async getStrategyViews(viewKeys){
+   if(!viewKeys.length)return [];
+   const rows=await select('admin',{table:'macro_strategy_views',eq:{},in:{column:'view_key',values:viewKeys},order:[],limit:viewKeys.length});
+   return rows.map(viewFrom).filter((r):r is StrategyView=>r!==null);
+  },
+  async putStrategyView(a){
+   validateView(a);
+   const result=await rpc('macro_put_strategy_view',Object.fromEntries(Object.entries(a).map(([k,v])=>[`p_${k}`,v]))) as StrategyViewWrite;
+   if(!['inserted','replayed','conflict'].includes(result?.outcome))throw new StrategyDbError('rpc_failed');
+   return result;
+  },
   manifest:id=>manifestById('anon',id),
   async reviewCurrent(region,month){
    const [cur]=await select('anon',{table:'macro_review_current',eq:{region,month},order:[],limit:1});
@@ -282,6 +321,7 @@ export type MemRunView={state:ExplanationState;raw_output:unknown;finalize_paylo
 export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(id:string)=>void;_run:(explanationId:string)=>MemRunView|null}{
  const now=opts.now??(()=>new Date());
  const clone=<T>(v:T):T=>v===undefined?v:JSON.parse(JSON.stringify(v)) as T;
+ const views=new Map<string,StrategyView>();
  const manifests=new Map<string,StoredManifest>(),byHash=new Map<string,string>(),manifestRows=new Map<string,Record<string,unknown>>();
  const manifestStore=strategyDbOver({
   async rpc(fn,a){
@@ -328,6 +368,15 @@ export function memoryStrategyDb(opts:{now?:()=>Date}={}):StrategyDb&{_userId:(i
   _userId(id){sessionUser=id;},
   _run(id){const r=runs.get(id);return r?clone({state:r.state,raw_output:r.raw_output,finalize_payload:r.finalize_payload,finalized:r.finalized,late_output:r.late_output}):null;},
   async putManifest(body){const m=await manifestStore.putManifest(body);manifests.set(m.manifest_id,clone(m));return m;},
+  async getStrategyView(key){const row=views.get(key);return row?clone(row):null;},
+  async getStrategyViews(keys){return keys.flatMap(key=>{const row=views.get(key);return row?[clone(row)]:[];});},
+  async putStrategyView(a){
+   validateView(a);
+   if(!manifests.has(a.manifest_id))throw new StrategyDbError('rpc_failed');
+   const previous=views.get(a.view_key);
+   if(previous)return {outcome:previous.view_sha256===a.view_sha256?'replayed':'conflict'};
+   views.set(a.view_key,clone(a));return {outcome:'inserted'};
+  },
   manifest:id=>manifestStore.manifest(id),
   async reviewCurrent(region,month){
    const c=current.get(`${region}|${month}`);if(!c)return null;
