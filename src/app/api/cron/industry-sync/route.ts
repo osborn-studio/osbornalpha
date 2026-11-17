@@ -43,7 +43,7 @@ async function run(request:Request):Promise<NextResponse>{
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  try{
-  const result=await runIndustryJob(job,productionIndustryDeps({codeVersion}),{dryRun:false,triggeredBy:'cron',limit});
+  const result=await runIndustryJob(job,productionIndustryDeps({codeVersion}),{dryRun:false,triggeredBy:'cron',limit,...(job==='aggregate-sic'?{deadlineMs:240000}:{})});
   if('skipped' in result)return NextResponse.json({ok:true,job,skipped:result.skipped,started_at:started.toISOString()},{headers:{'Cache-Control':'no-store'}});
   return NextResponse.json({ok:result.receipt.status==='success',job,limit:limit??null,started_at:started.toISOString(),receipt:publicReceipt(result.receipt)},{headers:{'Cache-Control':'no-store'}});
  }catch(e){

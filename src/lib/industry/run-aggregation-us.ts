@@ -19,13 +19,14 @@ import {replayFromManifest} from './replay';
 import type {AggregationHooks,AggregationReceipt,AggregationTimings} from './run-aggregation';
 import {IndustryDbError} from './types';
 import type {IndustryDeps,RunDependency,StagedMetricCell} from './types';
-export interface AggregationOptionsUs{factsAsOf:string;dryRun?:boolean;triggeredBy?:TriggeredBy;concurrency?:number}
+export interface AggregationOptionsUs{factsAsOf:string;dryRun?:boolean;triggeredBy?:TriggeredBy;concurrency?:number;deadlineMs?:number}
 export const AGGREGATION_CONCURRENCY_US=16;
 class RunError extends Error{constructor(public code:string,message=code){super(message);}}
 export async function runIndustryAggregationUs(deps:IndustryDeps,opts:AggregationOptionsUs,hooks:AggregationHooks={}):Promise<AggregationReceipt>{
  const timings:AggregationTimings={members:0,envelopes:0,filings:0,compute:0,manifests:0,stage:0,activate:0,total:0};
  const started=deps.now().getTime();let phase:Exclude<keyof AggregationTimings,'total'>='members',phaseStarted=started;
  const mark=(next:typeof phase)=>{const now=deps.now().getTime();timings[phase]+=Math.max(0,now-phaseStarted);phase=next;phaseStarted=now;};
+ const checkBudget=()=>{if(opts.deadlineMs!==undefined&&deps.now().getTime()-started>opts.deadlineMs)throw new RunError('time_budget_exceeded');};
  const concurrency=opts.concurrency??AGGREGATION_CONCURRENCY_US;
  const receipt:AggregationReceipt={timings,status:'rejected',batchId:null,batchStatus:null,runId:null,generation:null,activatedAt:null,historyClass:'reconstruction',groups:0,reusedGroups:0,cells:{ok:0,missing:0},manifestMismatches:0,truncatedIssuers:[]};
  assertDay('factsAsOf',opts.factsAsOf);
@@ -54,10 +55,12 @@ export async function runIndustryAggregationUs(deps:IndustryDeps,opts:Aggregatio
   if(!coverage.facts_scope_ready)throw new RunError('facts_scope_not_ready',`${ready}/${universe.length}`);
   mark('envelopes');
   const issuers=new Map<string,IssuerFacts>(await mapBounded(universe,async id=>{
+   checkBudget();
    const env=await facts.readFacts(id,'US',{concepts:[...AGG_CONCEPTS_US],asOf:opts.factsAsOf,history:true});
    if(env.rows.some(r=>r.issuer_id!==id||r.market!=='US'))throw new RunError('envelope_scope_mismatch',id);
    return [id,{issuer_id:id,stateRev:env.stateRev,truncated:env.truncated,rows:env.truncated?[]:env.rows,derived:[]}] as const;
   },concurrency));
+  checkBudget();
   receipt.truncatedIssuers=universe.filter(id=>issuers.get(id)!.truncated);
   mark('compute');
   const computed=grid.codes.flatMap(code=>grid.period_ends.map(pe=>{
@@ -81,10 +84,12 @@ export async function runIndustryAggregationUs(deps:IndustryDeps,opts:Aggregatio
    }
    return {code,pe,manifest,bad,encoded:encodeManifest(manifest),memberStateRevs};
   });
+  checkBudget();
   const hashes=await mapBounded(groups,async g=>{
    if(dry||!g.manifest.cells.some(c=>c.status==='ok'&&!g.bad.has(`${c.metric}:${c.duration}:${c.period_start}`)))return g.encoded.hash;
    try{return (await manifests.put('aggregate',g.encoded.canonical)).hash;}catch(e){throw new RunError('manifest_upload_failed',e instanceof Error?e.message:String(e));}
   },concurrency);
+  checkBudget();
   const staged:StagedMetricCell[]=[],dependencies:RunDependency[]=[];
   for(const [i,g] of groups.entries()){
    for(const c of g.manifest.cells){

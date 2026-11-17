@@ -87,7 +87,7 @@ it('aggregate-sic runs without FACTS_CN_ENABLED while SW remains gated',async()=
  mocks.codeVersion.mockReturnValue('abc123');mocks.deps.mockReturnValue({tag:'deps'});
  mocks.run.mockResolvedValue({job:'aggregate-sic',receipt:{batchId:'b',status:'success',counts:{},errors:[]}});
  expect((await GET(req('job=aggregate-sic',AUTH))).status).toBe(200);
- expect(mocks.run).toHaveBeenCalledWith('aggregate-sic',{tag:'deps'},expect.objectContaining({dryRun:false,triggeredBy:'cron'}));
+ expect(mocks.run).toHaveBeenCalledWith('aggregate-sic',{tag:'deps'},expect.objectContaining({dryRun:false,triggeredBy:'cron',deadlineMs:240000}));
  const sw=await GET(req('job=aggregate',AUTH));expect(sw.status).toBe(403);expect((await sw.json()).error.code).toBe('job_disabled');
 });
 

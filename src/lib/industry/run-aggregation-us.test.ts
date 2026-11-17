@@ -21,6 +21,34 @@ async function fixture(ready=3,size=6){
  return {deps,db,manifests,tables,ids,facts};
 }
 describe('US run',()=>{
+ it.each([false,true])('stops envelope scheduling over budget and fails through cleanup (dryRun=%j)',async dryRun=>{
+  const {deps,db,facts,manifests,tables,ids}=await fixture(18,18),read=facts.readFacts.getMockImplementation()!;
+  let elapsed=0;const start=deps.now().getTime();deps.now=()=>new Date(start+elapsed);
+  facts.readFacts.mockImplementation(async id=>{const env=await read(id);elapsed=101;return env;});
+  const fail=vi.spyOn(db,'failRun'),stage=vi.spyOn(db,'stageMetricRows'),put=vi.spyOn(manifests,'put');
+  const insert=vi.spyOn(tables,'insert'),upsert=vi.spyOn(tables,'upsert');
+  const r=await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01',dryRun,deadlineMs:100,concurrency:2});
+  expect(r).toMatchObject({status:'failed',code:'time_budget_exceeded',batchStatus:dryRun?null:'failed'});
+  expect(facts.readFacts.mock.calls.length).toBeGreaterThan(0);expect(facts.readFacts.mock.calls.length).toBeLessThan(ids.length);
+  expect(stage).not.toHaveBeenCalled();expect(put).not.toHaveBeenCalled();expect(facts.filingsOfIssuer).not.toHaveBeenCalled();
+  if(dryRun){expect(fail).not.toHaveBeenCalled();expect(insert).not.toHaveBeenCalled();expect(upsert).not.toHaveBeenCalled();}
+  else{
+   expect(fail).toHaveBeenCalledWith('aggregate',r.runId,'time_budget_exceeded');
+   expect(await db.metricRun(r.runId!)).toMatchObject({status:'failed'});
+   expect(await tables.select('ingest_batches',{})).toMatchObject([{status:'failed'}]);
+   expect(await tables.select('dq_freshness',{dataset:'industry.agg.sic'})).toMatchObject([{last_ok_at:null,last_attempt_at:deps.now().toISOString(),consecutive_errors:1,detail:{status:'failed',code:'time_budget_exceeded'}}]);
+  }
+ });
+ it.each(['envelopes','filings','manifests'] as const)('checks the budget after %s before uploading or staging',async phase=>{
+  const {deps,db,facts,manifests}=await fixture(),read=facts.readFacts.getMockImplementation()!;
+  let elapsed=0;const start=deps.now().getTime();deps.now=()=>new Date(start+elapsed);
+  if(phase==='envelopes')facts.readFacts.mockImplementation(async id=>{const env=await read(id);elapsed=101;return env;});
+  if(phase==='filings')facts.filingsOfIssuer.mockImplementation(async()=>{elapsed=101;return [];});
+  const put=vi.spyOn(manifests,'put'),stage=vi.spyOn(db,'stageMetricRows');
+  const r=await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01',deadlineMs:100},{replay:m=>{if(phase==='manifests')elapsed=101;return replayFromManifest(m);}});
+  expect(r).toMatchObject({status:'failed',code:'time_budget_exceeded',batchStatus:'failed'});
+  expect(put).not.toHaveBeenCalled();expect(stage).not.toHaveBeenCalled();
+ });
  it('publishes the entire grid with snapshot dependencies, weekly freshness, one US envelope per issuer',async()=>{
   const {deps,db,manifests,tables,ids,facts}=await fixture();const r=await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01'});
   expect(r).toMatchObject({status:'active',groups:6,cells:{ok:21,missing:21},timings:{members:0,envelopes:0,filings:0,compute:0,manifests:0,stage:0,activate:0,total:0}});

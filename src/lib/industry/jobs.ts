@@ -43,7 +43,7 @@ export const isIndustryJob=(s:string):s is IndustryJob=>(INDUSTRY_JOBS as readon
 
 /** What every job answers. The runners of Tasks 5–13 keep their own receipts; runIndustryJob maps them here. */
 export interface RunnerReceipt{preview?:AggregationPreview;batchId:string|null;status:'success'|'partial'|'failed'|'dry_run';counts:Record<string,number>;errors:{code:string;key?:string;message?:string}[]}
-export interface IndustryJobOptions{dryRun:boolean;triggeredBy:'cron'|'script';limit?:number;tickers?:string[];factsAsOf?:string;tradeDates?:string[];l1Codes?:string[];today?:string}
+export interface IndustryJobOptions{dryRun:boolean;triggeredBy:'cron'|'script';limit?:number;tickers?:string[];factsAsOf?:string;tradeDates?:string[];l1Codes?:string[];today?:string;deadlineMs?:number}
 export type IndustryJobResult={job:IndustryJob;skipped:'deferred_i3'}|{job:IndustryJob;receipt:RunnerReceipt};
 /** IndustryDeps plus the full plan-2 FactsDb surface facts-scope needs (reconcileScope; IndustryDeps.facts is read-only). */
 /** `snapshots`: plan-2 raw-bytes store (bucket disclosure-raw). When set, every Tushare page the jobs fetch is stored before its rows are used (spec §4.4 evidence). */
@@ -133,7 +133,7 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
    return {job,receipt:{batchId:r.batchId,status:receiptStatus(r.batchStatus),counts:countsOf(r.counts),errors:r.errors}};
   }
   case 'aggregate':case 'aggregate-sic':{
-   const r=job==='aggregate-sic'?await runIndustryAggregationUs(deps,{factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,dryRun:opts.dryRun}):await runIndustryAggregation(deps,{scheme:'sw2021',version:'2021',level:1,factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,...(opts.dryRun?{dryRun:true}:{})});
+   const r=job==='aggregate-sic'?await runIndustryAggregationUs(deps,{factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,dryRun:opts.dryRun,deadlineMs:opts.deadlineMs}):await runIndustryAggregation(deps,{scheme:'sw2021',version:'2021',level:1,factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,...(opts.dryRun?{dryRun:true}:{})});
    return {job,receipt:{batchId:r.batchId,status:r.status==='dry_run'?'dry_run':r.status==='active'?receiptStatus(r.batchStatus):'failed',...(r.preview?{preview:r.preview}:{}),
     counts:{...prefixed(r.timings??{},'ms_'),groups:r.groups,reused_groups:r.reusedGroups,cells_ok:r.cells.ok,cells_missing:r.cells.missing,manifest_mismatches:r.manifestMismatches,read_truncated:r.truncatedIssuers.length,...(r.preview?{industries_min_members:r.preview.industriesMinMembers,displayable_value_cells:r.preview.displayableValueCells}:{})},
     errors:r.code?[{code:r.code,...(r.runId?{key:r.runId}:{})}]:[]}};
