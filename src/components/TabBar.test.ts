@@ -33,7 +33,7 @@ import {TabBar} from './TabBar';
 
 const renderNav=(locale:'zh'|'en',pathname:string)=>{
  route.pathname=pathname;
- const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale,messages:{common:locale==='zh'?zh:en},children:createElement(TabBar)}));
+ const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale,timeZone:'UTC',messages:{common:locale==='zh'?zh:en},children:createElement(TabBar)}));
  return [...html.matchAll(/<nav\b([^>]*)>([\s\S]*?)<\/nav>/g)].map(nav=>({
   attributes:nav[1],
   links:[...nav[2].matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)].map(link=>({
@@ -47,39 +47,16 @@ const renderNav=(locale:'zh'|'en',pathname:string)=>{
 };
 
 describe('rendered research navigation',()=>{
- it.each(['zh','en'] as const)('exposes explicit desktop research destinations in %s without crowding mobile',locale=>{
-  const navs=renderNav(locale,'/macro');
-  expect(navs).toHaveLength(2);
-  const desktop=navs.find(nav=>nav.attributes.includes('hidden lg:flex'))!;
-  const mobile=navs.find(nav=>nav.attributes.includes('lg:hidden'))!;
-  expect(desktop).toBeDefined();
-  expect(mobile).toBeDefined();
-  expect(mobile.links.map(link=>link.href)).toEqual(['/macro','/watchlist','/intel','/portfolio','/analyst','/tools','/settings']);
-  expect(desktop.links.map(link=>link.href)).toEqual(['/macro','/watchlist','/intel/industries?scheme=sic&metric=member_count','/intel/companies',...mobile.links.slice(2).map(link=>link.href)]);
-  expect(desktop.links[2].label).toBe(locale==='zh'?'行业研究（美国 SIC）':'Industry research (US SIC)');
-  expect(desktop.links[3].label).toBe(locale==='zh'?'公司研究':'Company research');
+ it.each(['zh','en'] as const)('renders one unified navigation in %s',locale=>{
+  const navs=renderNav(locale,'/macro'); expect(navs).toHaveLength(1);
+  expect(navs[0].links.map(l=>l.href)).toEqual(['/macro','/watchlist','/intel','/portfolio','/analyst','/tools','/settings']);
+  expect(navs[0].links.map(l=>l.label)).toEqual(locale==='zh'?['宏观','股票池','研究','我的投资','分析','工具','设置']:['Macro','Watchlist','Research','Portfolio','Analyst','Tools','Settings']);
+  const catalog=locale==='zh'?zh:en;
+  expect(catalog.nav).not.toHaveProperty('industries'); expect(catalog.nav).not.toHaveProperty('companies');
  });
- it.each([
-  ['/intel/industries','/intel/industries?scheme=sic&metric=member_count'],
-  ['/intel/industries/sic/3674/constituents','/intel/industries?scheme=sic&metric=member_count'],
-  ['/intel/industries/sw2021/801120.SI','/intel/industries?scheme=sic&metric=member_count'],
-  ['/intel/companies','/intel/companies'],
-  ['/intel/companies/issuer-123/financials','/intel/companies'],
-  ['/intel','/intel'],
-  ['/intel/methods/a','/intel'],
-  ['/intel/companies-extra','/intel'],
-  ['/intel/industries-extra','/intel'],
-  ['/macro/transmission','/macro'],
- ])('selects one desktop destination on %s and preserves mobile policy',(pathname,href)=>{
-  const navs=renderNav('zh',pathname);
-  const desktop=navs.find(nav=>nav.attributes.includes('hidden lg:flex'))!;
-  const mobile=navs.find(nav=>nav.attributes.includes('lg:hidden'))!;
-  expect(desktop).toBeDefined();
-  expect(desktop.links.filter(link=>link.current).map(link=>link.href)).toEqual([href]);
-  expect(mobile.links.filter(link=>link.current).map(link=>link.href)).toEqual([pathname.startsWith('/intel')?'/intel':'/macro']);
-  for(const nav of [desktop,mobile])for(const link of nav.links){
-   expect(link.highlighted).toBe(link.current);
-   expect(link.marker).toBe(link.current);
-  }
+ it.each(['/intel','/intel/industries/sic/3674/constituents','/intel/companies/issuer-1/financials','/intel/methods/a','/macro/transmission','/stock/AAPL'])('selects the parent on %s',path=>{
+  const links=renderNav('zh',path)[0].links;
+  expect(links.filter(l=>l.current).map(l=>l.href)).toEqual(path.startsWith('/intel')?['/intel']:path.startsWith('/macro')?['/macro']:[]);
+  for(const link of links){expect(link.highlighted).toBe(link.current);expect(link.marker).toBe(link.current);}
  });
 });

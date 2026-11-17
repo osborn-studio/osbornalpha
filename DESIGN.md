@@ -33,7 +33,8 @@ The signature techniques that make it ours:
 ### Text Hierarchy
 - **Bone White** (#fafafa) — Primary text, headlines, prices, key data points
 - **Pewter Steel** (#a1a1aa) — Secondary text, descriptions, timestamps
-- **Distant Fog** (#52525b) — Tertiary text, placeholders, "empty state" copy
+- **Distant Fog** (#8b8b94) — Tertiary text, placeholders, "empty state" copy
+Changed 2026-11-17 from #52525b for contrast (owner approved); passes 4.5:1 on all four dark surfaces.
 
 ### Accent (Single, Restrained)
 - **Distressed Brass** (#ca8a04) — The ONLY chromatic accent. Used for primary CTAs, focus rings, active-tab indicator, selected-state outlines. Saturation ≈ 75%. Pairs with charcoal like brass hardware on dark walnut.
@@ -281,7 +282,8 @@ Border          Whisper Border    rgba(255,255,255,0.06)
 Border (active) Active Border     rgba(202,138,4,0.4)
 Text primary    Bone White        #fafafa
 Text secondary  Pewter Steel      #a1a1aa
-Text tertiary   Distant Fog       #52525b
+Text tertiary   Distant Fog       #8b8b94
+Changed 2026-11-17 from #52525b for contrast (owner approved); passes 4.5:1 on all four dark surfaces.
 Accent          Distressed Brass  #ca8a04
 Accent fill     Brass Wash        rgba(202,138,4,0.12)
 Signal up       Pulse Red         #e11d48

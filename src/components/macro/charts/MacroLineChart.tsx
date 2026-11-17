@@ -36,7 +36,7 @@ export function MacroLineChart({ points, bands = [], markers = [], height = 260,
       const grid = cssVariable('--border', 'rgba(255,255,255,0.06)');
       const warn = cssVariable('--warn', '#eab308');
       const accent = cssVariable('--accent', '#ca8a04');
-      const muted = cssVariable('--text-muted', '#52525b');
+      const muted = cssVariable('--text-muted', '#8b8b94');
       const mono = cssVariable('--font-mono', 'Geist Mono, ui-monospace, monospace');
       chart = lwc.createChart(el, {
         width: Math.max(el.clientWidth, 1),
