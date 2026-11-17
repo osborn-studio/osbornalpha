@@ -5,7 +5,7 @@ import {expect,it} from 'vitest';
 
 const root=process.cwd();
 const broker=path.join(root,'src/lib/broker-research');
-const forbidden=new Set(['public-read.ts','db.ts','pg-db.ts'].map(file=>path.join(broker,file)));
+const forbidden=new Set(['public-read.ts','db.ts','pg-db.ts','admin-read.ts','admin-document.ts','deps.ts','preview.ts'].map(file=>path.join(broker,file)));
 const entities=path.join(root,'src/lib/entities');
 const options:ts.CompilerOptions={moduleResolution:ts.ModuleResolutionKind.Bundler,baseUrl:root,paths:{'@/*':['src/*']},allowJs:true};
 const files=(dir:string):string[]=>readdirSync(dir,{withFileTypes:true}).flatMap(entry=>{
@@ -13,11 +13,11 @@ const files=(dir:string):string[]=>readdirSync(dir,{withFileTypes:true}).flatMap
  return entry.isDirectory()?files(file):/\.[jt]sx?$/.test(file)?[file]:[];
 });
 const source=(file:string)=>ts.createSourceFile(file,readFileSync(file,'utf8'),ts.ScriptTarget.Latest,true);
-const clients=['src/app/(app)/intel/foreign-research','src/app/(app)/stock'].flatMap(dir=>files(path.join(root,dir)))
+const clients=['src/app/(app)/intel/foreign-research','src/app/(app)/stock','src/app/(app)/admin/broker-research'].flatMap(dir=>files(path.join(root,dir)))
  .filter(file=>source(file).statements.some(node=>ts.isExpressionStatement(node)&&ts.isStringLiteral(node.expression)&&node.expression.text==='use client'));
 
-it('finds client components in both guarded routes',()=>{
- for(const route of ['/intel/foreign-research/','/stock/'])expect(clients.some(file=>file.includes(route))).toBe(true);
+it('finds client components in all guarded routes',()=>{
+ for(const route of ['/intel/foreign-research/','/stock/','/admin/broker-research/'])expect(clients.some(file=>file.includes(route))).toBe(true);
 });
 
 for(const client of clients)it(`${path.relative(root,client)} keeps broker research server dependencies out of the client graph`,()=>{
