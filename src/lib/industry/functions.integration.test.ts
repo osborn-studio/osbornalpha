@@ -22,7 +22,7 @@ import {pgIndustryDb} from './pg-industry-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261111091000_industry_research_functions.sql';
-const US_AGGREGATES_MIGRATION='supabase/migrations/20261125090000_industry_us_aggregates.sql';
+const US_AGGREGATES_MIGRATION='supabase/migrations/20261130090000_industry_us_aggregates.sql';
 const PAIR_TOLERANCE_MIGRATION='supabase/migrations/20261120093000_industry_exact_pair_tolerance.sql';
 const hex=(n:number)=>randomBytes(n).toString('hex');
 /** Every function of both migrations with its EXECUTE grantees ('internal' = nobody). */

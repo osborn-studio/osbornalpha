@@ -95,6 +95,10 @@ const TREE=[
  classRow({scheme:'sic',version:'sec-current',code:'3674',name_zh:null,name_en:'Semiconductors & Related Devices'}),
 ];
 const MEMBERS=[
+ ...([['3674',6],['7372',2]] as const).flatMap(([code,n])=>Array.from({length:n},(_,i)=>membershipRow({
+  membership_id:`sic-${code}-${i}`,issuer_id:`sic-${code}-${i}`,scheme:'sic',version:'sec-current',code,
+  source:'sec:submissions',source_membership_id:null,provenance:{availability:'observed_at',raw_hash:null,locator:null},
+ }))),
  membershipRow(),membershipRow({membership_id:'dddddddd-dddd-4ddd-8ddd-dddddddddd02',level:2,code:'801124.SI'}),membershipRow({membership_id:'dddddddd-dddd-4ddd-8ddd-dddddddddd03',level:3,code:'850111.SI'}),
  membershipRow({membership_id:'dddddddd-dddd-4ddd-8ddd-dddddddddd04',issuer_id:ISSUER_B,valid_from:'2014-02-21',available_date:'2014-02-21',batch_id:BATCH}),
 ];
@@ -107,7 +111,7 @@ function fixtureDb(now:Date):ReadDb{
 }
 export function fixtureReadDeps(now:Date,preview=false):ReadDeps{
  return {db:fixtureDb(now),unresolved:{unresolvedCount:async()=>1},issuers:async ids=>new Map(ids.flatMap(id=>CARDS.has(id)?[[id,CARDS.get(id)!] as const]:[])),
-  memberCounts:async()=>new Map([['3674',0]]),now,preview};
+  memberCounts:async()=>new Map([['3674',6],['7372',2]]),now,preview};
 }
 export function fixtureReplayDeps(now:Date):ReplayDeps{
  const db=fixtureDb(now);

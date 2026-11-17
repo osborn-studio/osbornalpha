@@ -43,7 +43,15 @@ node --env-file=<prod.env> --import tsx scripts/industry/replay-check.ts --schem
 
 回执 `groups` 是 code × 财年桶数量，`cells_ok/cells_missing` 是计算状态（显示阈值不会把 ok 改成 missing）；`manifest_mismatches` 必须为 0，`read_truncated` 记录截断发行人数。dry-run 的 `preview` 给出指标计数、缺因、`industriesMinMembers`、`displayableValueCells` 与样例；只有成员 ≥5 且 `n_with_data/n_members ≥0.8` 的 ok 格在页面显示数字。apply 成功时 `status=success`（runner 已激活 active run），失败码 `facts_scope_not_ready` 表示 US 宇宙成功事实源不足 50%。回放样本任一不一致退出 1。`--scheme` 默认仍为 `sw2021`；可加 `--run <id>` 检查指定 run。
 
-`aggregate`（SW）也有真正 dry-run：完整计算与清单自检、零写入；apply 仍需 `FACTS_CN_ENABLED=1`。`memberships-sw` 在库内无分类时 dry-run 会先在内存读取 L1/L2/L3，回执 `classifications.level_1/2/3` 是节点数，`planned_source_fetches` 是计划的 L1 × {Y,N} 初始请求数（分页会增加实际请求）；不写分类、来源记录、批次或 freshness。
+`aggregate`（SW）也有真正 dry-run：完整计算与清单自检、零写入；apply 仍需 `FACTS_CN_ENABLED=1`。
+
+```sh
+node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate
+```
+
+SIC 抽屉仅支持 `mode=original` 原样回放；`mode=recompute` 返回 501 `not_available`，页面隐藏重算按钮。
+
+`memberships-sw` 在库内无分类时 dry-run 会先在内存读取 L1/L2/L3，回执 `classifications.level_1/2/3` 是节点数，`planned_source_fetches` 是计划的 L1 × {Y,N} 初始请求数（分页会增加实际请求）；不写分类、来源记录、批次或 freshness。
 
 US 数字回滚：运行修正后的 `aggregate-sic --apply`，经完整性检查激活新一代并取代旧 run。当前 admin HTTP 路径 `/api/admin/industries/runs?scheme=sic`、`/api/admin/industries/replay?runId=&code=&periodEnd=` 都是只读；没有把 active aggregate run 标记 failed 的管理端点。service-role 的 `IndustryDb.failRun('aggregate',runId,reason)` / `fail_industry_run` 只接受 building run，不能用于撤回 active 数字。不要关闭 `scheme:sic:sec-current` 许可来回滚数字，该许可也控制分类与成分。
 

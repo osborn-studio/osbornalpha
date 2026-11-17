@@ -1,7 +1,7 @@
 // src/lib/industry/e2e-fixture.test.ts
 import {describe,expect,it} from 'vitest';
 import {E2E_TAMPERED,e2eCells,fixtureReadDeps,fixtureReplayDeps} from './e2e-fixture';
-import {industryDetailView,industryListView,replayView} from './read';
+import {constituentsView,industryDetailView,industryListView,replayView} from './read';
 import type {AggDuration,AggMetric} from './types';
 
 describe('E2E fixture is self-consistent (Codex round 1 #8)',()=>{
@@ -31,7 +31,10 @@ it('SIC fixture snapshot exposes passing and too-small industries and original r
  expect(v.cells.find(c=>c.code==='3674')).toMatchObject({nMembers:6,display:'value',unit:'USD'});
  expect(v.cells.find(c=>c.code==='7372')).toMatchObject({nMembers:2,display:'members'});
  const detail=await industryDetailView(deps,{scheme:'sic',version:'sec-current',code:'3674',metrics:['revenue_sum'],durations:['12M'],window:'all'});
- expect(detail).toMatchObject({aggregated:true,members:{count:6,unresolved:0}});
+ expect(detail).toMatchObject({aggregated:true,members:{count:6,unresolved:0},valuation:{state:'not_enabled'}});
+ for(const [code,count] of [['3674',6],['7372',2]] as const){
+  expect(await constituentsView(deps,{scheme:'sic',version:'sec-current',code,on:v.header.membershipOn!,page:1,pageSize:100})).toMatchObject({state:'ok',total:count,currentOnly:true,unresolvedCount:0});
+ }
  for(const cell of v.cells){
   const result=await replayView(fixtureReplayDeps(now),{scheme:'sic',version:'sec-current',code:cell.code,runId:v.header.runId,metric:cell.metric,duration:cell.duration,periodEnd:cell.periodEnd,mode:'original'});
   expect(result).toMatchObject({state:'ok',mode:'original',reproduced:true});
