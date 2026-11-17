@@ -22,6 +22,7 @@ import {pgIndustryDb} from './pg-industry-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261111091000_industry_research_functions.sql';
+const US_AGGREGATES_MIGRATION='supabase/migrations/20261130090000_industry_us_aggregates.sql';
 const PAIR_TOLERANCE_MIGRATION='supabase/migrations/20261120093000_industry_exact_pair_tolerance.sql';
 const hex=(n:number)=>randomBytes(n).toString('hex');
 /** Every function of both migrations with its EXECUTE grantees ('internal' = nobody). */
@@ -154,6 +155,8 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   // Restore/replay the forward correction after replaying the historical function migration.
   await replayMigration(admin,readFileSync(PAIR_TOLERANCE_MIGRATION,'utf8'));
   await replayMigration(admin,readFileSync(PAIR_TOLERANCE_MIGRATION,'utf8'));
+  await replayMigration(admin,readFileSync(US_AGGREGATES_MIGRATION,'utf8'));
+  await replayMigration(admin,readFileSync(US_AGGREGATES_MIGRATION,'utf8'));
   expect(await one(`select has_function_privilege('anon','public.apply_observations(text,uuid,jsonb)','EXECUTE') v`)).toBe(false);
  },60000);
 

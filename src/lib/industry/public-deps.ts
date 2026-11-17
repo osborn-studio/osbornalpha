@@ -18,7 +18,7 @@ import {buildCellManifest} from './run-aggregation';
 // E2E fixture mode (Task 20): synthetic deps under INDUSTRY_E2E_FIXTURES=1 outside production only.
 import {fixtureMode,fixtureReadDeps,fixtureReplayDeps,fixtureValuationReplayDeps} from './e2e-fixture';
 import type {IssuerCard,ReadDb,ReadDeps,ReplayDeps,ValuationReplayDeps} from './read';
-import type {IndustryDb} from './types';
+import type {IndustryDb} from './types-us';
 
 interface PgResult<T>{data:T|null;error:{message?:string}|null}
 interface Query<T> extends PromiseLike<PgResult<T>>{

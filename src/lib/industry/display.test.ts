@@ -1,3 +1,4 @@
+import {displayFlagsSic} from './display';
 // src/lib/industry/display.test.ts
 import {describe,expect,it} from 'vitest';
 import {cellDisplay,formatDecimal,formatMetricValue,formatMoney,formatValuation,percentText,ratioAbove,ratioAtLeast} from './display';
@@ -58,5 +59,14 @@ describe('metric formats',()=>{
   expect(formatMoney('130497000000','USD','en')).toBe('130.50 bn USD');
   expect(formatMoney('12','HKD','en')).toBe('12 HKD');
   expect(percentText('0.382')).toBe('38.2');
+ });
+});
+
+describe('SIC display flags (§19.6)',()=>{
+ it('requires five members and exact 80% coverage using members only',()=>{
+  expect(displayFlagsSic({n_members:5,n_with_data:4})).toEqual({membersOk:true,coverageOk:true});
+  expect(displayFlagsSic({n_members:2,n_with_data:2})).toEqual({membersOk:false,coverageOk:true});
+  expect(displayFlagsSic({n_members:6,n_with_data:4})).toEqual({membersOk:true,coverageOk:false});
+  expect(displayFlagsSic({n_members:0,n_with_data:0})).toEqual({membersOk:false,coverageOk:false});
  });
 });

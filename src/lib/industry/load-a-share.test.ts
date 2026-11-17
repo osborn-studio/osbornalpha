@@ -9,7 +9,7 @@ import {memorySnapshotStore} from '../facts/snapshot-store';
 import {IndustryProviderError,fixtureTushareCall} from './providers/tushare-industry';
 import type {TushareCall} from './providers/tushare-industry';
 import type {StockBasicRow} from './providers/tushare-industry';
-import type {IndustryDeps,ManifestStore} from './types';
+import type {IndustryDeps,ManifestStore} from './types-us';
 
 const TODAY='2026-11-06';
 const NOW=`${TODAY}T22:30:00.000Z`;

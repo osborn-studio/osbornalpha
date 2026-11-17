@@ -28,20 +28,22 @@ import type {SnapshotCapture,TushareCall} from './providers/tushare-industry';
 import {replayFromManifest} from './replay';
 import {reproduces} from './read';
 import {runResolveMemberships} from './resolve-memberships';
+import {runIndustryAggregationUs} from './run-aggregation-us';
+import type {AggregationPreview} from './aggregation-common';
 import {runIndustryAggregation} from './run-aggregation';
 import {runClassificationsSic,runMembershipsSic} from './sic';
 import {runMembershipsSw} from './source-memberships';
-import type {IndustryDb,IndustryDeps,ManifestStore,MetricCellRow,Scheme,SchemeVersion} from './types';
+import type {IndustryDb,IndustryDeps,ManifestStore,MetricCellRow,Scheme,SchemeVersion} from './types-us';
 
-export const INDUSTRY_JOBS=['load-a-share','facts-scope','memberships-sw','memberships-sic','marks','official','aggregate','valuation'] as const;
+export const INDUSTRY_JOBS=['load-a-share','facts-scope','memberships-sw','memberships-sic','marks','official','aggregate','aggregate-sic','valuation'] as const;
 export type IndustryJob=typeof INDUSTRY_JOBS[number];
 export const DEFERRED_JOBS:ReadonlySet<IndustryJob>=new Set<IndustryJob>(['official','valuation']);
 export const TUSHARE_JOBS:ReadonlySet<IndustryJob>=new Set<IndustryJob>(['load-a-share','memberships-sw','marks']);
 export const isIndustryJob=(s:string):s is IndustryJob=>(INDUSTRY_JOBS as readonly string[]).includes(s);
 
 /** What every job answers. The runners of Tasks 5–13 keep their own receipts; runIndustryJob maps them here. */
-export interface RunnerReceipt{batchId:string|null;status:'success'|'partial'|'failed'|'dry_run';counts:Record<string,number>;errors:{code:string;key?:string;message?:string}[]}
-export interface IndustryJobOptions{dryRun:boolean;triggeredBy:'cron'|'script';limit?:number;tickers?:string[];factsAsOf?:string;tradeDates?:string[];l1Codes?:string[];today?:string}
+export interface RunnerReceipt{preview?:AggregationPreview;batchId:string|null;status:'success'|'partial'|'failed'|'dry_run';counts:Record<string,number>;errors:{code:string;key?:string;message?:string}[]}
+export interface IndustryJobOptions{dryRun:boolean;triggeredBy:'cron'|'script';limit?:number;tickers?:string[];factsAsOf?:string;tradeDates?:string[];l1Codes?:string[];today?:string;deadlineMs?:number}
 export type IndustryJobResult={job:IndustryJob;skipped:'deferred_i3'}|{job:IndustryJob;receipt:RunnerReceipt};
 /** IndustryDeps plus the full plan-2 FactsDb surface facts-scope needs (reconcileScope; IndustryDeps.facts is read-only). */
 /** `snapshots`: plan-2 raw-bytes store (bucket disclosure-raw). When set, every Tushare page the jobs fetch is stored before its rows are used (spec §4.4 evidence). */
@@ -103,7 +105,10 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
   }
   case 'memberships-sw':{
    // B3 composition: classifications → source records → resolution (each its own batch, weekly freshness)
-   if(opts.dryRun)return {job,receipt:batchReceipt(await runMembershipsSw(deps,{apply:false,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}))};
+   if(opts.dryRun){
+    const r=await runMembershipsSw(deps,{apply:false,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}),receipt=batchReceipt(r);
+    return {job,receipt:{...receipt,counts:{...receipt.counts,...prefixed(r.classificationCounts??{},'classifications.level_'),planned_source_fetches:r.plannedSourceFetches??0}}};
+   }
    const steps:{name:string;receipt:RunnerReceipt}[]=[{name:'classifications',receipt:batchReceipt(await runClassificationsSw(deps,{triggeredBy,...captureOf(deps)}))}];
    if(!stepFailed(steps[0].receipt)){
     steps.push({name:'source',receipt:batchReceipt(await runMembershipsSw(deps,{apply:true,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}))});
@@ -127,11 +132,10 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
    if(r.status==='rejected')return {job,receipt:{batchId:null,status:'failed',counts:{},errors:[{code:r.code??'rejected'}]}};
    return {job,receipt:{batchId:r.batchId,status:receiptStatus(r.batchStatus),counts:countsOf(r.counts),errors:r.errors}};
   }
-  case 'aggregate':{
-   if(opts.dryRun)return {job,receipt:dryRunUnsupported(job)};
-   const r=await runIndustryAggregation(deps,{scheme:'sw2021',version:'2021',level:1,factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy});
-   return {job,receipt:{batchId:r.batchId,status:r.status==='active'?receiptStatus(r.batchStatus):'failed',
-    counts:{groups:r.groups,reused_groups:r.reusedGroups,cells_ok:r.cells.ok,cells_missing:r.cells.missing,manifest_mismatches:r.manifestMismatches,read_truncated:r.truncatedIssuers.length},
+  case 'aggregate':case 'aggregate-sic':{
+   const r=job==='aggregate-sic'?await runIndustryAggregationUs(deps,{factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,dryRun:opts.dryRun,deadlineMs:opts.deadlineMs}):await runIndustryAggregation(deps,{scheme:'sw2021',version:'2021',level:1,factsAsOf:opts.factsAsOf??utcToday(deps.now()),triggeredBy,...(opts.dryRun?{dryRun:true}:{})});
+   return {job,receipt:{batchId:r.batchId,status:r.status==='dry_run'?'dry_run':r.status==='active'?receiptStatus(r.batchStatus):'failed',...(r.preview?{preview:r.preview}:{}),
+    counts:{...prefixed(r.timings??{},'ms_'),groups:r.groups,reused_groups:r.reusedGroups,cells_ok:r.cells.ok,cells_missing:r.cells.missing,manifest_mismatches:r.manifestMismatches,read_truncated:r.truncatedIssuers.length,...(r.preview?{industries_min_members:r.preview.industriesMinMembers,displayable_value_cells:r.preview.displayableValueCells}:{})},
     errors:r.code?[{code:r.code,...(r.runId?{key:r.runId}:{})}]:[]}};
   }
  }
@@ -157,7 +161,7 @@ export function productionIndustryDeps(opts:ProductionIndustryDepsOptions):Indus
 }
 
 export interface SyncArgs{job:IndustryJob;apply:boolean;limit?:number;tickers?:string[];factsAsOf?:string;tradeDates:string[];l1Codes:string[];recomputeFrom?:string}
-export const SYNC_USAGE='usage: sync.ts --job <load-a-share|facts-scope|memberships-sw|memberships-sic|marks|official|aggregate|valuation> [--apply] [--limit n] [--ticker <canonical-CN-ticker>]... [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]';
+export const SYNC_USAGE='usage: sync.ts --job <load-a-share|facts-scope|memberships-sw|memberships-sic|marks|official|aggregate|aggregate-sic|valuation> [--apply] [--limit n] [--ticker <canonical-CN-ticker>]... [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]';
 const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
 const VALUE_FLAGS=new Set(['--job','--limit','--ticker','--facts-as-of','--trade-date','--l1','--recompute-from']);
 /** Pure argv parser of scripts/industry/sync.ts; errors carry the message printed before exit 2. */

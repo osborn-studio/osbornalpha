@@ -23,7 +23,7 @@ import type {FactRow,FilingRow,MetricRow} from '../facts/types';
 import {canonicalDecimal} from '../facts/json-numbers';
 import {canonicalJson,sha256Hex} from './canonical-json';
 import type {AggregateCellResult} from './aggregate';
-import type {AggregateManifest,HistoryClass,IndustryDb,ManifestCell,ManifestDerived,ManifestFact,ManifestMember,ManifestRole,ManifestStore,ManifestUnresolved,RunKind,Scheme,SchemeVersion} from './types';
+import type {AggregateManifest,HistoryClass,IndustryDb,ManifestCell,ManifestDerived,ManifestFact,ManifestMember,ManifestRole,ManifestStore,ManifestUnresolved,RunKind,Scheme,SchemeVersion} from './types-us';
 
 export const MANIFEST_SCHEMA='industry-manifest/2';
 export const MANIFEST_BUCKET='industry-manifests';

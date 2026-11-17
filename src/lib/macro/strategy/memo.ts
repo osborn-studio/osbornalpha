@@ -4,7 +4,8 @@
 // clear() is a test/administrative reset: an in-flight build still returns its value to callers but is not stored.
 import {unstable_cache} from 'next/cache';
 import type {ManifestKind,SnapshotRecord} from './contract';
-import {canonicalJson} from './hash';
+import {canonicalJson,sha256Hex} from './hash';
+import {logStrategyView,type StrategyDb,type StrategyView} from './db';
 import type {StrategyReadPort} from './port';
 
 export const MEMO_MAX_ENTRIES=32;
@@ -46,20 +47,48 @@ export function canCacheFacts(state:MemoState):boolean{
  const valid=(s:PublishState)=>s!=null&&Number.isSafeInteger(s.revision)&&s.revision>=0&&Number.isSafeInteger(s.input_revision)&&s.input_revision>=0;
  return (state.snapshots.US!==null||state.snapshots.CN!==null)&&valid(state.state.US)&&valid(state.state.CN);
 }
-type FactEnvelope<T>={expiresAt:number;value:T};
+export const factIdentity=(key:string):string=>canonicalJson({schema:FACT_VIEW_SCHEMA,memoKey:key});
+export const factViewKey=(key:string):string=>sha256Hex(factIdentity(key));
+export type ViewSource='stored'|'built';
+type FactEnvelope<T>={expiresAt:number;value:T;source:ViewSource};
+/** Same serialized bytes feed persistence and the request result. A failed store is never a failed fact request. */
+export async function materializeFactView<T extends {manifest_id:string}>(key:string,compute:()=>Promise<T>,db?:StrategyDb,existing?:StrategyView|null):Promise<{value:T;source:ViewSource;persisted:boolean}>{
+ const identity=factIdentity(key),view_key=sha256Hex(identity);
+ const meta=db&&key?JSON.parse(key) as {kind:StrategyView['kind'];code_version:string}:null;
+ let row=existing;
+ if(db&&existing===undefined){try{row=await db.getStrategyView(view_key);}catch{logStrategyView('read-failed');}}
+ if(row){
+  try{
+   if(row.kind!==meta?.kind||row.view_key!==view_key||sha256Hex(row.view_json)!==row.view_sha256)throw new Error();
+   const value=JSON.parse(row.view_json) as T;
+   if(!value.manifest_id||value.manifest_id!==row.manifest_id)throw new Error();
+   return {value,source:'stored',persisted:true};
+  }catch{logStrategyView('corrupt');}
+ }
+ const value=await compute();
+ if(!value.manifest_id)throw new Error('fact_view_manifest_missing');
+ const view_json=JSON.stringify(value);
+ let persisted=false;
+ if(db&&meta){
+  try{
+   const result=await db.putStrategyView({view_key,kind:meta.kind,identity:JSON.parse(identity),manifest_id:value.manifest_id,view_json,view_sha256:sha256Hex(view_json),code_version:meta.code_version});
+   if(result.outcome==='conflict')logStrategyView('conflict');else persisted=true;
+  }catch{logStrategyView('store-failed');}
+ }
+ return {value:JSON.parse(view_json) as T,source:'built',persisted};
+}
 /** Auth/flags and readMemoState MUST run before this helper. compute may only build small,
  * JSON fact views after putManifest succeeds; never capture a session, cookies, headers,
  * judgments, explanations or quota. The full existing memo identity is schema-namespaced.
  * Next 15 serves stale entries during revalidation: enforce absolute expiry ourselves too.
  * Keep the process singleflight around shared lookup/build; rejected promises never fill it.
  */
-export async function factView<T extends {manifest_id:string}>(key:string,state:MemoState,compute:()=>Promise<T>,memo:StrategyMemo<unknown>=strategyMemo):Promise<{value:T;outcome:MemoOutcome}>{
- if(!canCacheFacts(state))return {value:await compute(),outcome:'miss'};
- const identity=canonicalJson({schema:FACT_VIEW_SCHEMA,memoKey:key});
+export async function factView<T extends {manifest_id:string}>(key:string,state:MemoState,compute:()=>Promise<T>,memo:StrategyMemo<unknown>=strategyMemo,db?:StrategyDb):Promise<{value:T;outcome:MemoOutcome;source:ViewSource}>{
+ if(!canCacheFacts(state))return {value:JSON.parse(JSON.stringify(await compute())) as T,outcome:'miss',source:'built'};
+ const identity=factIdentity(key);
  const build=async():Promise<FactEnvelope<T>>=>{
-  const started=Date.now(),value=await compute();
-  if(!value.manifest_id)throw new Error('fact_view_manifest_missing');
-  return {expiresAt:started+FACT_VIEW_TTL_SECONDS*1000,value};
+  const started=Date.now(),result=await materializeFactView(key,compute,db);
+  return {expiresAt:started+FACT_VIEW_TTL_SECONDS*1000,value:result.value,source:result.source};
  };
  const load=async()=>{
   // Next's stale callback and our foreground fallback must share success AND failure.
@@ -73,5 +102,5 @@ export async function factView<T extends {manifest_id:string}>(key:string,state:
  if(result.value.expiresAt<=Date.now()){
   memo.delete(identity);result=await memo.getOrCompute(identity,load);
  }
- return {value:result.value.value,outcome:result.outcome};
+ return {value:result.value.value,outcome:result.outcome,source:result.value.source};
 }

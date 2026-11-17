@@ -9,8 +9,8 @@ import {QueryError,dateParam,readParams} from '@/lib/facts/public-route';
 import {supabaseIndustryDb} from '@/lib/industry/db';
 import {supabaseManifestStore} from '@/lib/industry/manifest';
 import {adminReplayView} from '@/lib/industry/read';
-import {codeOf,metricOf,optionalDurationOf,uuidOf} from '@/lib/industry/route-params';
-import type {AggDuration,AggMetric} from '@/lib/industry/types';
+import {codeOf,metricOf,optionalDurationOf,schemeOf,uuidOf} from '@/lib/industry/route-params';
+import type {AggDuration,AggMetric} from '@/lib/industry/types-us';
 import {getAdminSupabase} from '@/lib/supabase/admin';
 
 export const dynamic='force-dynamic';
@@ -22,13 +22,14 @@ export async function GET(request:Request){
   await requireAdminUser();
   let q:{runId:string;code:string;periodEnd:string;metric:AggMetric|null;duration:AggDuration|null};
   try{
-   const p=readParams(new URL(request.url),['runId','code','periodEnd','metric','duration']);
+   const p=readParams(new URL(request.url),['runId','code','periodEnd','metric','duration','scheme']);
    const periodEnd=dateParam(p,'periodEnd');
    if(periodEnd===undefined)throw new QueryError('periodEnd');
    const code=p.get('code');
    if(code===undefined)throw new QueryError('code');
-   const metric=p.has('metric')?metricOf(p,null):null;
-   q={runId:uuidOf(p,'runId'),code:codeOf(code),periodEnd,metric,duration:metric?optionalDurationOf(p,metric):null};
+   const scheme=schemeOf(p.get('scheme')??'sw2021');
+   const metric=p.has('metric')?metricOf(p,null,scheme):null;
+   q={runId:uuidOf(p,'runId'),code:codeOf(code),periodEnd,metric,duration:metric?optionalDurationOf(p,metric,scheme):null};
   }catch(e){if(e instanceof QueryError)return bad(e.message);throw e;}
   const admin=getAdminSupabase();
   const db=supabaseIndustryDb(admin);

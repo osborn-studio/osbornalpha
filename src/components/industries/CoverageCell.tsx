@@ -5,7 +5,7 @@
 import {useLocale,useTranslations} from 'next-intl';
 import {formatMetricValue} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
-import type {AggMetric} from '@/lib/industry/types';
+import type {AggMetric} from '@/lib/industry/types-us';
 import {missingReasonOf} from './cell-text';
 
 export function CoverageCell({cell,metric}:{cell:PublicCell|null;metric:AggMetric}){
@@ -15,11 +15,14 @@ export function CoverageCell({cell,metric}:{cell:PublicCell|null;metric:AggMetri
     const reason=t(`missing.${missingReasonOf(cell)}`);
     return (<span className="font-mono text-text-dim" title={reason}>—<span className="sr-only"> {reason}</span></span>);
   }
+  if(cell.display==='members'||cell.display==='coverageSic'){
+    return <span className="rounded-[3px] border border-dashed border-text-dim px-1 font-mono text-[12px] tabular-nums text-text-dim">{cell.display==='members'?t('coverage.tooFewMembers',{n:cell.nMembers}):t('coverage.lowCoverage',{n:cell.nWithData,d:cell.nMembers})}</span>;
+  }
   if(cell.display==='unresolved'){
     return (<span className="rounded-[3px] border border-dashed border-warn px-1 font-mono text-[12px] tabular-nums text-warn">{t('coverage.unresolved',{n:cell.nUnresolved})}</span>);
   }
   if(cell.display==='insufficient'){
     return (<span className="rounded-[3px] border border-dashed border-text-dim px-1 font-mono text-[12px] tabular-nums text-text-dim">{t('coverage.ratio',{n:cell.nWithData,d:cell.nMembers+cell.nUnresolved})}</span>);
   }
-  return <span className="font-mono tabular-nums">{formatMetricValue(metric,cell.value??'',locale)}</span>;
+  return <span className="font-mono tabular-nums">{formatMetricValue(metric,cell.value??'',locale,cell.unit)}</span>;
 }

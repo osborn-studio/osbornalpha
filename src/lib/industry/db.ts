@@ -11,17 +11,19 @@
 // in toISOString() form. The row normalisers and argument builders below are shared with
 // pg-industry-db.ts so both adapters return identical shapes. New RPCs are not registered in
 // database.types.ts (repo convention): the client is narrowed locally.
+import {withUsIndustryTypes} from './types-us';
+import type {IndustryDbBoundary} from './types-us';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {chunk,chunkIds,isoTs} from '../facts/db';
 import type {PgErrorLike} from '../facts/db';
-import {IndustryDbError} from './types';
+import {IndustryDbError} from './types-us';
 import type {
  AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,DelistingInput,DelistingRow,QuarantineLineageResult,UpsertDelistingsResult,FreshnessRow,IndustryDb,IndustryDbErrorCode,ManifestGcClaim,ManifestUnresolved,MarkRow,
  MembershipRow,MetricCellRow,MetricRunRow,NewMetricRun,ObservationResult,RunDependency,RunKind,SourceMembershipInput,
  SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
-} from './types';
-export {IndustryDbError} from './types';
-export type {IndustryDb} from './types';
+} from './types-us';
+export {IndustryDbError} from './types-us';
+export type {IndustryDb} from './types-us';
 
 /** Rows per stage_industry_metrics / apply_observations / upsert_industry_source_memberships call. */
 export const STAGE_CHUNK=500;
@@ -31,7 +33,7 @@ export const DEPS_CHUNK=2000;
 export const READ_PAGE=1000;
 /** gc_industry_manifest_candidates / delete_industry_manifests skip index rows younger than this (a building run uploads before it stages). */
 export const MANIFEST_GC_GRACE_SECONDS=86400;
-const MESSAGE_CODES:readonly IndustryDbErrorCode[]=['membership_conflict','membership_overlap','same_day_change','incomplete_run','obsolete_run','dependencies_incomplete','dependency_regression','pairs_mismatch','illegal_transition','run_not_building','fetch_event_payload_changed','manifest_gc_in_progress','lease_lost'];
+const MESSAGE_CODES:readonly IndustryDbErrorCode[]=['invalid_cell_rule','invalid_membership_basis','membership_conflict','membership_overlap','same_day_change','incomplete_run','obsolete_run','dependencies_incomplete','dependency_regression','pairs_mismatch','illegal_transition','run_not_building','fetch_event_payload_changed','manifest_gc_in_progress','lease_lost'];
 
 /** PostgreSQL / PostgREST error → IndustryDbError (shared by the Supabase and pg adapters). */
 export function toIndustryDbError(e:PgErrorLike|IndustryDbError):IndustryDbError{
@@ -101,7 +103,8 @@ export function metricRunFromTable(r:Record<string,unknown>):MetricRunRow{
  return {run_id:str(r.run_id),scheme:r.scheme as MetricRunRow['scheme'],version:r.version as MetricRunRow['version'],level:Number(r.level),generation:Number(r.generation),
   facts_as_of:str(r.facts_as_of),knowledge_date:str(r.knowledge_date),history_class:r.history_class as MetricRunRow['history_class'],method_version:str(r.method_version),
   config_hash:str(r.config_hash),formula_version:str(r.formula_version),code_version:str(r.code_version),
-  expected_grid:{codes:Array.isArray(g.codes)?g.codes.map(String):[],period_ends:Array.isArray(g.period_ends)?g.period_ends.map(String):[],metrics:Array.isArray(g.metrics)?g.metrics.map(x=>String(x) as AggMetric):[]},
+  expected_grid:{codes:Array.isArray(g.codes)?g.codes.map(String):[],period_ends:Array.isArray(g.period_ends)?g.period_ends.map(String):[],metrics:Array.isArray(g.metrics)?g.metrics.map(x=>String(x) as AggMetric):[],
+   ...(g.cell_rule===undefined?{}:{cell_rule:strOrNull(g.cell_rule)}),...(g.membership_on===undefined?{}:{membership_on:strOrNull(g.membership_on)})},
   fingerprint_at:isoTs(r.fingerprint_at),reused_from_run:strOrNull(r.reused_from_run),batch_id:str(r.batch_id),status:r.status as MetricRunRow['status'],
   coverage_summary:obj(r.coverage_summary),created_at:isoTs(r.created_at),activated_at:isoOrNull(r.activated_at)};
 }
@@ -175,7 +178,7 @@ interface RpcResult{data:unknown;error:PgErrorLike|null;count?:number|null}
 interface NarrowClient{rpc:(fn:string,args:Record<string,unknown>)=>PromiseLike<RpcResult>;from:(table:string)=>any}
 type Query=PromiseLike<RpcResult>&{range:(from:number,to:number)=>Query};
 
-export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
+export function supabaseIndustryDb(client:SupabaseClient):IndustryDbBoundary{
  const c=client as unknown as NarrowClient;
  const call=async<T>(fn:string,args:Record<string,unknown>):Promise<T>=>{const {data,error}=await c.rpc(fn,args);if(error)throw toIndustryDbError(error);return data as T;};
  const rows=async<T>(q:PromiseLike<RpcResult>):Promise<T[]>=>{const {data,error}=await q;if(error)throw toIndustryDbError(error);return (data??[]) as T[];};
@@ -338,5 +341,5 @@ export function supabaseIndustryDb(client:SupabaseClient):IndustryDb{
   async unresolvedCount(q){return distinctTsCodes(await unresolvedOf(q));},
   unresolvedOf,
  };
- return db;
+ return withUsIndustryTypes(db);
 }
