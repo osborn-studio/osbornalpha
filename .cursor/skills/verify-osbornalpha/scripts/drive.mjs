@@ -250,12 +250,19 @@ const journeys = {
 
 
 // Guest /macro without judgments (#231): the static allocation template card replaces the judgment slot.
+// Since #262 the card is a research-ui MarkCard (`section[data-mark="hypothesis"]`, tagged 假设 / Hypothesis) with no
+// aria-label, so it is no longer a named region; it is found by its h2 title. The page also ends in the shared
+// research footer (disclaimer + a methods link scoped to the current region).
 journeys.macro = async function macro() {
   const REGIMES = { zh: ['复苏', '过热', '滞胀', '衰退'], en: ['Recovery', 'Overheat', 'Stagflation', 'Recession'] };
+  const ZH = { locale: 'zh-CN', lang: 'zh', heading: '宏观工作台', title: '资产配置假设模板', staticRef: '静态参考', mark: '假设',
+    disclaimer: '本页内容不构成投资建议。', methods: '方法与来源' };
+  const EN = { locale: 'en-US', lang: 'en', heading: 'Macro workbench', title: 'Asset allocation hypothesis template', staticRef: 'Static reference', mark: 'Hypothesis',
+    disclaimer: 'Nothing on this page is investment advice.', methods: 'Methods and sources' };
   const cases = [
-    { locale: 'zh-CN', lang: 'zh', path: '/macro', heading: '宏观工作台', title: '资产配置假设模板', staticRef: '静态参考', shotName: 'macro-zh' },
-    { locale: 'zh-CN', lang: 'zh', path: '/macro?region=CN', heading: '宏观工作台', title: '资产配置假设模板', staticRef: '静态参考', shotName: 'macro-cn' },
-    { locale: 'en-US', lang: 'en', path: '/macro', heading: 'Macro workbench', title: 'Asset allocation assumption templates', staticRef: 'Static reference', shotName: 'macro-en' },
+    { ...ZH, path: '/macro', region: 'US', shotName: 'macro-zh' },
+    { ...ZH, path: '/macro?region=CN', region: 'CN', shotName: 'macro-cn' },
+    { ...EN, path: '/macro', region: 'US', shotName: 'macro-en' },
   ];
   for (const c of cases) {
     const ctx = await newCtx(c.locale); const page = await ctx.newPage();
@@ -263,10 +270,14 @@ journeys.macro = async function macro() {
     const r = await page.goto(BASE + c.path, { waitUntil: 'networkidle' });
     check(`${tag} → 200 with heading "${c.heading}"`, r?.status() === 200 && new URL(page.url()).pathname === '/macro'
       && await page.getByRole('heading', { name: c.heading, exact: true }).isVisible(), `${r?.status()} ${page.url()}`);
-    const card = page.getByRole('region', { name: c.title, exact: true });
-    await card.waitFor({ timeout: 20_000 }).catch(() => {});
-    check(`${tag}: allocation template card visible, marked "${c.staticRef}"`, await card.isVisible()
-      && await card.getByText(c.staticRef, { exact: true }).isVisible());
+    const title = page.getByRole('heading', { level: 2, name: c.title, exact: true });
+    const card = page.locator('section').filter({ has: title });
+    await card.first().waitFor({ timeout: 20_000 }).catch(() => {});
+    check(`${tag}: exactly one allocation template card titled "${c.title}", marked "${c.staticRef}"`, await card.count() === 1
+      && await card.isVisible() && await card.getByText(c.staticRef, { exact: true }).isVisible(), `count=${await card.count()}`);
+    check(`${tag}: card is a hypothesis MarkCard (data-mark="hypothesis", tag "${c.mark}")`,
+      await card.count() === 1 && await card.getAttribute('data-mark') === 'hypothesis'
+      && await card.getByText(c.mark, { exact: true }).isVisible(), String(await card.count() === 1 ? await card.getAttribute('data-mark') : 'no card'));
     const rows = card.locator('ul > li');
     const names = await rows.locator('h3').allInnerTexts();
     check(`${tag}: four regimes in clock order`, JSON.stringify(names) === JSON.stringify(REGIMES[c.lang]), JSON.stringify(names));
@@ -276,10 +287,18 @@ journeys.macro = async function macro() {
       sums.push(pct.length === 4 && pct.every(Number.isFinite) ? pct.reduce((a, b) => a + b, 0) : NaN);
     }
     check(`${tag}: each regime lists 4 asset weights summing to 100%`, sums.length === 4 && sums.every((x) => x === 100), JSON.stringify(sums));
-    check(`${tag}: no regime marked current (no published judgment in guest)`, await card.locator('[aria-current]').count() === 0);
+    check(`${tag}: no regime marked current (no published judgment in guest)`, await card.count() === 1 && await card.locator('[aria-current]').count() === 0);
     check(`${tag}: template version macro_allocation_template@v1 + Merrill Lynch source note`,
-      await card.getByText('macro_allocation_template@v1', { exact: true }).isVisible()
+      await card.count() === 1
+      && await card.getByText('macro_allocation_template@v1', { exact: true }).isVisible()
       && await card.getByText(/Merrill Lynch/).isVisible());
+    const footer = page.locator('footer[data-research-footer]');
+    const methodsHref = `/macro?region=${c.region}&tab=methodology`;
+    const methodsLink = page.locator('#macro-sources').locator(`a[href="${methodsHref}"]`);
+    check(`${tag}: research footer with disclaimer + "${c.methods}" link to ${methodsHref}`, await footer.count() === 1
+      && await footer.getByText(c.disclaimer).isVisible()
+      && await methodsLink.count() === 1 && (await methodsLink.innerText()).trim() === c.methods,
+      `footer=${await footer.count()} link=${await methodsLink.count()}`);
     if (c.shotName === 'macro-zh') {
       check('zh /macro overview fails closed with a read-failure notice (no DB)', await page.getByText(/读取失败/).first().isVisible());
     }

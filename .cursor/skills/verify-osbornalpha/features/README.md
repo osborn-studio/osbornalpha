@@ -10,7 +10,7 @@ A proof that drives one entry point is incomplete when the file lists others.
 | Portfolio quote + K-line chart (+ Company Research unavailable state) | [stock-detail.md](stock-detail.md) | `stock` | guest | yes |
 | Public market-data & search API | [market-data-api.md](market-data-api.md) | `quote-api` | guest, gate | yes |
 | Auth gate (signed-out access control) | [auth-gate.md](auth-gate.md) | `auth-gate` | guest, gate | no |
-| Macro Workbench guest view + static allocation template card | [macro-workbench.md](macro-workbench.md) | `macro` | guest | no |
+| Macro Workbench guest view + static allocation template (hypothesis MarkCard) + research footer | [macro-workbench.md](macro-workbench.md) | `macro` | guest | no |
 
 Not yet mapped (need real Supabase / credentials): sign-in and register, Macro data behind `/api/macro/*` (investment clock + breakdown, judgment slot, Fed liquidity / CN policy-rate series — see [macro-workbench.md](macro-workbench.md) Gotchas), Company Research at `/stock/[ticker]`, signed-in portfolio positions, `/research/*`, `/briefs`, `/settings`, `/copilot`, `/admin` (incl. `/admin/dq` data-quality dashboard — `src/app/(app)/admin/dq/`), Stripe billing, the Hermes / John Cameron CLI skills.
 
