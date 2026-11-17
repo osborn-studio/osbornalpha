@@ -18,7 +18,7 @@ const enabled=!!process.env.S4_TEST_STATE;
 // Keep fixture keys away from other suites' committed, recent observations.
 const asOf='1901-11-07T00:00:00.000Z';
 const fixtureBounds={from:'1901-08-31',to:'1901-10-31'};
-describe.skipIf(!enabled)('strategy history RPC on PostgreSQL under anon RLS',()=>{
+describe.skipIf(!enabled)('strategy history RPC on PostgreSQL with public-read projection',()=>{
  let pool:Pool,c:PoolClient;
  let legacy:ReturnType<typeof macroDbStrategyPort>,rpc:ReturnType<typeof macroDbStrategyPort>;
  let read:ReturnType<typeof strategyHistoriesReader>;
@@ -156,19 +156,60 @@ describe.skipIf(!enabled)('strategy history RPC on PostgreSQL under anon RLS',()
   expect((await read([capSeries],{...fixtureBounds,asOf}))[0].raw_count).toBe(17);
   for(const port of [legacy,rpc])await expect(port.seriesHistory(capSeries,{...fixtureBounds,asOf,maxRows:1})).rejects.toThrow('truncated');
  });
- it('is stable, SECURITY INVOKER, fixed search_path, replayable and executable by all table reader roles',async()=>{
-  await c.query('reset role');
+ it('matches the legacy anon reader for every fixture series under every caller role',async()=>{
+  const ids=[...fixtureSeries,capSeries,emptySeries],bounds={...fixtureBounds,asOf,maxRows:100};
+  await c.query('set local role anon');
+  const expected=await Promise.all(ids.map(id=>legacy.seriesHistory(id,bounds)));
+  for(const role of ['anon','authenticated','service_role']){
+   try{
+    await c.query(`set local role ${role}`);
+    expect(await Promise.all(ids.map(id=>rpc.seriesHistory(id,bounds)))).toEqual(expected);
+    const result=await read(ids,bounds);
+    expect(result.map(r=>r.series_id)).toEqual(ids);
+    // Only success/partial ok rows count; hidden higher vintages must not win.
+    expect(result.map(r=>r.raw_count)).toEqual([...fixtureSeries.map(()=>3),17,0]);
+    for(const history of result.slice(0,fixtureSeries.length)){
+     expect(history.rows.map(r=>[r.period_end,r.version])).toEqual([['1901-08-31',2],['1901-09-30',1]]);
+    }
+   }finally{await c.query('set local role anon');}
+  }
+ });
+ it('guards against public-read policy and batch eligibility drift',async()=>{
+  const policies=(await c.query(`select p.polname,p.polcmd,p.polpermissive,
+   array(select r.rolname::text from pg_roles r where r.oid=any(p.polroles) order by r.rolname) roles,
+   pg_get_expr(p.polqual,p.polrelid) qual
+   from pg_policy p where p.polrelid='public.macro_observations'::regclass
+    and p.polcmd in ('r','*') and (0::oid=any(p.polroles) or p.polroles &&
+     array(select oid from pg_roles where rolname in ('anon','authenticated')))
+   order by p.polname`)).rows;
+  expect(policies).toEqual([{
+   polname:'macro_observations public read',polcmd:'r',polpermissive:true,roles:['anon','authenticated'],
+   qual:"((status = 'ok'::text) AND macro_batch_eligible(batch_id))",
+  }]);
+  const source=(await c.query("select prosrc from pg_proc where oid='public.macro_batch_eligible(uuid)'::regprocedure")).rows[0].prosrc;
+  expect(source.trim().replace(/\s+/g,' ')).toBe("select exists (select 1 from public.ingest_batches b where b.batch_id = p_batch_id and b.status in ('success','partial'))");
+ });
+ it('is stable, SECURITY DEFINER, has a fixed search_path and preserves execute privileges',async()=>{
   const info=(await c.query("select l.lanname,p.provolatile,p.prosecdef,p.proconfig from pg_proc p join pg_language l on l.oid=p.prolang where p.oid='public.macro_strategy_histories(text[],timestamptz,date,date)'::regprocedure")).rows[0];
-  expect(info).toMatchObject({lanname:'plpgsql',provolatile:'s',prosecdef:false,proconfig:['search_path=public']});
+  expect(info).toMatchObject({lanname:'plpgsql',provolatile:'s',prosecdef:true,proconfig:['search_path=pg_catalog, public']});
+  expect((await c.query("select exists(select 1 from pg_proc p, lateral aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid='public.macro_strategy_histories(text[],timestamptz,date,date)'::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE') v")).rows[0].v).toBe(false);
   for(const role of ['anon','authenticated','service_role']){
    expect((await c.query("select has_function_privilege($1,'public.macro_strategy_histories(text[],timestamptz,date,date)','EXECUTE') v",[role])).rows[0].v).toBe(true);
-   await c.query(`set local role ${role}`);
-   const result=(await c.query('select public.macro_strategy_histories($1,$2,$3,$4) v',[[historySeries],asOf,fixtureBounds.from,fixtureBounds.to])).rows[0].v;
-   expect(result[0].raw_count).toBe(role==='service_role'?6:3);
-   await c.query('reset role');
   }
-  await c.query(readFileSync('supabase/migrations/20261126100000_macro_strategy_histories.sql','utf8'));
-  await c.query('set local role anon');
+ });
+ it('replays the definer migration idempotently without changing the definition, grants or results',async()=>{
+  const definition=async()=>(await c.query("select pg_get_functiondef(oid) definition,proacl from pg_proc where oid='public.macro_strategy_histories(text[],timestamptz,date,date)'::regprocedure")).rows;
+  const before=await definition(),ids=[...fixtureSeries,capSeries,emptySeries];
+  const expected=await read(ids,{...fixtureBounds,asOf});
+  const migration=readFileSync('supabase/migrations/20261126120000_macro_strategy_histories_definer.sql','utf8');
+  for(let replay=0;replay<2;replay++){
+   try{
+    await c.query('reset role');
+    await c.query(migration);
+    expect(await definition()).toEqual(before);
+   }finally{await c.query('set local role anon');}
+   expect(await read(ids,{...fixtureBounds,asOf})).toEqual(expected);
+  }
  });
  it('rejects null, empty and more than 64 series with invalid_argument and accepts 64',async()=>{
   for(const series of [null,[],Array.from({length:65},()=> 'EMPTY')]){
