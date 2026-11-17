@@ -33,7 +33,7 @@ describe('industry research entry',()=>{
    const link=links.find(l=>l.url.searchParams.get('scheme')===scheme);
    expect(link,`${scheme} destination`).toBeDefined();
    expect(link!.url.pathname).toBe('/intel/industries');
-   expect(link!.url.searchParams.get('metric')).toBe('member_count');
+   expect(link!.url.searchParams.get('metric')).toBe(scheme==='sic'?null:'member_count');
    expect(link!.body).toContain(scheme==='sic'?'SEC SIC':locale==='en'?'SW 2021':'申万 2021');
    expect(link!.body).toContain(scheme==='sic'?(locale==='en'?'US':'美国'):(locale==='en'?'China':'中国'));
   }

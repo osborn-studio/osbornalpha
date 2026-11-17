@@ -62,6 +62,7 @@
     "run": "聚合运行",
     "generation": "第 {n} 代",
     "method": "方法",
+    "coverage": "有值 {n} / {total} 个行业",
     "grid": "{codes} 个行业 · {periods} 个期末",
     "methods": "方法与来源"
   },

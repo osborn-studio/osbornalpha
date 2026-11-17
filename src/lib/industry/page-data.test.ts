@@ -70,11 +70,16 @@ describe('loadView',()=>{
 });
 
 describe('search params (tolerant: invalid → default)',()=>{
+ it.each([{},{scheme:'x'},{scheme:'sic'}])('uses SIC defaults for %j',search=>{
+  expect(listQueryFromSearch(search)).toEqual({scheme:'sic',version:'sec-current',level:1,metric:'revenue_sum',duration:'12M',periods:10,view:'heatmap'});
+ });
  it('list',()=>{
-  expect(listQueryFromSearch({})).toEqual({scheme:'sw2021',version:'2021',level:1,metric:'gross_margin',duration:'12M',periods:10,view:'heatmap'});
+  expect(listQueryFromSearch({scheme:'sw2021'})).toEqual({scheme:'sw2021',version:'2021',level:1,metric:'gross_margin',duration:'12M',periods:10,view:'heatmap'});
+  for(const level of ['1','2','3'])expect(listQueryFromSearch({scheme:'sw2021',level}).level).toBe(Number(level));
+  expect(listQueryFromSearch({scheme:'sw2021',level:'4'}).level).toBe(1);
   expect(listQueryFromSearch({scheme:'sic',level:'3',view:'table'})).toMatchObject({scheme:'sic',version:'sec-current',level:1,view:'table'});
-  expect(listQueryFromSearch({metric:'revenue_sum',duration:'3M',periods:'45'})).toMatchObject({metric:'revenue_sum',duration:'3M',periods:10});
-  expect(listQueryFromSearch({metric:'gross_margin',duration:'3M'}).duration).toBe('12M');
+  expect(listQueryFromSearch({scheme:'sw2021',metric:'revenue_sum',duration:'3M',periods:'45'})).toMatchObject({metric:'revenue_sum',duration:'3M',periods:10});
+  expect(listQueryFromSearch({scheme:'sw2021',metric:'gross_margin',duration:'3M'}).duration).toBe('12M');
  });
  it('detail and constituents',()=>{
   expect(detailQueryFromSearch('sw2021','801120.SI',{metric:'roe',window:'5y'})).toMatchObject({metrics:['roe'],durations:['TTM'],window:'5y',tableOnly:false});
@@ -87,5 +92,5 @@ describe('search params (tolerant: invalid → default)',()=>{
 it('page params fall back to a valid metric and duration for the scheme',()=>{
  expect(listQueryFromSearch({scheme:'sic',metric:'roe',duration:'TTM'})).toMatchObject({metric:'revenue_sum',duration:'12M'});
  expect(detailQueryFromSearch('sic','3674',{metric:'net_margin',duration:'3M'})).toMatchObject({metric:'net_margin',duration:'12M'});
- expect(listQueryFromSearch({metric:'net_margin'})).toMatchObject({metric:'gross_margin'});
+ expect(listQueryFromSearch({scheme:'sw2021',metric:'net_margin'})).toMatchObject({metric:'gross_margin'});
 });

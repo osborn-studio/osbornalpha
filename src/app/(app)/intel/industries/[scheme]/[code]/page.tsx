@@ -4,6 +4,7 @@
 // 3 aggregate series: metric / basis / window / view selectors, SVG line + table equivalent (table
 // only below 640px); 4 valuation (published cells only; "not enabled" in this plan); 5 judgment area
 // (F4 cards behind INDUSTRY_JUDGMENTS_ENABLED); 6 methods & sources. Unknown code → notFound().
+import {metricsForDisplay} from '@/components/industries/display-model';
 import Link from 'next/link';
 import {notFound} from 'next/navigation';
 import {getLocale,getTranslations} from 'next-intl/server';
@@ -20,7 +21,7 @@ import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
 import {industrySubjectKey,judgmentsEnabled} from '@/lib/industry/judgment-contract';
 import {codeOfPath,detailQueryFromSearch,loadView,schemeOfPath} from '@/lib/industry/page-data';
-import {metricsForScheme,durationsForScheme,industryDetailView} from '@/lib/industry/read';
+import {durationsForScheme,industryDetailView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
@@ -66,7 +67,7 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
               {!v.aggregated||!v.header?<StateNotice kind="empty" body={t('detail.notAggregated')} />:(
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    <LinkSegment label={t('controls.metric')} current={metric} options={metricsForScheme(scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(path,search,{metric:m,duration:undefined})}))} />
+                    <LinkSegment label={t('controls.metric')} current={metric} options={metricsForDisplay(scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(path,search,{metric:m,duration:undefined})}))} />
                     <LinkSegment label={t('controls.basis')} current={duration} options={durationsForScheme(scheme,metric).map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(path,search,{duration:d})}))} />
                     <LinkSegment label={t('controls.window')} current={q.window} options={(['5y','10y','all'] as const).map(w=>({value:w,label:t(`windows.${w}`),href:hrefWith(path,search,{window:w==='10y'?undefined:w})}))} />
                     <div className="ml-auto"><LinkSegment label={t('controls.view')} current={tableOnly?'table':'chart'} options={[{value:'chart',label:t('controls.chartAndTable'),href:hrefWith(path,search,{view:undefined})},{value:'table',label:t('controls.tableOnly'),href:hrefWith(path,search,{view:'table'})}]} /></div>

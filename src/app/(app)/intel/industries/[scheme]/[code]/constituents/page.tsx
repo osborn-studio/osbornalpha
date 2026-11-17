@@ -43,7 +43,7 @@ export default async function ConstituentsPage({params,searchParams}:{params:Pro
   return (
     <SourceDrawerProvider>
       <div className="mx-auto flex max-w-[1400px] flex-col gap-4" data-page="industries-constituents">
-        <div className="text-xs text-text-dim"><Link href="/intel">{t('page.breadcrumbResearch')}</Link> / <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:scheme==='sw2021'?undefined:scheme})}>{t('page.breadcrumbIndustries')}</Link>{v?.state==='ok'&&<> / <Link href={industryPath(scheme,code)}>{nodeName(v.node,locale)}</Link></>} / {t('page.constituents')}</div>
+        <div className="text-xs text-text-dim"><Link href="/intel">{t('page.breadcrumbResearch')}</Link> / <Link href={hrefWith(INDUSTRIES_PATH,{},{scheme})}>{t('page.breadcrumbIndustries')}</Link>{v?.state==='ok'&&<> / <Link href={industryPath(scheme,code)}>{nodeName(v.node,locale)}</Link></>} / {t('page.constituents')}</div>
         {load.error&&<StateNotice kind="error" body={load.staleAt?t('states.error.body',{at:load.staleAt.replace('T',' ').slice(0,16)}):t('states.error.bodyNoCache')}><Link href={hrefWith(path,search,{})}>{t('states.error.retry')}</Link></StateNotice>}
         {v?.state==='unlicensed'&&<StateNotice kind="unlicensed" values={{scheme:t(`schemes.${scheme}`)}}><Link href={hrefWith(INDUSTRIES_PATH,{},{scheme:'sic'})}>{t('states.unlicensed.switchToSic')}</Link></StateNotice>}
         {v?.state==='ok'&&(

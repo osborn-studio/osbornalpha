@@ -62,6 +62,7 @@
     "run": "Run",
     "generation": "gen {n}",
     "method": "Method",
+    "coverage": "{n} of {total} industries have a value",
     "grid": "{codes} industries · {periods} period ends",
     "methods": "Methods & sources"
   },

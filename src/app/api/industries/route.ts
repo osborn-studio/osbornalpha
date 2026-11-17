@@ -19,7 +19,7 @@ export async function GET(req:Request){
  let q:ListQuery;
  try{
   const p=readParams(new URL(req.url),PARAMS);
-  const scheme=schemeOf(p.get('scheme')??'sw2021');
+  const scheme=schemeOf(p.get('scheme')??'sic');
   const metric=metricOf(p,undefined,scheme);
   q={scheme,version:versionOf(p,scheme),level:levelOf(p,scheme),metric,duration:durationOf(p,metric,scheme),periods:intParam(p,'periods',10,MAX_PERIODS)};
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
