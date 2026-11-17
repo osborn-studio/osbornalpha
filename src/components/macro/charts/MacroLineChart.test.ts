@@ -48,3 +48,18 @@ it.each([
    shapes.map((shape, index) => shape === 'arrowDown' && index === 0 ? '-25 bp' : ''),
   );
  });
+
+it('splits lines at missing values instead of interpolating or plotting zero',async()=>{
+ vi.stubGlobal('document',{documentElement:{}});
+ vi.stubGlobal('getComputedStyle',()=>({getPropertyValue:()=>''}));
+ vi.stubGlobal('ResizeObserver',class {observe(){} disconnect(){}});
+ await act(async()=>{tree=create(React.createElement(MacroLineChart,{points:[{time:'2026-01-01',value:2},{time:'2026-02-01',value:null},{time:'2026-03-01',value:3}],ariaLabel:'History'}),{createNodeMock:()=>({clientWidth:600,innerHTML:''})});});
+ expect(chart.setData.mock.calls.map(c=>c[0])).toEqual([[{time:'2026-01-01',value:2}],[{time:'2026-03-01',value:3}]]);
+});
+it('assigns event markers once across separate line segments',async()=>{
+ vi.stubGlobal('document',{documentElement:{}});
+ vi.stubGlobal('getComputedStyle',()=>({getPropertyValue:()=>''}));
+ vi.stubGlobal('ResizeObserver',class {observe(){} disconnect(){}});
+ await act(async()=>{tree=create(React.createElement(MacroLineChart,{points:[{time:'2026-01-01',value:2},{time:'2026-02-01',value:null},{time:'2026-03-01',value:3}],markers:[{time:'2026-01-01',kind:'derived',text:'first'}],ariaLabel:'History'}),{createNodeMock:()=>({clientWidth:600,innerHTML:''})});});
+ expect(chart.setMarkers.mock.calls.flatMap(c=>c[0])).toHaveLength(1);
+});

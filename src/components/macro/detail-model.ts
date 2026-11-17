@@ -63,7 +63,22 @@ export function yoyOf(def:Pick<MacroSeriesDef,'id'|'derive'>,catalog:readonly Pi
  return child?{self:false,id:child.id}:null;
 }
 /** Chart coordinates (floats only here). In diff mode the observations are the server's computed diff rows. */
-export const chartPoints=(obs:readonly Pick<SeriesObsJson,'period_end'|'value_text'>[]):LinePoint[]=>obs.map(o=>({time:o.period_end,value:Number(o.value_text)}));
+export function chartPoints(obs:readonly Pick<SeriesObsJson,'period_end'|'value_text'>[],period?:PeriodKind):LinePoint[] {
+ const points:LinePoint[]=[];
+ for(const o of obs){
+  if(period==='month' && points.length){
+   const previous=points.at(-1)!.time;
+   let next=new Date(Date.UTC(Number(previous.slice(0,4)),Number(previous.slice(5,7))+1,0));
+   while(next.toISOString().slice(0,10)<o.period_end){
+    points.push({time:next.toISOString().slice(0,10),value:null});
+    next=new Date(Date.UTC(next.getUTCFullYear(),next.getUTCMonth()+2,0));
+   }
+  }
+  const value=typeof o.value_text==='string'&&o.value_text.trim()!==''?Number(o.value_text):NaN;
+  points.push({time:o.period_end,value:Number.isFinite(value)?value:null});
+ }
+ return points;
+}
 /** Computed diff text by period (server rows with computed.kind = diff). */
 export const diffByPeriod=(rows:readonly SeriesObsJson[]):Map<string,string>=>new Map(rows.filter(r=>r.computed?.kind==='diff').map(r=>[r.period_end,r.value_text]));
 /** Transform id/version shown in the table header: the computed diff version, else the stored transform of the first row. */

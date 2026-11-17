@@ -1,3 +1,4 @@
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key,useLocale:()=> 'en'}));
 import React, {act} from 'react';
 import {create, type ReactTestRenderer} from 'react-test-renderer';
 import {afterEach, expect, it, vi} from 'vitest';
@@ -26,12 +27,12 @@ it('does not load live history when timestamp lookup fails; missing and restrict
  vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,json:async()=>({})})));
  await act(async()=>{tree=create(React.createElement(KeyIndicatorCards,{region:"US",env:{...env,indicators:[{...row('US_DFF'),status:'M',value_text:null,change:null,sparkline:[]},{...row('US_DGS10'),status:'R',value_text:null,change:null,sparkline:[]}]}}));});
  expect(tree.root.findAllByType('mock-detail' as never)).toHaveLength(0);
- const text=JSON.stringify(tree.toJSON());expect(text).toContain('status.missing');expect(text).toContain('status.restricted');expect(text).not.toContain('4.2');
+ const text=JSON.stringify(tree.toJSON());expect(text).toContain('states.missing');expect(text).toContain('states.withheld');expect(text).not.toContain('4.2');
 });
 it('labels an active source without a snapshot value as missing',async()=>{
  vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({snapshot:{snapshot_id:'snap',created_at:'2026-10-02T12:00:00Z'}})})));
  await act(async()=>{tree=create(React.createElement(KeyIndicatorCards,{region:'US',env:{...env,indicators:[{...row('US_DFF'),value_text:null,period_end:null,change:null,sparkline:[]}]}}));});
- expect(JSON.stringify(tree.toJSON())).toContain('status.missing');
+ expect(JSON.stringify(tree.toJSON())).toContain('states.missing');
  expect(tree.root.findAllByType('mock-detail' as never)).toHaveLength(0);
  expect(tree.root.findAllByType('svg')).toHaveLength(0);
 });
@@ -41,4 +42,10 @@ it('keeps active snapshot headers visible and never falls back to live history o
  expect(JSON.stringify(tree.toJSON())).toContain('keyCards.unavailable');
  expect(JSON.stringify(tree.toJSON())).toContain('4.2');
  expect(tree.root.findAllByType('mock-detail' as never)).toHaveLength(0);
+});
+it('uses the shared overview snapshot time without a second lookup',async()=>{
+ const fetcher=vi.fn(async()=>({ok:false,json:async()=>({})}));vi.stubGlobal('fetch',fetcher);
+ await act(async()=>{tree=create(React.createElement(KeyIndicatorCards,{region:'US',env,snapshotTime:{createdAt:'2020-06-15T12:34:56Z',error:false}}));});
+ expect(fetcher).not.toHaveBeenCalled();
+ expect(tree.root.findAllByType('mock-detail' as never)[0].props.asOf).toBe('2020-06-15T12:34:56Z');
 });

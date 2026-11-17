@@ -1,4 +1,5 @@
 'use client';
+import { MarkCard } from '@/components/research-ui/MarkCard';
 // LLM explanation panel (spec §3.6, §6.3): not generated → running → accepted (system fact sentences, then the
 // model's hypotheses citing fact numbers) / rejected (failure codes only, never model text) / failed. The fixed header
 // names the bound subject, manifest, model, prompt and validator versions. A request id is reused only for a retry
@@ -81,33 +82,20 @@ export function ExplanationPanel({ subject }: { subject: { kind: 'snapshot' | 'r
           {!busy ? <Button variant="secondary" size="sm" onClick={refresh}>{t('explain.refresh')}</Button> : null}
         </div>
       ) : null}
-      {sections ? (
-        <div className="space-y-3 text-sm">
-          <section>
-            <h3 className="text-xs text-text-dim">{t('explain.facts')}</h3>
-            <ol className="space-y-1">
-              {sections.facts.map((f) => <li key={f.factId}>
-                  <sup className="mr-1 font-mono text-[10px] text-accent">{f.n}</sup>{f.text}{' '}
-                  <a className="break-all font-mono text-[10px] text-text-dim hover:underline" href={f.href} title={t('explain.factId', { id: f.factId })}>{f.factId}</a>
-                </li>)}
-            </ol>
-          </section>
-          <section>
-            <h3 className="text-xs text-text-dim">{t('explain.hypotheses')}</h3>
-            <ul className="space-y-1">
-              {sections.hypotheses.map((h, i) => <li key={i}>{h.text} <span className="font-mono text-[10px] text-text-dim" title={h.factIds.join(', ')}>{t('explain.refs', { refs: h.refs.join(', ') })}</span></li>)}
-            </ul>
-          </section>
-          {sections.counterpoints.length > 0 ? (
-            <section>
-              <h3 className="text-xs text-text-dim">{t('explain.counterpoints')}</h3>
-              <ul className="space-y-1">
-                {sections.counterpoints.map((c, i) => <li key={i}>{c.text} <span className="font-mono text-[10px] text-text-dim" title={c.factIds.join(', ')}>{t('explain.refs', { refs: c.refs.join(', ') })}</span></li>)}
-              </ul>
-            </section>
-          ) : null}
-        </div>
-      ) : null}
+      <MarkCard kind="fact" title={t('explain.facts')}>
+        {sections ? <ol className="space-y-1 text-sm">{sections.facts.map(f => <li key={f.factId}>
+          <sup className="mr-1 font-mono text-[10px] text-accent">{f.n}</sup>{f.text}{' '}
+          <a className="break-all font-mono text-[10px] text-text-dim hover:underline" href={f.href} title={t('explain.factId',{id:f.factId})}>{f.factId}</a>
+        </li>)}</ol> : <p className="text-xs text-text-dim">{t('explain.factsUnavailable')}</p>}
+      </MarkCard>
+      {state !== 'failed' && state !== 'rejected' && <MarkCard kind="hypothesis" title={t('explain.hypotheses')}>
+        {sections && <>
+          <ul className="space-y-1 text-sm">{sections.hypotheses.map((h,i)=><li key={i}>{h.text} <span className="font-mono text-[10px] text-text-dim" title={h.factIds.join(', ')}>{t('explain.refs',{refs:h.refs.join(', ')})}</span></li>)}</ul>
+          {sections.counterpoints.length > 0 && <section><h3 className="text-xs text-text-dim">{t('explain.counterpoints')}</h3>
+            <ul className="space-y-1 text-sm">{sections.counterpoints.map((c,i)=><li key={i}>{c.text} <span className="font-mono text-[10px] text-text-dim" title={c.factIds.join(', ')}>{t('explain.refs',{refs:c.refs.join(', ')})}</span></li>)}</ul>
+          </section>}
+        </>}
+      </MarkCard>}
       {(state === 'rejected' || state === 'failed') && projection ? (
         <div className="space-y-1 text-xs">
           <p>{state === 'rejected' ? t('explain.rejectedBody') : t('explain.failedBody')}</p>

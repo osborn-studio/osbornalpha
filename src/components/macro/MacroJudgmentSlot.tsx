@@ -1,4 +1,7 @@
 "use client";
+import { displaySeriesRows } from "./display-series";
+import { useDisplaySeries } from "./use-display-series";
+import { MarkCard } from '@/components/research-ui/MarkCard';
 import { useEffect, useState } from "react";
 import { weightedClockFrom, type WeightedClock, type WeightedRow } from "./clock-weighted";
 import { catalogById } from "@/lib/macro/catalog";
@@ -34,6 +37,7 @@ function BoundClock({
   t,
   locale,
   region,
+  createdAt,
   loading,
   onRefresh,
 }: {
@@ -42,9 +46,12 @@ function BoundClock({
   t: MacroT;
   locale: Locale;
   region: "US" | "CN";
+  createdAt?: string | null;
   loading: boolean;
   onRefresh: () => void;
 }) {
+  const displayLoads = useDisplaySeries(region === "US", createdAt);
+  const displayRows = displaySeriesRows(region, displayLoads, locale);
   const snapshotId = clock.card?.input_snapshot_id;
   const [rows, setRows] = useState<BasisState>(null);
   const [drawer, setDrawer] = useState<DrawerTarget | null>(null);
@@ -102,6 +109,7 @@ function BoundClock({
   };
   return (
     <>
+      <MarkCard kind="judgment">
       <MacroRegimeClock
         selected={clock.selected}
         reason={reason}
@@ -111,6 +119,7 @@ function BoundClock({
         region={region}
         locale={locale}
         date={rows && rows !== "error" ? rows.date : undefined}
+        displayRows={displayRows}
         rows={rows && rows !== "error" ? rows.weighted.rows : []}
         weightedStatus={rows && rows !== "error" ? rows.weighted.status : "unavailable"}
         insufficientCoverage={!!(rows && rows !== "error" && rows.weighted.insufficientCoverage)}
@@ -119,6 +128,7 @@ function BoundClock({
         onRefresh={onRefresh}
         onEvidence={evidence}
       />
+      </MarkCard>
       <AllocationTemplateCard current={clock.selected} />
       <SourceDrawer
         target={drawer}
@@ -132,9 +142,11 @@ function BoundClock({
 
 export function MacroJudgmentSlot({
   region,
+  createdAt,
   snapshotId,
 }: {
   region: "US" | "CN";
+  createdAt?: string | null;
   snapshotId?: string | null;
 }) {
   const { t, locale } = useMacroT();
@@ -202,6 +214,7 @@ export function MacroJudgmentSlot({
       )}
       <BoundClock
         key={`${clock.card?.judgment_id}:${clock.card?.input_snapshot_id}`}
+        createdAt={createdAt}
         clock={clock}
         reason={reason}
         t={t}

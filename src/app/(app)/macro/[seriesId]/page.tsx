@@ -1,4 +1,4 @@
-// /intel/macro/[seriesId] — indicator detail (spec §3.3). Server component: registry whitelist; data loads client-side.
+// /macro/[seriesId] — indicator detail (spec §3.3). Server component: registry whitelist; data loads client-side.
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getTranslations } from 'next-intl/server';
@@ -15,7 +15,7 @@ export default async function MacroSeriesPage({ params }: { params: Promise<{ se
   const t = await getTranslations('macro');
   return (
     <div className="space-y-3">
-      <Link href={`/intel/macro?region=${def.region}&tab=indicators`} className="text-sm">{t('page.back')}</Link>
+      <Link href={`/macro?region=${def.region}&tab=indicators`} className="text-sm">{t('page.back')}</Link>
       <IndicatorDetail seriesId={def.id} />
     </div>
   );

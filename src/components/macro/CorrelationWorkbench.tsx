@@ -1,4 +1,6 @@
 'use client';
+import { registryIdsIn } from './research-sources';
+import { MacroResearchFooter } from './MacroResearchFooter';
 // CorrelationWorkbench — default preset result cards and the indicator × asset analysis form. The preset buttons
 // below the cards fill the form. request_id is generated client-side and reused on network retries (idempotent run).
 // Once the POST returns a runId it is kept: a failed result GET is retried against that run (never a second run) and
@@ -132,7 +134,7 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
           {savedRunId && (
             <>
               <button type="button" disabled={busy} onClick={() => { setBusy(true); void loadRun(savedRunId).finally(() => setBusy(false)); }} className="rounded border border-border px-2 py-0.5">{t('correlation.result.retryLoad')}</button>
-              <Link href={`/macro/analyses/${savedRunId}`} className="text-accent">{t('correlation.result.openRun')}</Link>
+              <Link href={`/macro/analyses/${savedRunId}?region=${region}`} className="text-accent">{t('correlation.result.openRun')}</Link>
             </>
           )}
         </div>
@@ -140,9 +142,10 @@ export function CorrelationWorkbench({ options, region }: { options: { indicator
       {run && (
         <>
           <CorrelationResult run={run} />
-          <Link href={`/macro/analyses/${run.run_id}`} className="text-xs text-accent">{t('correlation.result.openRun')}</Link>
+          <Link href={`/macro/analyses/${run.run_id}?region=${region}`} className="text-xs text-accent">{t('correlation.result.openRun')}</Link>
         </>
       )}
+      <MacroResearchFooter seriesIds={registryIdsIn([PRESETS.filter(p => p.region === region).map(p => p.form), run?.spec])} region={region} />
     </div>
   );
 }

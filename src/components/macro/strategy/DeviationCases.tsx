@@ -2,6 +2,7 @@
 // Deviation cases (spec §3.2, §6.4; judgment layer on only): settled misses of the macro_regime method with the per-input
 // differences between registration and settlement. No narrative; unchanged rows folded; an incomplete enumeration says
 // so.
+import { MacroStateLabel, MacroStateValue } from '../MacroState';
 import { useState } from 'react';
 import { Button, Panel, Tag } from '@/components/ui';
 import type { Region } from '@/lib/macro/strategy/contract';
@@ -51,9 +52,9 @@ export function DeviationCases({ region }: { region: Region }) {
                       <td className="px-1.5 py-1">{r.series}</td>
                       <td className="px-1.5 py-1">{r.period}</td>
                       <td className="px-1.5 py-1 font-sans">{t(r.roleKey)}</td>
-                      <td className="px-1.5 py-1 font-sans"><Tag>{t(r.kindKey)}{r.subkindKey ? ` · ${t(r.subkindKey)}` : ''}</Tag></td>
-                      <td className="px-1.5 py-1">{r.registered}</td>
-                      <td className="px-1.5 py-1">{r.settled}</td>
+                      <td className="px-1.5 py-1 font-sans">{r.kindKey === 'deviation.kind.revised' ? <MacroStateLabel status="revised" /> : t(r.kindKey)}{r.subkindKey ? ` · ${t(r.subkindKey)}` : ''}</td>
+                      <td className="px-1.5 py-1"><MacroStateValue value={r.registered}/></td>
+                      <td className="px-1.5 py-1"><MacroStateValue value={r.settled}/></td>
                     </tr>
                   ))}
                 </tbody>

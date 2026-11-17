@@ -58,7 +58,7 @@ function CardBody({ card }: { card: PlaybookCard }) {
         <p className="text-[11px] text-text-dim">
           {t('playbook.watch')}{' '}
           {card.watch.map((w, i) => (
-            <span key={w.id}>{i > 0 ? ' · ' : ''}<Link href={`/intel/macro/${w.id}`} className="text-accent hover:underline">{w.name}</Link></span>
+            <span key={w.id}>{i > 0 ? ' · ' : ''}<Link href={`/macro/${w.id}`} className="text-accent hover:underline">{w.name}</Link></span>
           ))}
         </p>
       ) : null}

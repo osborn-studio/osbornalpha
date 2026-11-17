@@ -1,4 +1,5 @@
 {
+  "page": {"scope": "宏观观测、传导假设与历史复盘"},
   "columns": {"label": "显示列", "available": "仅可得", "all": "全部目录", "hidden": "已隐藏 {n} 列（受限/未入目录）", "plan": "补齐计划"},
   "tabs": {"workbench": "宏观工作台", "transmission": "传导", "history": "历史", "review": "复盘"},
   "region": {"label": "区域", "US": "美国", "CN": "中国"},
@@ -128,6 +129,7 @@
     "footer": "方法 {method} · 清单 {manifest} · 输入哈希 {hash} · 代码版本 {code} · 代际 {generation}"
   },
   "explain": {
+    "factsUnavailable": "本次解释暂无可展示的事实文本。",
     "title": "解读",
     "state": {"none": "未生成", "loading": "读取中", "readError": "读取失败", "running": "生成中", "accepted": "已接受", "rejected": "未通过校验", "failed": "失败"},
     "loadingList": "正在查询该对象已有的解读；查询完成前不能生成。",

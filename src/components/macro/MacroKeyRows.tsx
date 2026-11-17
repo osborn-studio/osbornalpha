@@ -1,3 +1,4 @@
+import { MacroStateValue } from './MacroState';
 // MacroKeyRows — key indicator rows shared by the Today glance and the /intel card (spec §3.5, canvas TodayGlance2):
 // status dot · name · period | value | neutral change. Missing reads 缺失.
 import type { MacroT } from './use-macro-t';
@@ -23,7 +24,7 @@ export function MacroKeyRows({ groups, t }: { groups: ReturnType<typeof glanceRo
                   <span className="sr-only">{t('glance.statusLabel', { status: t(statusKey(r)) })}</span>
                   {r.name} <span className="font-mono">{r.period}</span>
                 </span>
-                <span className="font-mono tabular-nums">{r.muted ? t('glance.missing') : `${r.value}${r.unit}`}</span>
+                <span className="font-mono tabular-nums"><MacroStateValue status={r.muted ? r.status === 'active' ? 'missing' : r.status : r.timeliness} value={`${r.value}${r.unit}`} detail={r.reason??undefined}/></span>
                 <span className="font-mono tabular-nums text-text-dim">{r.change ? `${r.change.arrow} ${r.change.text}` : '—'}</span>
               </div>
             );

@@ -33,7 +33,7 @@ export async function fixturePage(input: FixturePageInput) {
     page = <SourceFixture target={input.drawerTarget} />;
   } else if (path === '/intel/macro/history') page = await HistoryPage({ searchParams: Promise.resolve(query) });
   else if (path === '/intel/macro/transmission') page = await TransmissionPage({ searchParams: Promise.resolve(query) });
-  else if (path === '/intel/macro/review') page = ReviewIndexPage();
+  else if (path === '/intel/macro/review') page = await ReviewIndexPage({searchParams: Promise.resolve(query)});
   else if (/^\/intel\/macro\/review\/[^/]+\/[^/]+$/.test(path)) {
     const [, , , , region, month] = path.split('/');
     page = await ReviewMonthPage({ params: Promise.resolve({ region, month }) });

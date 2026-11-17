@@ -7,6 +7,7 @@ import en from '../../../../messages/en/macro.json';
 import type {AssetByCycle} from '@/lib/macro/series-extras';
 import type {Cycle} from '@/lib/macro/cycles';
 
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key}));
 beforeAll(()=>vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true));
 afterAll(()=>vi.unstubAllGlobals());
 const cycles:Cycle[]=[{start:'2024-01-01',end:'2024-12-31',basis:'trailing_median',direction:'up',ongoing:false,confirmed_at:'2024-06-30',event_count:null,version:'v'}];
@@ -30,8 +31,8 @@ describe('asset bars',()=>{
   expect(svg[1].findAllByType('rect')).toHaveLength(0);
   expect(svg[2].findByType('rect').props.fill).toBe('var(--down)');
   expect(r.root.findAllByProps({title:'% · 周期 2024-01-01 → 2024-12-31 · 观测 2023-12-31 → 2024-12-31'}).length).toBeGreaterThan(0);
-  expect(JSON.stringify(r.toJSON())).toContain('缺失');
-  expect(r.root.findAllByType('table')).toHaveLength(0);
+  expect(r.root.findAllByProps({'data-research-state':'missing'})).toHaveLength(1);
+  expect(r.root.findAllByType('table')).toHaveLength(1);
   const buttons=r.root.findAllByType('button');
   await act(async()=>{buttons[1].props.onClick();});
   expect(r.root.findByType('table').props['aria-label']).toBe('original table');

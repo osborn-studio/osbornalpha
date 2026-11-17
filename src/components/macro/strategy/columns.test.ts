@@ -61,7 +61,7 @@ for(const kind of ['cycle','matrix'] as const){
   expect(pill('available').props['aria-pressed']).toBe(true);
   expect(JSON.stringify(r.toJSON())).toContain('columns.hidden{\\"n\\":2}');
   expect(r.root.findByProps({href:'/macro?tab=methodology#data-gaps'})).toBeDefined();
-  expect(JSON.stringify(r.toJSON())).not.toContain('state.restricted');
+  expect(JSON.stringify(r.toJSON())).not.toContain('states.withheld');
   expect(r.root.findAllByType('thead')[0].findAllByType('th')).toHaveLength(2);
   expect(r.root.findAllByType('section')).toHaveLength(1);
   if(kind==='cycle')expect(r.root.findAllByType('rect')).toHaveLength(0);
@@ -123,15 +123,34 @@ for(const kind of ['cycle','matrix'] as const){
   stored='all';
   const r=await mount(kind==='cycle'?createElement(CycleReturnsTable,{view:cycle,boundary:'event_day',onBoundary:vi.fn()}):createElement(PolicyResponseMatrix,{view:matrix,window:3,onWindow:vi.fn()}));
   const headers=r.root.findAllByType('thead')[0];
-  expect(renderedText(headers)).toContain('state.restricted');
-  expect(renderedText(headers)).toContain('state.not_in_catalog');
+  expect(renderedText(headers)).toContain('states.withheld');
+  expect(renderedText(headers)).toContain('states.notServed');
   const headings=r.root.findAllByType('section').map(s=>renderedText(s.findByType('h3')));
-  expect(headings[1]).toContain('state.restricted');
-  expect(headings[2]).toContain('state.not_in_catalog');
+  expect(headings[1]).toContain('states.withheld');
+  expect(headings[2]).toContain('states.notServed');
  });
 }
 it('links observed transmission nodes to the existing macro series route',async()=>{
  const observed:TransmissionView={...flow,stages:[{...flow.stages[0],nodes:[{...flow.stages[0].nodes[0],state:'observed',inputs:[{observation_id:'o',series_id:'US_DFF',period_end:'2026-10-31',value_text:'2.25',version:1,available_at:'2026-11-01',source:{kind:'history',as_of:'2026-11-01'}}]}]}]};
  const r=await mount(createElement(TransmissionFlow,{view:observed}));
  expect(r.root.findByProps({href:'/macro/US_DFF'})).toBeDefined();
+});
+it('suppresses a restricted node value even if an inconsistent DTO carries a number',async()=>{
+ const restricted={...flow,stages:[{...flow.stages[0],nodes:[{...flow.stages[0].nodes[0],state:'restricted' as const,value_text:'987654.32',inputs:[]}]}]};
+ const r=await mount(createElement(TransmissionFlow,{view:restricted}));
+ expect(renderedText(r.root)).not.toContain('987654.32');
+ expect(r.root.findAllByProps({'data-research-state':'withheld'}).length).toBeGreaterThan(0);
+});
+it('uses unified missing cells in cycle and matrix values as well as their column labels',async()=>{
+ const r=await mount(createElement(CycleReturnsTable,{view:cycle,boundary:'event_day',onBoundary:()=>{}}));
+ expect(r.root.findAllByProps({'data-research-state':'missing'}).length).toBeGreaterThan(0);
+});
+it('reports only the registry series in the visible matrix dimensions to the page footer',async()=>{
+ const onSeriesShown=vi.fn();
+ const view={...matrix,dims:[{...matrix.dims[0],series:'US_DFF'},{...matrix.dims[1],series:'US_WALCL'}]};
+ const r=await mount(createElement(PolicyResponseMatrix,{view,window:3,onWindow:()=>{},onSeriesShown}));
+ expect(onSeriesShown).toHaveBeenLastCalledWith(['US_DFF']);
+ const all=r.root.findAllByType('button').find(b=>renderedText(b)==='columns.all')!;
+ await act(async()=>all.props.onClick());
+ expect(onSeriesShown).toHaveBeenLastCalledWith(['US_DFF','US_WALCL']);
 });

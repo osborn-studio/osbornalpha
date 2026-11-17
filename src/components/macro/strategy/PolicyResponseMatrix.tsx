@@ -1,10 +1,12 @@
 'use client';
+import { MacroStateLabel, MacroStateValue } from '../MacroState';
 // Fed policy → US/CN asset response matrix (spec §3.3, §5.3): rows hike / cut / QE·QT, columns are dimensions with
 // their real coverage in the header, cells give the median with type-7 quartiles and n (n < 5 → per-event only), asset
 // moves washed by sign in three levels. A cell opens the per-event drawer (selected and excluded events with reasons).
 // Below sm the table becomes one list per column; its drillable cells open the same drawer. The matrix links its own
 // manifest with cutoff and version, and each event lists the frozen base / end input observations.
-import { useMemo, useState } from 'react';
+import { registryIdsIn } from '../research-sources';
+import { useEffect, useMemo, useState } from 'react';
 import { Button, Panel } from '@/components/ui';
 import type { Cell, PolicyResponseView, ResponseDim } from '@/lib/macro/strategy/contract';
 import { EvidencePairDrawer, ObsRefTable } from './EvidencePairDrawer';
@@ -16,7 +18,7 @@ import { useColumnMode } from './use-column-mode';
 
 const WINDOWS = [1, 3, 6] as const;
 
-export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyResponseView; window: 1 | 3 | 6; onWindow: (w: 1 | 3 | 6) => void }) {
+export function PolicyResponseMatrix({ view, window, onWindow, onSeriesShown }: { onSeriesShown?: (ids: string[]) => void; view: PolicyResponseView; window: 1 | 3 | 6; onWindow: (w: 1 | 3 | 6) => void }) {
   const { t, locale } = useStrategyT();
   const [drill, setDrill] = useState<{ direction: string; dim: ResponseDim; cell: Cell } | null>(null);
   const scale = useMemo(() => matrixScale(view), [view]);
@@ -25,6 +27,8 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
   const columnInfo = new Map(visibleDims(view, mode).map(d => [d.id, d]));
   const visible = new Set(columnInfo.keys());
   const dims = view.dims.filter(d => visible.has(d.id));
+  const shownSeries = registryIdsIn(dims).join('|');
+  useEffect(() => { onSeriesShown?.(shownSeries ? shownSeries.split('|') : []); }, [onSeriesShown, shownSeries]);
   return (
     <Panel className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -45,7 +49,7 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
               <th className="px-1.5 py-1 text-left font-medium">{t('matrix.policy')}</th>
               {dims.map((d) => (
                 <th key={d.id} className="px-1.5 py-1 font-medium" title={coverageText(d, t)}>
-                  {dimLabel(d, locale)}{columnInfo.get(d.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(d.id)!.hidden_reason}`)}</span> : null}<div className="text-[10px] font-normal">{coverageText(d, t)}</div>
+                  {dimLabel(d, locale)}{columnInfo.get(d.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim"><MacroStateLabel status={columnInfo.get(d.id)!.hidden_reason!}>{t(`state.${columnInfo.get(d.id)!.hidden_reason}`)}</MacroStateLabel></span> : null}<div className="text-[10px] font-normal">{coverageText(d, t)}</div>
                 </th>
               ))}
             </tr>
@@ -57,13 +61,13 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
                 <tr key={row.direction} className="border-t border-border">
                   <th scope="row" className="px-1.5 py-2 text-left font-normal">{t(`matrix.rows.${row.direction}`)}</th>
                   {uniform !== null ? (
-                    <td colSpan={dims.length} className="px-1.5 py-2 text-left text-text-dim">{t('state.missing')}：{uniform}</td>
+                    <td colSpan={dims.length} className="px-1.5 py-2 text-left text-text-dim"><MacroStateLabel status="missing" />：{uniform}</td>
                   ) : dims.map((d) => {
                     const cell = cellOf(row, d.id);
                     const c = matrixCell(cell, locale, t);
                     const body = (
                       <>
-                        <div className="font-mono tabular-nums">{c.main}</div>
+                        <div className="font-mono tabular-nums"><MacroStateValue status={cell.status === 'restricted' || cell.status === 'not_in_catalog' || cell.status === 'missing' ? cell.status : undefined} value={c.main}/></div>
                         {c.sub ? <div className="text-[10px] text-text-dim">{c.sub}</div> : null}
                       </>
                     );
@@ -84,7 +88,7 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
       <div className="space-y-3 sm:hidden">
         {matrixGroups(view, locale, t).filter(g => visible.has(g.id)).map((g) => (
           <section key={g.id} className="rounded border border-border p-2">
-            <h3 className="text-xs font-semibold">{g.label}{columnInfo.get(g.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim">{t(`state.${columnInfo.get(g.id)!.hidden_reason}`)}</span> : null}</h3>
+            <h3 className="text-xs font-semibold">{g.label}{columnInfo.get(g.id)?.hidden_reason ? <span className="block text-[10px] font-normal text-text-dim"><MacroStateLabel status={columnInfo.get(g.id)!.hidden_reason!}>{t(`state.${columnInfo.get(g.id)!.hidden_reason}`)}</MacroStateLabel></span> : null}</h3>
             <p className="text-[10px] text-text-dim">{g.coverage}</p>
             <ul className="mt-1 space-y-1 text-xs">
               {g.rows.map((r) => (
@@ -93,7 +97,7 @@ export function PolicyResponseMatrix({ view, window, onWindow }: { view: PolicyR
                   {(() => {
                     const body = (
                       <>
-                        <span className="font-mono tabular-nums">{r.cell.main}</span>
+                        <span className="font-mono tabular-nums"><MacroStateValue status={r.source.status === 'restricted' || r.source.status === 'not_in_catalog' || r.source.status === 'missing' ? r.source.status : undefined} value={r.cell.main}/></span>
                         {r.cell.sub ? <span className="block text-[10px] text-text-dim">{r.cell.sub}</span> : null}
                       </>
                     );

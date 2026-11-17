@@ -4,7 +4,7 @@
 import type { AnalysisResult, AnalysisSpec, EventResult, FrozenInputs, PairResult, RollingResult } from '@/lib/macro/correlation';
 import type { PresetCard } from '@/lib/macro/preset-contract';
 import type { AnalysisKind, Bilingual } from '@/lib/macro/types';
-import { DataTableToggle } from './charts/DataTableToggle';
+import { ChartTableSwitch } from '@/components/research-ui/ChartTableSwitch';
 import { MacroLineChart } from './charts/MacroLineChart';
 import { ScatterFit } from './charts/ScatterFit';
 import { sparklinePoints } from './charts/chart-geometry';
@@ -27,8 +27,7 @@ function Pairs({ res, t }: { res: PairResult; t: MacroT }) {
   const x = sparklinePoints(res.pairs.map((p) => String(p.x)), 480, 110, 4);
   const y = sparklinePoints(res.pairs.map((p) => String(p.y)), 480, 110, 4);
   return (
-    <DataTableToggle
-      t={t}
+    <ChartTableSwitch
       narrowTable
       chart={
         <div className="space-y-3">
@@ -58,8 +57,7 @@ function Pairs({ res, t }: { res: PairResult; t: MacroT }) {
 
 function Rolling({ res, t }: { res: RollingResult; t: MacroT }) {
   return (
-    <DataTableToggle
-      t={t}
+    <ChartTableSwitch
       chart={<MacroLineChart points={res.points.map((p) => ({ time: `${p.end}-01`, value: p.r }))} ariaLabel={t('correlation.result.rollingLabel')} height={200} />}
       table={
         <table className="w-full text-xs">

@@ -25,3 +25,7 @@ describe('macro messages',()=>{
   expect(readFileSync(resolve(process.cwd(),'src/i18n/request.ts'),'utf8')).toMatch(/\/\/ MACRO[\s\S]*'macro'[\s\S]*\/\/ \/MACRO/);
  });
 });
+
+it('removes obsolete macro drawer chrome now supplied by the shared shell',()=>{
+ for(const locale of ['zh','en'] as const)for(const key of ['title','close','sourceSection','proofSection','revisions','version','value','note','noRevisions','loading','selectRow'])expect(load(locale).drawer).not.toHaveProperty(key);
+});

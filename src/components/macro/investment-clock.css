@@ -4,7 +4,7 @@
   --phase-rose: #dfa1ab;
   --clock-gold: #e4b85f;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--bg-elevated);
   color: var(--text);
   overflow: hidden;

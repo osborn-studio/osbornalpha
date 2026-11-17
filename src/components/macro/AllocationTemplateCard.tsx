@@ -1,5 +1,6 @@
 'use client';
 
+import { MarkCard } from '@/components/research-ui/MarkCard';
 import type { Regime } from '@/lib/macro/judgment-contract';
 import { ALLOCATION_TEMPLATE_VERSION, allocationRows } from '@/lib/macro/allocation-template';
 import { useMacroT } from './use-macro-t';
@@ -12,7 +13,7 @@ export function AllocationTemplateCard({ current }: { current: Regime | null }) 
   const { t } = useMacroT();
   const a = (key: string) => t(`judgment.allocation.${key}`);
   return (
-    <section aria-label={a('title')} className="allocation-template">
+    <MarkCard kind="hypothesis" className="allocation-template">
       <header className="allocation-header">
         <p className="allocation-labels">
           <span className="allocation-pill">{a('labels.framework')}</span>
@@ -45,6 +46,6 @@ export function AllocationTemplateCard({ current }: { current: Regime | null }) 
       </ul>
       <p className="allocation-note">{a('source')}</p>
       <p className="allocation-version">{ALLOCATION_TEMPLATE_VERSION}</p>
-    </section>
+    </MarkCard>
   );
 }

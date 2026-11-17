@@ -4,9 +4,7 @@ import path from 'node:path';
 import { mkdir, readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { build, type Plugin } from 'esbuild';
-import postcss from 'postcss';
-import tailwindcss from 'tailwindcss';
-import tailwindConfig from '../../tailwind.config';
+import {fixtureStylesheet} from './stylesheet';
 import type { ReactNode } from 'react';
 import { createRequire } from 'node:module';
 import { renderToString } from 'react-dom/server';
@@ -67,7 +65,7 @@ async function start() {
   const pages = await import(pathToFileURL(serverBundle).href);
   const fixturePage: (input: FixturePageInput) => Promise<ReactNode> = pages.fixturePage ?? pages.default.fixturePage;
   const script = await readFile(path.join(out, 'browser.js'));
-  const stylesheet = await postcss([tailwindcss({ ...tailwindConfig, content: [path.join(root, 'src/components/macro/**/*.{ts,tsx}'), path.join(root, 'src/components/ui/**/*.{ts,tsx}')] })]).process(await readFile(path.join(root, 'src/app/globals.css'), 'utf8'), { from: path.join(root, 'src/app/globals.css') });
+  const stylesheet = await fixtureStylesheet(root);
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', base);

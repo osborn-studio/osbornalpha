@@ -1,10 +1,15 @@
 'use client';
+import { MacroStateLabel } from './MacroState';
 // MacroWorkbench — /macro (spec §3.1, §3.2, canvas OverviewOff): region switch, tabs 概览 · 指标 · 关联 · 方法与来源.
 // The judgment slot is rendered only when the server page passes judgmentsEnabled. With the layer off, nothing on
 // the page names a regime, score, margin or coverage percentage. Collection failures show the last published
 // snapshot with its collection status; they never show zeros.
 import { useCallback, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { useSnapshotTime } from './use-snapshot-time';
+import { FedLiquidity } from './FedLiquidity';
+import { FED_DISPLAY_IDS } from './display-series';
+import { MacroTabs } from './MacroTabs';
+import { PageHeader } from '@/components/research-ui/PageHeader';
 import { MACRO_CATALOG } from '@/lib/macro/catalog';
 import { CORRELATION_VERSION } from '@/lib/macro/correlation';
 import { CYCLES_VERSION } from '@/lib/macro/cycles';
@@ -16,19 +21,15 @@ import { CorrelationWorkbench } from './CorrelationWorkbench';
 import { IndicatorDetail } from './IndicatorDetail';
 import { IndicatorTable } from './IndicatorTable';
 import { KeyIndicatorCards } from './KeyIndicatorCards';
-// MACRO-P3
-import { strategyLinkTabs } from './strategy-links';
-// /MACRO-P3
 import { MacroJudgmentSlot } from './MacroJudgmentSlot';
 import { AllocationTemplateCard } from './AllocationTemplateCard';
 import { SourceDrawer, type DrawerTarget } from './SourceDrawer';
-import { SourceFooter } from './SourceFooter';
+import { MacroResearchFooter } from './MacroResearchFooter';
 import { useMacroOverview } from './use-macro-overview';
 import { useMacroT, type MacroT } from './use-macro-t';
-import { changeCounts, changeLines, collectionOf, coverageOf, sourceLabel, sourceLabels, toIndicatorView, type IndicatorView, type OverviewEnvelopeJson } from './view-model';
+import { changeCounts, changeLines, collectionOf, coverageOf, sourceLabel, toIndicatorView, type IndicatorView, type OverviewEnvelopeJson } from './view-model';
 
 export type WorkbenchTab = 'overview' | 'indicators' | 'correlation' | 'methodology';
-const TABS: WorkbenchTab[] = ['overview', 'indicators', 'correlation', 'methodology'];
 
 function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: OverviewEnvelopeJson | null; rows: IndicatorView[]; t: MacroT; judgmentsEnabled: boolean; locale: 'zh' | 'en' }) {
   const block = (title: string, body: string) => <section className="card-base space-y-1"><h3 className="text-sm font-semibold">{title}</h3><p className="text-xs leading-relaxed text-text-dim">{body}</p></section>;
@@ -41,7 +42,7 @@ function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: Overview
         <h3 className="text-sm font-semibold">{t('methodology.dataGapsTitle')}</h3>
         <ul className="space-y-1 text-xs text-text-dim">
           {MACRO_CATALOG.filter(d => d.status === 'missing' || d.status === 'restricted').map(d => (
-            <li key={d.id}>{d.name[locale]} · {t(`status.${d.status}`)} · {d.reason?.[locale]}</li>
+            <li key={d.id}>{d.name[locale]} · <MacroStateLabel status={d.status}>{t(`status.${d.status}`)}</MacroStateLabel> · {d.reason?.[locale]}</li>
           ))}
         </ul>
       </section>
@@ -65,7 +66,7 @@ function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: Overview
           <tbody>{rows.map((r) => (
             <tr key={r.seriesId} className="border-t border-border">
               <td className="py-1">{r.name} <span className="font-mono text-[10px] text-text-dim">{r.seriesId}</span></td>
-              <td className="py-1 text-text-dim">{t(`status.${r.status}`)}{r.reason ? `：${r.reason}` : ''}</td>
+              <td className="py-1 text-text-dim"><MacroStateLabel status={r.status}>{t(`status.${r.status}`)}</MacroStateLabel>{r.reason ? `：${r.reason}` : ''}</td>
               <td className="py-1 text-text-dim">{sourceLabel(r.source, locale) ?? '—'}</td>
             </tr>
           ))}</tbody>
@@ -75,9 +76,9 @@ function Methodology({ env, rows, t, judgmentsEnabled, locale }: { env: Overview
   );
 }
 
-export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, options, strategyEnabled = false }: {
+export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, options }: {
   initialRegion: 'US' | 'CN'; initialTab: WorkbenchTab; judgmentsEnabled: boolean; options: { indicators: SeriesOption[]; assets: SeriesOption[] };
-  /** MACRO-P3: the strategy switch, read on the server page; link tabs to the strategy pages render only when true. */
+  /** Retained caller compatibility; server route gates still own strategy availability. */
   strategyEnabled?: boolean;
 }) {
   const { t, locale } = useMacroT();
@@ -88,6 +89,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
   const closeDrawer = useCallback(() => setDrawer(null), []);
   const state = useMacroOverview(`region=${region}`);
   const env = state.status === 'ok' ? state.data.regions[region] ?? null : null;
+  const snapshotTime = useSnapshotTime(env?.snapshotId);
   const rows = useMemo(() => (env ? env.indicators.map((r) => toIndicatorView(r, locale, t)) : []), [env, locale, t]);
   const go = (r: 'US' | 'CN', tb: WorkbenchTab) => {
     setRegion(r); setTab(tb); setPreview(null); setDrawer(null);
@@ -101,35 +103,18 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
     if (row.periodEnd) setDrawer({ seriesId: row.seriesId, observationId: row.observationId, name: row.name, periodEnd: row.periodEnd, display: `${row.value}${row.unit}`, unit: row.unitKey, source: row.source });
   };
   const coll = env ? collectionOf(env) : null;
-  const tabBtn = (active: boolean) => `px-3 py-2 text-sm ${active ? 'border-b-2 border-accent font-semibold text-text' : 'text-text-dim'}`;
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <h1 className="text-xl font-bold">{t('page.title')}</h1>
-          <p className="text-[11px] text-text-dim">{t('page.subtitle')}</p>
-        </div>
-        <div role="group" aria-label={t('region.label')} className="ml-auto flex overflow-hidden rounded border border-border">
+      <PageHeader title={t('page.title')} scope={t('page.subtitle')}
+        freshness={env && coll ? {asOf: env.asOf, status: coll.overall} : null}
+        scopeSwitch={<div role="group" aria-label={t('region.label')} className="flex overflow-hidden rounded border border-border">
           {(['US', 'CN'] as const).map((r) => (
             <button key={r} type="button" aria-pressed={region === r} onClick={() => go(r, tab)} className={`px-3 py-1 text-xs ${region === r ? 'bg-[var(--accent-wash)] font-semibold text-accent' : 'text-text-dim'}`}>{t(`region.${r}`)}</button>
           ))}
-        </div>
-        {env && coll && (
-          <span className="inline-flex items-center gap-2 rounded border border-border px-2 py-1 text-[11px] text-text-dim">
-            <span aria-hidden="true" className={`inline-block h-1.5 w-1.5 rounded-full ${coll.overall === 'fresh' ? 'bg-accent' : coll.overall === 'missing' ? 'border border-text-dim' : 'bg-warn'}`} />
-            <span className="font-mono">{env.asOf ? t('header.snapshot', { date: env.asOf }) : t('header.noSnapshot')}</span>
-            <span>· {t('header.collection', { status: t(`collection.${coll.overall}`) })}</span>
-          </span>
-        )}
-      </div>
+        </div>} />
 
-      <nav aria-label={t('tabs.label')} className="flex flex-wrap gap-1 whitespace-nowrap border-b border-border">
-        {TABS.map((tb) => <button key={tb} type="button" aria-current={tab === tb ? 'page' : undefined} onClick={() => go(region, tb)} className={tabBtn(tab === tb)}>{t(`tabs.${tb}`)}</button>)}
-        {/* MACRO-P3 */}
-        {strategyLinkTabs(strategyEnabled).map((l) => <Link key={l.key} href={l.href} className={tabBtn(false)}>{t(`tabs.${l.key}`)}</Link>)}
-        {/* /MACRO-P3 */}
-      </nav>
+      <MacroTabs active={tab} region={region} onView={tb => go(region, tb)} />
 
       {state.status === 'loading' && tab !== 'correlation' && <div className="text-xs text-text-dim">{t('states.loading')}</div>}
       {state.status === 'error' && tab !== 'correlation' && <div className="card-base text-xs text-text-dim">{t('states.loadFailed', { code: state.code })}</div>}
@@ -139,8 +124,9 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
           {judgmentsEnabled && <a href="#investment-clock">{t('judgment.widget.title')}</a>}
           {env && <><a href="#macro-updates">{t('changes.title')}</a><a href="#macro-indicators">{t('tabs.indicators')}</a><a href="#macro-sources">{t('sources.title')}</a></>}
         </nav><div className="macro-overview-main">
-      {judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} />}
+      {judgmentsEnabled && <MacroJudgmentSlot key={region} region={region} snapshotId={env?.snapshotId} createdAt={snapshotTime.createdAt} />}
       {!judgmentsEnabled && <AllocationTemplateCard current={null} />}
+      <FedLiquidity region={region} createdAt={snapshotTime.createdAt} />
 
       {tab === 'overview' && env && (
         <div className="space-y-3">
@@ -148,7 +134,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
             <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
-          <KeyIndicatorCards key={region} region={region} env={env} />
+          <KeyIndicatorCards key={region} region={region} env={env} snapshotTime={snapshotTime} />
           <section id="macro-indicators" className="card-base space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{t('table.title')}</h2>
@@ -159,7 +145,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
             <div className="text-[11px] text-text-dim">{t('table.neutralNote')}</div>
           </section>
           {preview && <IndicatorDetail key={preview} seriesId={preview} compact />}
-          <div id="macro-sources"><SourceFooter labels={sourceLabels(env.indicators, locale)} t={t} onOpen={() => { const first = rows.find((r) => r.hasEvidence); if (first) openEvidence(first); }} /></div>
+
         </div>
       )}
       </div></div>}
@@ -168,6 +154,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
       )}
       {tab === 'correlation' && <CorrelationWorkbench key={region} options={options} region={region} />}
       {tab === 'methodology' && <Methodology env={env} rows={rows} t={t} judgmentsEnabled={judgmentsEnabled} locale={locale} />}
+      {tab !== 'correlation' && <MacroResearchFooter seriesIds={[...rows.map(r => r.seriesId), ...(region === 'US' && tab === 'overview' ? FED_DISPLAY_IDS : [])]} region={region} />}
       <SourceDrawer target={drawer} onClose={closeDrawer} t={t} locale={locale} />
     </div>
   );

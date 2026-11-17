@@ -1,4 +1,4 @@
-// /intel/macro — macro workbench (spec §3.1, §3.2). Server component: reads the judgment flag server-side and builds
+// /macro — macro workbench (spec §3.1, §3.2). Server component: reads the judgment flag server-side and builds
 // correlation options from the catalog; data loads client-side from /api/macro/*.
 import { MacroWorkbench, type WorkbenchTab } from '@/components/macro/MacroWorkbench';
 import { correlationOptions } from '@/lib/macro/workbench-options';

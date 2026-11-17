@@ -1,3 +1,4 @@
+vi.mock('next-intl',()=>({useTranslations:()=> (key:string)=>key,useLocale:()=> 'en'}));
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as storage from "@/lib/macro/clock-view";
 import { createElement } from "react";

@@ -12,7 +12,7 @@ describe('macro series page resolution', () => {
   it.each(DISPLAY_CATALOG)('opens display-only $id with its region and detail id', async def => {
     const result = await page(def.id);
     const [back, detail] = result.props.children;
-    expect(back.props.href).toBe(`/intel/macro?region=${def.region}&tab=indicators`);
+    expect(back.props.href).toBe(`/macro?region=${def.region}&tab=indicators`);
     expect(detail.props.seriesId).toBe(def.id);
   });
   it('preserves every hashed-catalog page and event-source exclusion', async () => {
@@ -22,7 +22,7 @@ describe('macro series page resolution', () => {
       } else {
         const result = await page(def.id);
         expect(result.props.children[1].props.seriesId).toBe(def.id);
-        expect(result.props.children[0].props.href).toBe(`/intel/macro?region=${def.region}&tab=indicators`);
+        expect(result.props.children[0].props.href).toBe(`/macro?region=${def.region}&tab=indicators`);
       }
     }
   });

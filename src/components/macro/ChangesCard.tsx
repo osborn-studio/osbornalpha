@@ -1,3 +1,4 @@
+import { MacroStateLabel, MacroStateValue } from './MacroState';
 // ChangesCard — 本期变化 (spec §3.2, canvas OverviewOff): four counters plus the latest change lines. Counts only.
 import { Panel } from '@/components/ui';
 import type { MacroT } from './use-macro-t';
@@ -11,7 +12,7 @@ export function ChangesCard({ counts, lines, t }: { counts: Record<(typeof KINDS
       <div className="grid grid-cols-4 gap-2">
         {KINDS.map((k) => (
           <div key={k} className="rounded-md border border-border bg-bg-card p-2">
-            <div className="text-[11px] text-text-dim">{t(`changes.${k}`)}</div>
+            <div className="text-[11px] text-text-dim">{k === 'new_release' ? t('changes.new_release') : <MacroStateLabel status={k}>{t(`changes.${k}`)}</MacroStateLabel>}</div>
             <div className={`font-mono text-xl font-semibold tabular-nums ${k === 'late' && counts[k] > 0 ? 'text-warn' : k === 'missing' ? 'text-text-dim' : ''}`}>{counts[k]}</div>
           </div>
         ))}
@@ -23,10 +24,10 @@ export function ChangesCard({ counts, lines, t }: { counts: Record<(typeof KINDS
         <ul className="mt-1 space-y-1 text-xs">
           {lines.map((l, i) => (
             <li key={`${l.seriesId}-${l.kind}-${i}`} className="grid grid-cols-[64px_1fr_auto] items-baseline gap-2">
-              <span className={`rounded border px-1.5 text-[11px] ${l.kind === 'late' ? 'border-[color-mix(in_srgb,var(--warn)_35%,transparent)] text-warn' : 'border-border text-text-dim'}`}>{t(`changes.${l.kind}`)}</span>
+              <span className={`rounded border px-1.5 text-[11px] ${l.kind === 'late' ? 'border-[color-mix(in_srgb,var(--warn)_35%,transparent)] text-warn' : 'border-border text-text-dim'}`}>{l.kind === 'new_release' ? t('changes.new_release') : <MacroStateLabel status={l.kind}>{t(`changes.${l.kind}`)}</MacroStateLabel>}</span>
               <span className={l.kind === 'missing' ? 'text-text-dim' : ''}>
                 {l.name}{' '}
-                <span className="font-mono tabular-nums">{l.previous ? t('changes.revisedFrom', { from: l.previous, to: l.value }) : l.value}</span>
+                <span className="font-mono tabular-nums"><MacroStateValue status={l.kind === 'new_release' ? undefined : l.kind} value={l.previous ? t('changes.revisedFrom', { from: l.previous, to: l.value }) : l.value}/></span>
               </span>
               <span className="font-mono tabular-nums text-text-dim">{l.period}</span>
             </li>
