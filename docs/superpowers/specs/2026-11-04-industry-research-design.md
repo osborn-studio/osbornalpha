@@ -817,6 +817,8 @@ type IndustryTableRows = InputRef<'table_rows',
 
 ## 19. 修订 A1（2026-11-16）：美股 SIC 行业聚合（快照成分重建）
 
+Per-issuer envelopes may be fetched through `read_facts_batch`, defined as equal to `read_facts` for each issuer; this is a transport optimisation with no method change (`industry-agg-us/1.0`).
+
 **动机。** 2026-11-16 生产勘察（`docs/audits/2026-11-16-industry-data/01-diagnosis.md`）：申万/A 股链路全部卡在 owner 决策（A/E/H/CN 发布），行业页只有分类列表；而美股两项输入已是公开一手数据且在库——SIC 归属 811 个发行人（`scheme:sic:sec-current` = `public`）、EDGAR 事实 577 个发行人（年度 USD `revenue` 533 家）。§1.2 把美股聚合排除在外的理由是"SIC 只有当前值，不做用今天成分算历史"。本修订不推翻这个理由，而是把它变成**显式口径**：不声称历史成分，只发布"以某一快照日的成分，汇总这些公司最近几个财年已披露的数字"，并在每一处标明。
 
 **19.1 范围。** `scheme='sic'`、`version='sec-current'`、`level=1`（四位码）。只做聚合（I-2 的美股对应物）；不做估值、不做判断输入、不做二位大类归并（库内无其一手名称表）。申万/CN 路径的行为、`METHOD_CONFIG` 与 `CONFIG_HASH` 不变。

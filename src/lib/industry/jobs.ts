@@ -9,6 +9,7 @@
 import {createHash} from 'node:crypto';
 import type {BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {supabaseTableClient} from '../db/table-client';
+import {supabaseFactsBatchReader} from '../facts/read-batch';
 import {supabaseFactsDb} from '../facts/db';
 import {reconcileScope} from '../facts/scope';
 import {supabaseSnapshotStore} from '../facts/snapshot-store';
@@ -157,7 +158,7 @@ export interface ProductionIndustryDepsOptions{codeVersion:string|null;now?:()=>
 export function productionIndustryDeps(opts:ProductionIndustryDepsOptions):IndustryJobDeps{
  const sb=opts.admin??getAdminSupabase();
  const db=supabaseIndustryDb(sb);const facts=supabaseFactsDb(sb);
- return {tables:supabaseTableClient(sb),db,facts,scopeDb:facts,manifests:supabaseManifestStore(sb,db),snapshots:supabaseSnapshotStore(sb),now:opts.now??(()=>new Date()),codeVersion:opts.codeVersion,fetch:globalThis.fetch};
+ return {tables:supabaseTableClient(sb),db,facts,factsBatch:supabaseFactsBatchReader(sb),scopeDb:facts,manifests:supabaseManifestStore(sb,db),snapshots:supabaseSnapshotStore(sb),now:opts.now??(()=>new Date()),codeVersion:opts.codeVersion,fetch:globalThis.fetch};
 }
 
 export interface SyncArgs{job:IndustryJob;apply:boolean;limit?:number;tickers?:string[];factsAsOf?:string;tradeDates:string[];l1Codes:string[];recomputeFrom?:string}

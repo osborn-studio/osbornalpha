@@ -288,6 +288,18 @@
     {
       "file": "20261126120000_macro_strategy_histories_definer.sql",
       "sha256": "a8167a222f6b5d01738eeab263c92ccf5a1bff0bf91a5ef6de3304cef19fd0cc"
+    },
+    {
+      "file": "20261127090000_macro_display_frequency.sql",
+      "sha256": "cc173775d02506aa65bf6f33e919fd198d268cdf521a14608c3fd371fea618da"
+    },
+    {
+      "file": "20261129090000_company_evidence_chunked_replace.sql",
+      "sha256": "4aa2e1e85b354113b5f5cd52883dc75a7e07355fc73127bb906e70cedfdba948"
+    },
+    {
+      "file": "20261130090000_industry_us_aggregates.sql",
+      "sha256": "0a3032da550de00eea19baf79ee62a05d71273c8c4b660c487a297d4abb781ba"
     }
   ]
 }

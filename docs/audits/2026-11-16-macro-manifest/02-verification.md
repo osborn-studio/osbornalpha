@@ -1,8 +1,9 @@
 # Macro manifest persistence and cold path — production verification
 
-Status: **verified, with two measurements still open** (2026-11-17 06:05 UTC). Cycle-table manifests persist, the
-history RPC no longer times out, all eight standard fact views are stored, and macro-sync ran. Still open: signed-in
-cold timings after #242/#243, and the 24-hour log window. See "Final state" at the end.
+Status: **verified; one target missed** (2026-11-17 12:50 UTC). Cycle-table manifests persist, the history RPC no
+longer times out, all eight standard fact views are stored, and macro-sync ran. Signed-in cold samples meet the
+cycle-table and policy-response targets; transmission is over its 1 s target (US 1,469 ms, CN 1,009 ms). Still open:
+the 24-hour log window. See "Signed-in cold samples after #242 and #243" and "Final state" at the end.
 
 ## What was rolled out
 
@@ -189,6 +190,51 @@ rows of about 6.46 MB canonical JSON. The four `macro_put_manifest_gz` calls see
 | `US_RRPONTSYD_D` | 3,368 | 2026-11-16 |
 | `US_RRPONTSYD` | 183 | 2026-10-31 |
 
+## Signed-in cold samples after #242 and #243
+
+Source: commander session, in the owner's logged-in Chrome on `www.osbornalpha.com/macro/history`, 2026-11-17, live
+sha 851f5121, `fetch` with `cache: no-store`, sequential in the order listed, no deploy in between. Not measured by this
+session. Single samples; the page load preceded the calls, so the function instance was warm but the process memo
+was empty for each key (`miss`).
+
+| call | status | total ms | `X-Macro-Strategy-View` | `X-Macro-Strategy-Memo` | bytes | target |
+| --- | ---: | ---: | --- | --- | ---: | --- |
+| `cycle-table?boundary=event_day`, first | 200 | 661 | stored | miss | 37,448 | under 5 s: met |
+| same, second | 200 | 912 | stored | hit | 37,448 | |
+| `cycle-table?boundary=month_end` | 200 | 719 | stored | miss | 37,334 | under 5 s: met |
+| `transmission?region=US` | 200 | **1,469** | stored | miss | 19,179 | under 1 s: **not met** |
+| `transmission?region=CN` | 200 | **1,009** | stored | miss | 19,424 | under 1 s: **not met** |
+| `policy-response?window=3` | 200 | 863 | stored | miss | 378,681 | under 1 s: met |
+
+Before the fixes the same uncached cycle-table call took 10–28 s and failed to persist; after #240 alone it took
+4,432 ms.
+
+### Why transmission is over 1 s on a stored view (read-only diagnosis, no change made)
+
+The stored view is not the slow part. Every stored read, whatever the route, costs about 660–910 ms here: the
+cycle-table and policy-response rows above run the same steps (session check, four parallel snapshot and publish-state
+reads, one view row read) and land in that range, and the second cycle-table call, a process-memo hit that reads no
+view row at all, still took 912 ms.
+
+Transmission is the only one of the three routes that then does more work. After the view is read,
+`transmission/route.ts` runs the judgment section, and `f4-client.ts` makes two HTTP requests, one after the other,
+to this application's own public URL (`NEXT_PUBLIC_SITE_URL`): `GET /api/judgments?subject_type=macro_region&…`,
+then `GET /api/judgments/<id>`. They are never cached (`cache: 'no-store'`; the runbook states that transmission
+recomputes judgments on every request), and each one is a separate function invocation with its own database reads.
+
+Measured from a Mac without a session, five pairs per region, 12:47 UTC: the list call took 503–1,073 ms and the detail
+call 500–901 ms (US), 504–733 ms and 500–789 ms (CN). Those totals include about 320 ms of connection and TLS setup
+and the Mac's transit, so they bound the cost rather than equal what the function pays from inside the region.
+
+Subtracting the 660–860 ms that the other stored reads took leaves roughly 600–800 ms for the judgment section in
+the US sample and 150–350 ms in the CN sample. This attribution is inferred from the route code and the comparison
+between routes; the time inside the transmission request was not measured per step, and each row is one sample.
+
+Consequence: with about 0.7–0.9 s spent before the judgment section starts, the 1 s target cannot be met by the
+stored view alone. Options, none implemented: start the judgment list call in parallel with the fact view (only the
+final mark selection needs the view's snapshot id); read the judgment card and detail in-process instead of through
+two HTTP round trips; or reduce the fixed cost shared by every route (the session check and the state reads).
+
 ## Final state
 
 Done and evidenced above:
@@ -204,10 +250,8 @@ Done and evidenced above:
 
 Not done:
 
-1. **Cold timings against the targets.** No signed-in sample has been taken since #242 and #243. The targets
-   (cycle-table under 5 s uncached, transmission and policy-response under 1 s cold) are expected to be met by a
-   stored-view read, but that is not measured. The only signed-in numbers are from before #242: cycle-table 4,432 ms,
-   transmission 2,329 ms.
+1. **Transmission cold target.** Measured at 1,469 ms (US) and 1,009 ms (CN) against 1 s; cause and options in the
+   section above. Cycle-table and policy-response meet their targets on single samples.
 2. **24 hours of natural traffic.** The log evidence covers 03:15–06:03 UTC only.
 3. **A true miss still builds.** In the first minutes after a snapshot or deploy changes the identity, before the
    cron has run, a request builds on demand: about 2.7 s of history read for cycle-table from a Mac, more with the

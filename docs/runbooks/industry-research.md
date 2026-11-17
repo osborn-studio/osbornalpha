@@ -26,6 +26,10 @@ I-3 独立前置验证：[`2026-11-07-industry-closeout.md`](../audits/2026-11-0
 
 ### US SIC 聚合（规格 §19）
 
+Envelopes use `read_facts_batch` in chunks of 40, with two chunks in flight; migration `20261201090000_facts_read_batch.sql` must be applied before this code runs in production.
+The previous 811 per-issuer calls (16 concurrent, mean 237 ms, max 7.2 s) hit the API role’s 8 s statement timeout and failed the 240 s cron after 27 s; the measured set-based statement over all 811 issuers took 24 s (about 30 ms/issuer).
+
+
 `aggregate-sic` 汇总快照日当前 SIC 成分的已披露 USD 财年数据；不是历史成分。最近三个已完成财年桶按财年结束年份归类。页面与抽屉标明 `membership_on` 和历史重建口径。无 active run 时保持分类导航。
 
 先完整计算并回放自检，零写入（不建 batch、不上传清单、不更新 freshness）：
@@ -41,7 +45,7 @@ node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate
 node --env-file=<prod.env> --import tsx scripts/industry/replay-check.ts --scheme sic --sample 50
 ```
 
-US SIC cron 从运行开始计时，预算为 240 秒；`time_budget_exceeded` 表示应改用上述脚本命令运行。在事实读取提速前，应视 cron 为不可用。脚本不设此预算。
+US SIC cron 从运行开始计时，预算为 240 秒；`time_budget_exceeded` 表示应改用上述脚本命令运行。脚本不设此预算。
 
 回执 `groups` 是 code × 财年桶数量，`cells_ok/cells_missing` 是计算状态（显示阈值不会把 ok 改成 missing）；`manifest_mismatches` 必须为 0，`read_truncated` 记录截断发行人数。dry-run 的 `preview` 给出指标计数、缺因、`industriesMinMembers`、`displayableValueCells` 与样例；只有成员 ≥5 且 `n_with_data/n_members ≥0.8` 的 ok 格在页面显示数字。apply 成功时 `status=success`（runner 已激活 active run），失败码 `facts_scope_not_ready` 表示 US 宇宙成功事实源不足 50%。回放样本任一不一致退出 1。`--scheme` 默认仍为 `sw2021`；可加 `--run <id>` 检查指定 run。
 
