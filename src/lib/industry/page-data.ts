@@ -9,7 +9,7 @@
 import {requireAdminUser} from '../admin/auth';
 import {schemeDatasetKey} from './licenses';
 import {adminReadDeps,publicReadDeps} from './public-deps';
-import {AGG_METRICS,METRIC_DURATIONS,SCHEME_VERSION,utcDate} from './read';
+import {defaultMetric,durationsForScheme,metricsForScheme,SCHEME_VERSION,utcDate} from './read';
 import type {ConstituentsQuery,DetailQuery,ListQuery,ReadDeps,Window} from './read';
 import {CODE_RE,MAX_PAGE_SIZE,MAX_PERIODS} from './route-params';
 import {forgetView,forgetViews,rememberView,rememberedView} from './stale-views';
@@ -62,13 +62,13 @@ export function codeOfPath(raw:string):string|null{
 }
 export function listQueryFromSearch(sp:SP):ListQuery&{view:'heatmap'|'table'}{
  const scheme=schemeFromSearch(sp);
- const metric=one<AggMetric>(sp.metric,AGG_METRICS,'gross_margin');
- const duration=one<AggDuration>(sp.duration,METRIC_DURATIONS[metric],METRIC_DURATIONS[metric][0]);
+ const metric=one<AggMetric>(sp.metric,metricsForScheme(scheme),defaultMetric(scheme));
+ const duration=one<AggDuration>(sp.duration,durationsForScheme(scheme,metric),durationsForScheme(scheme,metric)[0]);
  return {scheme,version:SCHEME_VERSION[scheme],level:scheme==='sic'?1:intIn(sp.level,1,3,1),metric,duration,periods:intIn(sp.periods,1,MAX_PERIODS,10),view:sp.view==='table'?'table':'heatmap'};
 }
 export function detailQueryFromSearch(scheme:Scheme,code:string,sp:SP):DetailQuery&{metric:AggMetric;duration:AggDuration;tableOnly:boolean}{
- const metric=one<AggMetric>(sp.metric,AGG_METRICS,'gross_margin');
- const duration=one<AggDuration>(sp.duration,METRIC_DURATIONS[metric],METRIC_DURATIONS[metric][0]);
+ const metric=one<AggMetric>(sp.metric,metricsForScheme(scheme),defaultMetric(scheme));
+ const duration=one<AggDuration>(sp.duration,durationsForScheme(scheme,metric),durationsForScheme(scheme,metric)[0]);
  return {scheme,version:SCHEME_VERSION[scheme],code,metrics:[metric],durations:[duration],window:one<Window>(sp.window,['5y','10y','all'],'10y'),metric,duration,tableOnly:sp.view==='table'};
 }
 export function constituentsQueryFromSearch(scheme:Scheme,code:string,sp:SP,now:Date):ConstituentsQuery{

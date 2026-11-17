@@ -79,13 +79,13 @@ describe('industryListView',()=>{
   const none=await industryListView(readDepsOf(stubIndustryDb({tree:TREE,runs:[runRow()],valuationRuns:runs,valuations:[valuationRow({published:false})]})),listQ);
   expect(none.state==='ok'&&none.kind==='aggregate'&&none.valuation.state).toBe('unpublished');
  });
- it('SIC: navigation list with member counts, no runs read',async()=>{
+ it('SIC: navigation fallback preserves the pre-aggregate shape',async()=>{
   const db=stubIndustryDb({tree:TREE});
   const runs=vi.spyOn(db,'activeMetricRun');
   const v=await industryListView(readDepsOf(db,{memberCounts:async()=>new Map([['3674',62]])}),{...listQ,scheme:'sic',version:'sec-current'});
-  expect(v).toMatchObject({state:'ok',kind:'navigation'});
+  expect(v).toEqual({state:'ok',kind:'navigation',datasetKey:'scheme:sic:sec-current',preview:false,freshness:'missing',nodes:[{code:'3674',level:1,nameZh:null,nameEn:'Semiconductors & Related Devices',parentCode:null,members:62}]});
   if(v.state==='ok'&&v.kind==='navigation')expect(v.nodes).toEqual([{code:'3674',level:1,nameZh:null,nameEn:'Semiconductors & Related Devices',parentCode:null,members:62}]);
-  expect(runs).not.toHaveBeenCalled();
+  expect(runs).toHaveBeenCalledWith('sic','sec-current',1);
  });
 });
 
@@ -293,4 +293,28 @@ describe('filterManifest / manifestDiff',()=>{
   expect(d.members).toEqual({added:[],removed:[],modified:[`${ISSUER_A}:2021-07-30::`]});
   expect(isEmptyDiff(d)).toBe(false);
  });
+});
+
+// §19: an active SIC snapshot unlocks aggregates without dropping navigation-only codes.
+describe('SIC snapshot read models',()=>{
+ const run=runRow({scheme:'sic',version:'sec-current',method_version:'industry-agg-us/1.0',expected_grid:{codes:['3674'],period_ends:['2025-12-31'],metrics:['revenue_sum'],cell_rule:'fiscal_year_bucket/1',membership_on:'2026-11-05'}});
+ const q={...listQ,scheme:'sic' as const,version:'sec-current' as const,metric:'revenue_sum' as const};
+ const cell=cellRow({code:'3674',metric:'revenue_sum',unit:'USD',value:'1200000000',n_members:6,n_with_data:5});
+ it('uses the US run, bucket ends, snapshot header and aggregate freshness',async()=>{
+  const v=await industryListView(readDepsOf(stubIndustryDb({tree:TREE,runs:[run],cells:[cell],freshness:[{dataset:'industry.agg.sic',status:'fresh',last_ok_at:'2026-11-05T00:00:00Z'}]})),q);
+  expect(v).toMatchObject({state:'ok',kind:'aggregate',freshness:'fresh',header:{membershipOn:'2026-11-05',methodVersion:'industry-agg-us/1.0'},periodEnds:['2025-12-31'],valuation:{state:'not_enabled'},cells:[{value:'1200000000',nMembers:6}]});
+ });
+ it('detail uses SIC series; a code without rows retains the old detail fallback',async()=>{
+  const deps=readDepsOf(stubIndustryDb({tree:TREE,runs:[run],cells:[cell]}));
+  const dq={scheme:q.scheme,version:q.version,code:'3674',metrics:[q.metric],durations:null,window:'all' as const};
+  expect(await industryDetailView(deps,dq)).toMatchObject({aggregated:true,header:{membershipOn:'2026-11-05'},members:{unresolved:0},series:[{value:'1200000000'}],valuation:{state:'not_enabled'}});
+  expect(await industryDetailView(readDepsOf(stubIndustryDb({tree:TREE,runs:[run]})),dq)).toMatchObject({aggregated:false,header:null,series:[],periodEnds:[]});
+ });
+});
+
+it('active SIC run keeps a navigation fallback for a code without rows',async()=>{
+ const tree=[classRow({scheme:'sic',version:'sec-current',code:'3674'}),classRow({scheme:'sic',version:'sec-current',code:'7372'})];
+ const run=runRow({scheme:'sic',version:'sec-current'});
+ const v=await industryListView(readDepsOf(stubIndustryDb({tree,runs:[run],cells:[cellRow({code:'3674'})]}),{memberCounts:async()=>new Map([['7372',2]])}),{...listQ,scheme:'sic',version:'sec-current'});
+ expect(v).toMatchObject({kind:'aggregate',nodes:[{code:'3674'},{code:'7372'}],navigationNodes:[{code:'7372',members:2}]});
 });

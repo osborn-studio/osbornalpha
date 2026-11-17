@@ -7,6 +7,7 @@ import Link from 'next/link';
 import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
 import type {AggMetric,Scheme} from '@/lib/industry/types';
+import {orderSicRows} from './row-model';
 import {CoverageCell} from './CoverageCell';
 import {cellText} from './cell-text';
 import type {Translate} from './cell-text';
@@ -15,6 +16,7 @@ import {SourceButton} from './SourceDrawer';
 import {industryPath,nodeName} from './hrefs';
 
 export function ListTable({scheme,nodes,periodEnds,cells,companion,metric,header,preview}:{scheme:Scheme;nodes:NodeView[];periodEnds:string[];cells:PublicCell[];companion:PublicCell[];metric:AggMetric;header:RunHeader;preview:boolean}){
+  nodes=scheme==='sic'?orderSicRows(nodes,cells):nodes;
   const t=useTranslations('industries');
   const locale=useLocale()==='en'?'en':'zh';
   const latest=periodEnds[periodEnds.length-1];
@@ -44,7 +46,7 @@ export function ListTable({scheme,nodes,periodEnds,cells,companion,metric,header
                 <td className="py-1.5 pl-3 sm:pl-4"><Link href={industryPath(scheme,n.code)} className="text-text hover:text-accent">{name}</Link></td>
                 <td className="hidden py-1.5 font-mono text-xs text-text-dim sm:table-cell">{n.code}</td>
                 <td className="hidden py-1.5 text-right font-mono tabular-nums sm:table-cell">{c?<>{c.nMembers} <span className="text-text-dim">({c.nUnresolved})</span></>:'—'}</td>
-                <td className="hidden py-1.5 font-mono text-xs tabular-nums text-text-dim sm:table-cell">{latest??'—'}</td>
+                <td className="hidden py-1.5 font-mono text-xs tabular-nums text-text-dim sm:table-cell">{latest?(scheme==='sic'?<span title={t('periods.fiscalTitle',{year:latest.slice(0,4)})}>FY{latest.slice(0,4)}</span>:latest):'—'}</td>
                 <td className="py-1.5 text-right">{payload?<SourceButton payload={payload} label={label(name,c!)}><CoverageCell cell={c} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
                 <td className="py-1.5 text-right font-mono text-xs tabular-nums text-text-dim">{c?`${c.nWithData}/${c.nMembers+c.nUnresolved}`:'—'}</td>
                 <td className="py-1.5 text-right">

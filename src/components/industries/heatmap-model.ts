@@ -14,6 +14,8 @@ export type HeatText=
  |{kind:'value';text:string}
  |{kind:'insufficient';n:number;d:number}
  |{kind:'unresolved';n:number}
+ |{kind:'members';n:number}
+ |{kind:'coverageSic';n:number;d:number}
  |{kind:'missing';reason:MissingReason|'absent'};
 export interface HeatCell{periodEnd:string;cell:PublicCell|null;text:HeatText;alpha:number|null;mobileHidden:boolean}
 export interface HeatRow{node:NodeView;cells:HeatCell[]}
@@ -29,9 +31,11 @@ export const brassBackground=(alpha:number)=>`color-mix(in srgb, var(--accent) $
 export function heatText(c:PublicCell|null,metric:AggMetric,locale:Locale):HeatText{
  if(!c)return {kind:'missing',reason:'absent'};
  if(c.display==='missing')return {kind:'missing',reason:c.missingReason??'empty_set'};
+ if(c.display==='members')return {kind:'members',n:c.nMembers};
+ if(c.display==='coverageSic')return {kind:'coverageSic',n:c.nWithData,d:c.nMembers};
  if(c.display==='unresolved')return {kind:'unresolved',n:c.nUnresolved};
  if(c.display==='insufficient')return {kind:'insufficient',n:c.nWithData,d:c.nMembers+c.nUnresolved};
- return {kind:'value',text:formatMetricValue(metric,c.value??'',locale)};
+ return {kind:'value',text:formatMetricValue(metric,c.value??'',locale,c.unit)};
 }
 
 /** Rows in node order; the last `mobileColumns` period ends stay visible below 640px (canvas M-List). */

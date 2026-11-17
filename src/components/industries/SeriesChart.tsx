@@ -16,7 +16,7 @@ import type {SeriesPoint} from './series-model';
 export function SeriesChart({scheme,node,metric,points,header,preview,tableOnly}:{scheme:Scheme;node:NodeView;metric:AggMetric;points:SeriesPoint[];header:RunHeader;preview:boolean;tableOnly:boolean}){
   const t=useTranslations('industries');
   const locale=useLocale()==='en'?'en':'zh';
-  const g=seriesGeometry(points,metric,locale);
+  const g=seriesGeometry(points,metric,locale,undefined,scheme);
   const name=nodeName(node,locale);
   const label=(periodEnd:string,cell:PublicCell|null)=>t('heatmap.cellTitle',{industry:name,period:periodEnd,metric:t(`metrics.${metric}`),value:cellText(cell,metric,locale,t as unknown as Translate)});
   const payload=(cell:PublicCell)=>({kind:'aggregate' as const,scheme,code:node.code,nodeName:name,cell,header,preview});
@@ -28,7 +28,7 @@ export function SeriesChart({scheme,node,metric,points,header,preview,tableOnly}
         <tbody>
           {[...points].reverse().map(p=>(
             <tr key={p.periodEnd} className="border-t border-border">
-              <td className="py-1 font-mono text-xs tabular-nums text-text-dim">{p.periodEnd}</td>
+              <td className="py-1 font-mono text-xs tabular-nums text-text-dim">{scheme==='sic'?<span title={t('periods.fiscalTitle',{year:p.periodEnd.slice(0,4)})}>FY{p.periodEnd.slice(0,4)}</span>:p.periodEnd}</td>
               <td className="py-1 text-right">{p.cell?<SourceButton payload={payload(p.cell)} label={label(p.periodEnd,p.cell)}><CoverageCell cell={p.cell} metric={metric} /></SourceButton>:<CoverageCell cell={null} metric={metric} />}</td>
               <td className="py-1 text-right font-mono text-xs tabular-nums text-text-dim">{p.cell?`${p.cell.nWithData}/${p.cell.nMembers+p.cell.nUnresolved}`:'—'}</td>
             </tr>

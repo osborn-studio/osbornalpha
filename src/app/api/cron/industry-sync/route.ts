@@ -4,8 +4,8 @@
 // {skipped:'deferred_i3'}. Gates (jobs.ts::jobGate): Tushare jobs without TUSHARE_TOKEN → 503
 // tushare_unavailable; facts-scope / aggregate without their CN flags → 403 job_disabled (owner
 // default E: they are not in vercel.json either). A missing code_version refuses the run. The HTTP
-// receipt carries codes and counts only (no error messages). Only memberships-sic is scheduled
-// (vercel.json, daily 02:00 UTC, limit 200; spec §18 #69); everything else is a script until the owner enables it.
+// receipt carries codes and counts only (no error messages). memberships-sic runs daily 02:00 UTC
+// (limit 200; spec §18 #69); aggregate-sic runs weekly Sunday 04:30 UTC with no CN gate (§19).
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';

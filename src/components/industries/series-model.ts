@@ -6,7 +6,7 @@
 import {formatMetricValue} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
-import type {AggMetric} from '@/lib/industry/types';
+import type {AggMetric,Scheme} from '@/lib/industry/types';
 
 export interface SeriesPoint{periodEnd:string;cell:PublicCell|null}
 export interface SeriesGeometry{
@@ -18,7 +18,7 @@ export interface SeriesGeometry{
 const plotted=(c:PublicCell|null):c is PublicCell=>!!c&&c.status==='ok'&&c.display==='value'&&c.value!==null&&Number.isFinite(Number(c.value));
 const r1=(n:number)=>Math.round(n*10)/10;
 
-export function seriesGeometry(points:SeriesPoint[],metric:AggMetric,locale:Locale,size:{width:number;height:number}={width:780,height:300}):SeriesGeometry{
+export function seriesGeometry(points:SeriesPoint[],metric:AggMetric,locale:Locale,size:{width:number;height:number}={width:780,height:300},scheme:Scheme='sw2021'):SeriesGeometry{
  const pad={l:64,r:12,t:16,b:32};
  const w=size.width-pad.l-pad.r,h=size.height-pad.t-pad.b;
  const vals=points.filter(p=>plotted(p.cell)).map(p=>Number(p.cell!.value));
@@ -36,9 +36,9 @@ export function seriesGeometry(points:SeriesPoint[],metric:AggMetric,locale:Loca
   dots.push({x:px,y:py,periodEnd:p.periodEnd,cell:p.cell});
  });
  if(cur.length)segments.push(cur.join(' '));
- const yTicks=[0,1,2,3].map(k=>{const v=lo+(hi-lo)*k/3;return {y:y(v),label:formatMetricValue(metric,v.toFixed(10),locale)};});
+ const yTicks=[0,1,2,3].map(k=>{const v=lo+(hi-lo)*k/3;return {y:y(v),label:formatMetricValue(metric,v.toFixed(10),locale,points.find(p=>p.cell)?.cell?.unit)};});
  const step=Math.max(1,Math.ceil(points.length/10));
  const allYearEnds=points.every(p=>p.periodEnd.endsWith('-12-31'));
- const xLabels=points.flatMap((p,i)=>i%step===0||i===points.length-1?[{x:x(i),label:allYearEnds?p.periodEnd.slice(0,4):p.periodEnd.slice(0,7)}]:[]);
+ const xLabels=points.flatMap((p,i)=>i%step===0||i===points.length-1?[{x:x(i),label:scheme==='sic'?`FY${p.periodEnd.slice(0,4)}`:allYearEnds?p.periodEnd.slice(0,4):p.periodEnd.slice(0,7)}]:[]);
  return {width:size.width,height:size.height,pad,segments,dots,yTicks,xLabels};
 }

@@ -32,7 +32,7 @@ async function main(){
  const args=parsed.args;
  if(DEFERRED_JOBS.has(args.job)){console.log(JSON.stringify({job:args.job,skipped:'deferred_i3',note:'verification items 1/2 open; see docs/runbooks/industry-research.md'},null,1));process.exit(0);}
  if(args.job==='memberships-sw'){
-  console.error(`memberships-sw operation plan: source L1=${args.l1Codes.length?args.l1Codes.join(','):'all stored L1'}; apply: classifications=all SW2021, resolver=global (including delisting reconciliation), separate stage batches; job deadline=none. --l1 is not a whole-job write bound. dry-run=source plan from stored classifications only (may fetch provider pages); does not execute or estimate the global resolver. This is not a coverage/readiness check.`);
+  console.error(`memberships-sw operation plan: source L1=${args.l1Codes.length?args.l1Codes.join(','):'all L1'}; apply: classifications=all SW2021, resolver=global (including delisting reconciliation), separate stage batches; job deadline=none. --l1 is not a whole-job write bound. dry-run=source plan with in-memory classification fetch when storage is empty (may fetch provider pages); does not execute or estimate the global resolver. This is not a coverage/readiness check.`);
  }
  const gate=jobGate(args.job,process.env,{apply:args.apply});
  if(gate){console.error(`${gate.code}: ${gate.message}`);process.exit(2);}

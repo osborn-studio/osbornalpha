@@ -11,6 +11,8 @@
 // E2E run sees the "not reproduced" state too. Values are synthetic layout data, not facts.
 import {cookies} from 'next/headers';
 import type {FactRow} from '../facts/types';
+import {computeAggregateCellUs} from './aggregate-us';
+import {CONFIG_HASH_US,METHOD_VERSION_US,expectedGridUs} from './method-us';
 import {computeAggregateCell} from './aggregate';
 import type {IssuerFacts} from './aggregate';
 import {BATCH,ISSUER_A,ISSUER_B,cellRow,classRow,membershipRow,runRow,stubIndustryDb} from './fixture-rows';
@@ -29,6 +31,7 @@ async function swLicensed():Promise<boolean>{
  try{return (await cookies()).get(E2E_COOKIE)?.value!=='unlicensed';}catch{return true;}
 }
 const RUN=runRow();
+const SIC_RUN=runRow({run_id:'22222222-2222-4222-8222-222222222222',scheme:'sic',version:'sec-current',method_version:METHOD_VERSION_US,config_hash:CONFIG_HASH_US,expected_grid:expectedGridUs(['3674','7372'],RUN.facts_as_of)});
 const YEARS=['2023','2024','2025'] as const;
 let seq=0;
 const fact=(issuer:string,concept:'revenue_operating'|'cost_of_revenue',year:string,value:string):FactRow=>({fact_id:`e2e-${String(++seq).padStart(5,'0')}`,issuer_id:issuer,market:'CN',
@@ -70,12 +73,25 @@ for(const year of YEARS)for(const g of SPECS(year)){
    value:c.status==='ok'?(tampered?E2E_TAMPERED.storedValue:c.value_text??null):null,unit:c.unit,n_members:c.n_members,n_with_data:c.n_with_data,n_unresolved:c.n_unresolved,manifest_hash:c.status==='ok'?hash:null}));
  }
 }
+// Synthetic US data: fiscal ends in September to exercise bucket-aware replay filtering.
+for(const year of YEARS)for(const [code,n] of [['3674',6],['7372',2]] as const){
+ const ids=Array.from({length:n},(_,i)=>`sic-${code}-${i}`);
+ const issuers=new Map<string,IssuerFacts>(ids.map(id=>[id,{issuer_id:id,stateRev:1,truncated:false,derived:[],rows:[
+  {...fact(id,'revenue_operating',year,'1000000000'),market:'US',concept:'revenue',source_concept:'revenue',unit:'USD',period_start:`${Number(year)-1}-10-01`,period_end:`${year}-09-30`},
+  {...fact(id,'cost_of_revenue',year,'400000000'),market:'US',concept:'gross_profit',source_concept:'gross_profit',unit:'USD',period_start:`${Number(year)-1}-10-01`,period_end:`${year}-09-30`},
+ ]}]));
+ const result=computeAggregateCellUs({code,period_end:`${year}-12-31`,members:ids,issuers});
+ const m=buildAggregateManifest({header:{scheme:'sic',version:'sec-current',code,level:1,period_end:`${year}-12-31`,facts_as_of:SIC_RUN.facts_as_of,knowledge_date:SIC_RUN.knowledge_date,history_class:'reconstruction',method_version:METHOD_VERSION_US,config_hash:CONFIG_HASH_US,formula_version:SIC_RUN.formula_version,code_version:SIC_RUN.code_version},members:ids.map(id=>memberOf(id,null)),unresolved:[],memberStateRevs:ids.map(issuer_id=>({issuer_id,state_rev:1})),result,filings:new Map()});
+ const hash=encodeManifest(m).hash;MANIFESTS.set(hash,m);
+ for(const c of m.cells)cells.push(cellRow({run_id:SIC_RUN.run_id,code,metric:c.metric,duration:c.duration,period_start:c.period_start,period_end:m.period_end,status:c.status,missing_reason:c.missing_reason??null,value:c.value_text??null,unit:c.unit,n_members:c.n_members,n_with_data:c.n_with_data,n_unresolved:0,manifest_hash:c.status==='ok'?hash:null}));
+}
 /** The fixture's cells and their manifests (tests assert every ok cell but E2E_TAMPERED replays exactly). */
-export const e2eCells=():MetricCellRow[]=>cells.map(c=>({...c}));
+export const e2eCells=():MetricCellRow[]=>cells.filter(c=>c.run_id===RUN.run_id).map(c=>({...c}));
 export const e2eManifest=(hash:string):AggregateManifest=>{const m=MANIFESTS.get(hash);if(!m)throw new Error(`manifest_not_found:${hash}`);return m;};
 const TREE=[
  classRow(),classRow({code:'801080.SI',name_zh:'电子'}),classRow({code:'801780.SI',name_zh:'银行'}),
  classRow({code:'801124.SI',level:2,name_zh:'食品加工',parent_code:'801120.SI'}),classRow({code:'850111.SI',level:3,name_zh:'白酒Ⅲ',parent_code:'801124.SI'}),
+ classRow({scheme:'sic',version:'sec-current',code:'7372',name_zh:null,name_en:'Prepackaged Software'}),
  classRow({scheme:'sic',version:'sec-current',code:'3674',name_zh:null,name_en:'Semiconductors & Related Devices'}),
 ];
 const MEMBERS=[
@@ -85,8 +101,8 @@ const MEMBERS=[
 const CARDS=new Map<string,IssuerCard>([[ISSUER_A,{issuerId:ISSUER_A,nameZh:'贵州茅台',nameEn:'Kweichow Moutai',ticker:'600519.SH'}],[ISSUER_B,{issuerId:ISSUER_B,nameZh:'古越龙山',nameEn:null,ticker:'600059.SH'}]]);
 
 function fixtureDb(now:Date):ReadDb{
- const base=stubIndustryDb({tree:TREE,runs:[RUN],cells,memberships:MEMBERS,
-  freshness:[{dataset:'industry.agg.sw2021',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:'industry.sw2021.memberships',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()}]});
+ const base=stubIndustryDb({tree:TREE,runs:[RUN,SIC_RUN],cells,memberships:MEMBERS,
+  freshness:[{dataset:'industry.agg.sic',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:'industry.agg.sw2021',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:'industry.sw2021.memberships',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()}]});
  return {...base,isDatasetPublic:async k=>k==='scheme:sic:sec-current'||(k==='scheme:sw2021:2021'&&await swLicensed())};
 }
 export function fixtureReadDeps(now:Date,preview=false):ReadDeps{
@@ -95,7 +111,7 @@ export function fixtureReadDeps(now:Date,preview=false):ReadDeps{
 }
 export function fixtureReplayDeps(now:Date):ReplayDeps{
  const db=fixtureDb(now);
- return {db:{...db,metricRunVisible:async r=>r===RUN.run_id&&await db.isDatasetPublic('scheme:sw2021:2021')},manifests:{get:async h=>e2eManifest(h)},
+ return {db:{...db,metricRunVisible:async r=>r===SIC_RUN.run_id||r===RUN.run_id&&await db.isDatasetPublic('scheme:sw2021:2021')},manifests:{get:async h=>e2eManifest(h)},
   recompute:async q=>{const hit=cells.find(c=>c.code===q.code&&c.period_end===q.periodEnd&&c.manifest_hash!==null);return e2eManifest(hit!.manifest_hash!);},now};
 }
 export function fixtureValuationReplayDeps():ValuationReplayDeps{

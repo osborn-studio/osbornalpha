@@ -155,3 +155,22 @@ describe('modal drawer focus flow',()=>{
   expect(()=>presentModal(dialog,null,null)()).not.toThrow();
  });
 });
+
+it('SIC heatmap and table preserve source cells while suppressing numbers and colour',()=>{
+ const cells=[publicCell(cellRow({code:'3674',n_members:2,n_with_data:2,n_unresolved:0,metric:'revenue_sum',unit:'USD',value:'1200000000'}),'sic'),publicCell(cellRow({code:'7372',n_members:6,n_with_data:4,n_unresolved:0,metric:'revenue_sum',unit:'USD'}),'sic')];
+ const rows=heatmapModel([node('3674','a'),node('7372','b')],['2025-12-31'],cells,'revenue_sum','en');
+ expect(rows.map(r=>[r.cells[0].text,r.cells[0].alpha])).toEqual([[{kind:'members',n:2},null],[{kind:'coverageSic',n:4,d:6},null]]);
+ const t=(key:string,v?:Record<string,string|number>)=>`${key}:${JSON.stringify(v)}`;
+ expect(cellText(cellAt(cells,'3674','2025-12-31'),'revenue_sum','en',t)).toBe('coverage.tooFewMembers:{"n":2}');
+ expect(cellText(cellAt(cells,'7372','2025-12-31'),'revenue_sum','en',t)).toBe('coverage.lowCoverage:{"n":4,"d":6}');
+ expect(cellText(publicCell(cellRow({n_members:6,n_with_data:6,n_unresolved:0,metric:'revenue_sum',value:'1200000000',unit:'USD'}),'sic'),'revenue_sum','en',t)).toBe('1.20 bn USD');
+});
+it('SIC drawer supports original replay only',()=>{
+ const p={kind:'aggregate' as const,scheme:'sic' as const,code:'3674',nodeName:'chips',cell:publicCell(cellRow(),'sic'),header:runHeader(runRow()),preview:false};
+ expect(replayUrl(p,'original')).toContain('/sic/3674/replay?');expect(replayUrl(p,'recompute')).toBeNull();
+});
+
+it('SIC internal preview carries its scheme to admin original replay',()=>{
+ const p={kind:'aggregate' as const,scheme:'sic' as const,code:'3674',nodeName:'chips',cell:publicCell(cellRow({metric:'net_margin'}),'sic'),header:runHeader(runRow()),preview:true};
+ expect(replayUrl(p,'original')).toContain('scheme=sic');expect(replayUrl(p,'recompute')).toBeNull();
+});

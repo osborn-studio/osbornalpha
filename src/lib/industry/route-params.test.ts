@@ -49,3 +49,12 @@ describe('replay rate limiter',()=>{
   expect(clientIp(new Request('https://x/'))).toBe('unknown');
  });
 });
+
+it('SIC catalogue validates metrics and annual-only durations per scheme',()=>{
+ expect(metricOf(P({}),undefined,'sic')).toBe('revenue_sum');
+ expect(metricOf(P({metric:'net_margin'}),null,'sic')).toBe('net_margin');
+ bad(()=>metricOf(P({metric:'roe'}),null,'sic'),'metric');
+ bad(()=>metricOf(P({metric:'net_margin'}),null,'sw2021'),'metric');
+ bad(()=>durationOf(P({duration:'3M'}),'revenue_sum','sic'),'duration');
+ expect(metricsOf(P({}),'sic')).toEqual(['revenue_sum','net_income_parent_sum','gross_margin','net_margin','revenue_yoy','net_income_yoy','member_count']);
+});

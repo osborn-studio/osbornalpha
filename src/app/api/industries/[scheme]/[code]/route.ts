@@ -19,7 +19,7 @@ export async function GET(req:Request,{params}:{params:Promise<{scheme:string;co
  try{
   const scheme=schemeOf(raw.scheme);
   const p=readParams(new URL(req.url),PARAMS);
-  q={scheme,version:versionOf(p,scheme),code:codeOf(raw.code),metrics:metricsOf(p),durations:durationsOf(p),window:windowOf(p)};
+  q={scheme,version:versionOf(p,scheme),code:codeOf(raw.code),metrics:metricsOf(p,scheme),durations:durationsOf(p,scheme),window:windowOf(p)};
  }catch(e){const r=paramErrorResponse(e);if(r)return r;throw e;}
  try{
   const v=await industryDetailView(publicReadDeps(now),q);

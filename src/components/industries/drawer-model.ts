@@ -17,8 +17,9 @@ export interface RecomputePayload{result:'match'|'changed';diff:ReplayDiff}
 const qs=(o:Record<string,string>)=>Object.entries(o).map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
 /** Public replay route; the admin preview reads the admin route (original only: recompute is public-only). */
 export function replayUrl(p:AggregatePayload,mode:'original'|'recompute'):string|null{
+ if(p.scheme==='sic'&&mode==='recompute')return null;
  const c=p.cell;
- if(p.preview)return mode==='original'?`/api/admin/industries/replay?${qs({runId:p.header.runId,code:p.code,periodEnd:c.periodEnd,metric:c.metric,duration:c.duration})}`:null;
+ if(p.preview)return mode==='original'?`/api/admin/industries/replay?${qs({runId:p.header.runId,code:p.code,periodEnd:c.periodEnd,metric:c.metric,duration:c.duration,...(p.scheme==='sic'?{scheme:p.scheme}:{})})}`:null;
  return `/api/industries/${p.scheme}/${encodeURIComponent(p.code)}/replay?${qs({runId:p.header.runId,metric:c.metric,duration:c.duration,periodEnd:c.periodEnd,mode})}`;
 }
 export function valuationReplayUrl(p:Extract<DrawerPayload,{kind:'valuation'}>):string|null{

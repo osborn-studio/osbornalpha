@@ -3,10 +3,10 @@
 // thresholds, §8.2 cell states, §11 "missing is never shown as 0"). Thresholds are compared as exact
 // rationals and values are formatted by string arithmetic: no value passes through a JS number
 // (plan contract: decimal strings end to end).
-import {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE} from './method-constants';   // NOT ./method: it hashes via node:crypto and this file is rendered by client components
+import {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE,DISPLAY_MIN_MEMBERS_SIC} from './method-constants';   // NOT ./method: it hashes via node:crypto and this file is rendered by client components
 import type {AggMetric,CellStatus,ValuationCellRow} from './types';
 
-export type CellDisplay='value'|'insufficient'|'unresolved'|'missing';
+export type CellDisplay='value'|'insufficient'|'unresolved'|'missing'|'members'|'coverageSic';
 export type Locale='zh'|'en';
 
 function fraction(x:number|string):{n:bigint;d:bigint}{
@@ -34,6 +34,16 @@ export function cellDisplay(c:CountedCell):CellDisplay{
  if(ratioAbove(c.n_unresolved,den,DISPLAY_MAX_UNRESOLVED))return 'unresolved';
  if(!ratioAtLeast(c.n_with_data,den,DISPLAY_MIN_COVERAGE))return 'insufficient';
  return 'value';
+}
+
+/** §19.6: SIC uses the snapshot member count alone as its denominator. */
+export function displayFlagsSic(c:Pick<CountedCell,'n_members'|'n_with_data'>):{membersOk:boolean;coverageOk:boolean}{
+ return {membersOk:BigInt(c.n_members)>=BigInt(DISPLAY_MIN_MEMBERS_SIC),coverageOk:c.n_members>0&&ratioAtLeast(c.n_with_data,c.n_members,DISPLAY_MIN_COVERAGE)};
+}
+export function cellDisplaySic(c:CountedCell):CellDisplay{
+ if(c.status!=='ok')return 'missing';
+ const flags=displayFlagsSic(c);
+ return !flags.membersOk?'members':!flags.coverageOk?'coverageSic':'value';
 }
 
 /**
@@ -74,7 +84,7 @@ export function formatWith(f:ValueFormat,value:string,locale:Locale):string{
  const signed=f.signed&&!body.startsWith('-')&&/[1-9]/.test(body)?`+${body}`:body;
  return `${signed}${f.suffix[locale]}`;
 }
-export const formatMetricValue=(metric:AggMetric,value:string,locale:Locale)=>formatWith(METRIC_FORMAT[metric],value,locale);
+export const formatMetricValue=(metric:AggMetric,value:string,locale:Locale,unit?:string)=>formatWith(unit==='USD'?USD_BN:METRIC_FORMAT[metric],value,locale);
 export const formatValuation=(metric:ValuationCellRow['metric'],value:string,locale:Locale)=>formatWith(VALUATION_FORMAT[metric],value,locale);
 /** Fact money in the constituents table: CNY in 亿, USD in billions; any other unit verbatim. */
 export function formatMoney(value:string,unit:string,locale:Locale):string{

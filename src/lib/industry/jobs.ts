@@ -105,7 +105,10 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
   }
   case 'memberships-sw':{
    // B3 composition: classifications → source records → resolution (each its own batch, weekly freshness)
-   if(opts.dryRun)return {job,receipt:batchReceipt(await runMembershipsSw(deps,{apply:false,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}))};
+   if(opts.dryRun){
+    const r=await runMembershipsSw(deps,{apply:false,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}),receipt=batchReceipt(r);
+    return {job,receipt:{...receipt,counts:{...receipt.counts,...prefixed(r.classificationCounts??{},'classifications.level_'),planned_source_fetches:r.plannedSourceFetches??0}}};
+   }
    const steps:{name:string;receipt:RunnerReceipt}[]=[{name:'classifications',receipt:batchReceipt(await runClassificationsSw(deps,{triggeredBy,...captureOf(deps)}))}];
    if(!stepFailed(steps[0].receipt)){
     steps.push({name:'source',receipt:batchReceipt(await runMembershipsSw(deps,{apply:true,l1Codes:opts.l1Codes,triggeredBy,...captureOf(deps)}))});
