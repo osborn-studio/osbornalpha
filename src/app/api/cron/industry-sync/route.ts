@@ -4,14 +4,14 @@
 // {skipped:'deferred_i3'}. Gates (jobs.ts::jobGate): Tushare jobs without TUSHARE_TOKEN → 503
 // tushare_unavailable; facts-scope / aggregate without their CN flags → 403 job_disabled (owner
 // default E: they are not in vercel.json either). A missing code_version refuses the run. The HTTP
-// receipt carries codes and counts only (no error messages). Only memberships-sic is scheduled
-// (vercel.json, daily 02:00 UTC, limit 200; spec §18 #69); everything else is a script until the owner enables it.
+// receipt carries codes and counts only (no error messages). memberships-sic runs daily 02:00 UTC
+// (limit 200; spec §18 #69); aggregate-sic runs weekly Sunday 04:30 UTC with no CN gate (§19).
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import {DEFERRED_JOBS,isIndustryJob,jobGate,productionIndustryDeps,runIndustryJob} from '@/lib/industry/jobs';
 import type {RunnerReceipt} from '@/lib/industry/jobs';
-import {IndustryDbError} from '@/lib/industry/types';
+import {IndustryDbError} from '@/lib/industry/types-us';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;
@@ -43,7 +43,7 @@ async function run(request:Request):Promise<NextResponse>{
  const codeVersion=resolveCodeVersion({allowGit:false});
  if(!codeVersion)return err('code_version_unavailable','VERCEL_GIT_COMMIT_SHA not set',503);
  try{
-  const result=await runIndustryJob(job,productionIndustryDeps({codeVersion}),{dryRun:false,triggeredBy:'cron',limit});
+  const result=await runIndustryJob(job,productionIndustryDeps({codeVersion}),{dryRun:false,triggeredBy:'cron',limit,...(job==='aggregate-sic'?{deadlineMs:240000}:{})});
   if('skipped' in result)return NextResponse.json({ok:true,job,skipped:result.skipped,started_at:started.toISOString()},{headers:{'Cache-Control':'no-store'}});
   return NextResponse.json({ok:result.receipt.status==='success',job,limit:limit??null,started_at:started.toISOString(),receipt:publicReceipt(result.receipt)},{headers:{'Cache-Control':'no-store'}});
  }catch(e){

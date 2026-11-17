@@ -18,7 +18,7 @@ import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
 import {industrySubjectKey,judgmentsEnabled} from '@/lib/industry/judgment-contract';
 import {codeOfPath,detailQueryFromSearch,loadView,schemeOfPath} from '@/lib/industry/page-data';
-import {AGG_METRICS,METRIC_DURATIONS,industryDetailView} from '@/lib/industry/read';
+import {metricsForScheme,durationsForScheme,industryDetailView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
@@ -51,10 +51,11 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
                   <span className="rounded-[4px] border border-border px-2 py-0.5">{t(`schemes.${scheme}`)}</span>
                   <span className="rounded-[4px] border border-border px-2 py-0.5">{t(`levels.${v.node.level}`)}</span>
                   {scheme==='sw2021'&&locale==='en'&&<span>{t('detail.namesNote')}</span>}
-                  {scheme==='sic'&&<span className="rounded-[4px] border border-warn px-2 py-0.5 text-warn">{t('stock.currentOnly')}</span>}
+                  {scheme==='sic'&&!v.aggregated&&<span className="rounded-[4px] border border-warn px-2 py-0.5 text-warn">{t('stock.currentOnly')}</span>}
                 </div>
               </div>
             </section>
+            {v.header?.membershipOn&&<StateNotice kind="snapshotConstituents" values={{date:v.header.membershipOn}} />}
             <RunHeaderBar header={v.header} freshness={v.freshness} />
             {v.header?.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" />}
             {v.freshness==='stale'&&v.header&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
@@ -70,8 +71,8 @@ export default async function IndustryDetailPage({params,searchParams}:{params:P
               {!v.aggregated||!v.header?<StateNotice kind="empty" body={t('detail.notAggregated')} />:(
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    <LinkSegment label={t('controls.metric')} current={metric} options={AGG_METRICS.map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(path,search,{metric:m,duration:undefined})}))} />
-                    <LinkSegment label={t('controls.basis')} current={duration} options={METRIC_DURATIONS[metric].map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(path,search,{duration:d})}))} />
+                    <LinkSegment label={t('controls.metric')} current={metric} options={metricsForScheme(scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(path,search,{metric:m,duration:undefined})}))} />
+                    <LinkSegment label={t('controls.basis')} current={duration} options={durationsForScheme(scheme,metric).map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(path,search,{duration:d})}))} />
                     <LinkSegment label={t('controls.window')} current={q.window} options={(['5y','10y','all'] as const).map(w=>({value:w,label:t(`windows.${w}`),href:hrefWith(path,search,{window:w==='10y'?undefined:w})}))} />
                     <LinkSegment label={t('controls.view')} current={tableOnly?'table':'chart'} options={[{value:'chart',label:t('controls.chartAndTable'),href:hrefWith(path,search,{view:undefined})},{value:'table',label:t('controls.tableOnly'),href:hrefWith(path,search,{view:'table'})}]} />
                   </div>

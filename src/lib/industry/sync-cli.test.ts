@@ -23,11 +23,11 @@ describe('industry sync CLI operation bounds',()=>{
   expect(r.stderr).toContain('tushare_unavailable');
   expect(r.stderr.indexOf('memberships-sw operation plan')).toBeLessThan(r.stderr.indexOf('tushare_unavailable'));
  });
- it('explains that dry-run is a source-only stored-classification plan',()=>{
+ it('explains that dry-run loads missing classifications in memory for its source plan',()=>{
   const r=cli(['--job','memberships-sw']);
   expect(r.status).toBe(2);
-  expect(r.stderr).toContain('dry-run=source plan from stored classifications only');
-  expect(r.stderr).toContain('source L1=all stored L1');
+  expect(r.stderr).toContain('dry-run=source plan with in-memory classification fetch when storage is empty');
+  expect(r.stderr).toContain('source L1=all L1');
   expect(r.stderr).toContain('does not execute or estimate the global resolver');
  });
 });

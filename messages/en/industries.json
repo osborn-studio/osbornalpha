@@ -41,7 +41,8 @@
     "roe": "ROE (TTM)",
     "revenue_yoy": "Revenue YoY",
     "net_income_yoy": "Net income YoY",
-    "member_count": "Members"
+    "member_count": "Members",
+    "net_margin": "Net margin"
   },
   "durations": {
     "12M": "Annual",
@@ -131,6 +132,10 @@
     "noMembers": {
       "title": "No known members on this date",
       "body": "No member is valid on {on} by the evidence known today."
+    },
+    "snapshotConstituents": {
+      "title": "Snapshot constituents",
+      "body": "Rebuilt from the SIC constituents as of {date}: sums of these companies' reported fiscal years, not historical membership."
     }
   },
   "missing": {
@@ -150,7 +155,9 @@
     "read_truncated": "read truncated",
     "version_inconsistent": "version inconsistent",
     "not_in_comparable_set": "not in comparable set",
-    "financial_excluded": "financials excluded"
+    "financial_excluded": "financials excluded",
+    "ambiguous_period": "Ambiguous fiscal period",
+    "period_mismatch": "Period mismatch"
   },
   "coverage": {
     "unresolved": "{n} unresolved",
@@ -159,7 +166,9 @@
     "legendHigh": "High",
     "legendInsufficient": "coverage below 0.8",
     "legendUnresolved": "unresolved above 5%",
-    "legendMissing": "missing (hover for the reason)"
+    "legendMissing": "missing (hover for the reason)",
+    "tooFewMembers": "Too few members {n}<5",
+    "lowCoverage": "Low coverage {n}/{d}"
   },
   "heatmap": {
     "label": "Heatmap",
@@ -380,6 +389,10 @@
     "pe_ttm": "Σ market cap / Σ ttm_net_income_parent",
     "pe_static": "Σ market cap / Σ net_income_parent (12M)",
     "pb": "Σ market cap / Σ equity_parent",
-    "market_cap": "Σ close × total_share"
+    "market_cap": "Σ close × total_share",
+    "net_margin": "Σ net income attributable to parent / Σ revenue"
+  },
+  "periods": {
+    "fiscalTitle": "fiscal years ending in {year}"
   }
 }

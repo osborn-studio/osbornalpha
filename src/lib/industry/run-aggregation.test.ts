@@ -14,8 +14,8 @@ import {replayFromManifest} from './replay';
 import {buildCellManifest,runIndustryAggregation} from './run-aggregation';
 import type {AggregationOptions} from './run-aggregation';
 import {CONFIG_HASH,METHOD_VERSION} from './method';
-import {IndustryDbError} from './types';
-import type {ClassificationRow,IndustryDb,IndustryDeps,ManifestStore} from './types';
+import {IndustryDbError} from './types-us';
+import type {ClassificationRow,IndustryDb,IndustryDeps,ManifestStore} from './types-us';
 
 // ---- fixture: one food industry (3 members + 1 unresolved record) and one bank industry (2 members) ----
 const FOOD='801120.SI',BANK='801780.SI';
@@ -91,6 +91,14 @@ const rowsOf=async(run:string)=>db.metricRowsOfRun(run);
 const val=async(run:string,code:string,metric:string,duration:string,pe:string)=>(await rowsOf(run)).find(r=>r.code===code&&r.metric===metric&&r.duration===duration&&r.period_end===pe)!;
 
 describe('runIndustryAggregation',()=>{
+ it('dry run computes cells and self-checks manifests with no writes',async()=>{
+  const snapshot=JSON.stringify((tables as unknown as {rows(t:string):unknown[]}).rows('ingest_batches'));
+  const r=await runIndustryAggregation(deps,{...OPTS,dryRun:true});
+  expect(r).toMatchObject({status:'dry_run',batchId:null,runId:null,groups:8,cells:{ok:24,missing:34}});
+  expect(JSON.stringify((tables as unknown as {rows(t:string):unknown[]}).rows('ingest_batches'))).toBe(snapshot);
+  expect(manifests.objects.size).toBe(0);expect(await db.activeMetricRun('sw2021','2021',1)).toBeNull();
+  expect((tables as unknown as {rows(t:string):unknown[]}).rows('dq_freshness')).toEqual([]);
+ });
  it('refuses to run without a code version and writes nothing',async()=>{
   const r=await runIndustryAggregation({...deps,codeVersion:null},OPTS);
   expect(r).toMatchObject({status:'rejected',code:'code_version_missing',batchId:null,runId:null});
