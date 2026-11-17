@@ -159,18 +159,79 @@ Final reads (replay check on the active run, freshness row, logged-out page stat
    - The drawer formula for revenue reads "Σ revenue (quarterly: q_single_revenue)" (`formulas.revenue_sum`); the
      quarterly clause is the CN method and does not apply to the 12M-only US run. Fix: a scheme-specific formula
      string for SIC.
-2. **Cron path not exercised.** `/api/cron/industry-sync?job=aggregate-sic` first fires on Sunday 2026-11-22 04:30.
-   From this machine the job takes 15–18 minutes; the route has a 240 s budget and answers
-   `time_budget_exceeded` without publishing when it runs out. In-region runtime is unmeasured. If the cron run
-   fails, the active run stays, freshness turns stale after its weekly cadence, and the script load above is the
-   fallback.
+2. **Cron path — exercised, passes (2026-11-17 15:06).** See §10.
 3. **Playwright `sic` spec** was written but never run against a live stack.
 
 ## 9. Follow-ups
 
-- Add `20261130090000_industry_us_aggregates.sql` to `supabase/migrations.lock.json` (order with the other unlocked
-  migrations).
-- Make the aggregate run fit the cron budget: batched fact reads and manifest uploads account for about 95 % of the
-  wall time.
-- Re-run `aggregate-sic` after the remaining 81 issuers have synced.
+- ~~Lock `20261130090000`~~ — done in #253; `20261201090000`–`20261203090000` in #258.
+- ~~Make the aggregate run fit the cron budget~~ — done, §10.
+- ~~Re-run `aggregate-sic` after the remaining issuers have synced~~ — generation 5 (§10) read 743 of 811 members;
+  the weekly cron picks up the rest.
 - Point-in-time SIC from EDGAR filing headers, to replace the snapshot-constituent reconstruction.
+
+## 10. Cron path in production (2026-11-17)
+
+The route `/api/cron/industry-sync?job=aggregate-sic` (budget 240 s, API statement limit 8 s) was invoked by hand
+three times. Each call is one HTTP request with the cron secret; nothing else was changed.
+
+| Call (UTC) | Live commit | Result | Route time |
+|---|---|---|---|
+| 12:51 | `851f5121` | failed after 27 s in the facts read: `canceling statement due to statement timeout` | 32 s |
+| 13:45 | `d08fedac` (#253, `read_facts_batch`) | failed after 19 s in the facts read: same statement timeout | 23 s |
+| 15:06 | `9d46dbeb` (#256, `read_facts_batch_slice`) | **success, run published** | **43 s** |
+
+Causes, measured read-only on production:
+
+- `851f5121`: 811 per-issuer `read_facts` calls, 16 at a time; mean 237 ms and max 7.2 s per call through the API.
+- `d08fedac`: one statement per 40 issuers, but still the full disclosure history (160,046 rows, about 126 MB of
+  JSON): 3.3–4.2 s per chunk, later chunks over 8 s.
+- `9d46dbeb`: only the rows the method consumes (current, `12M`, `period_end` in 2022–2025): 7,718 rows.
+  For all 811 issuers these rows are equal to the full `read_facts` envelope filtered the same way.
+
+The two failed calls published nothing; generation 2 stayed active. They left `dq_freshness` `industry.agg.sic` at
+`error` (two consecutive failures) from 13:46 until the successful run at 15:07.
+
+**The successful run** — batch `70a59967-4403-4c02-a490-25b55eaa0d54`, run
+`8c4d26bb-a4b2-49b5-a09d-a2c812d31669`, generation 5, `code_version` `9d46dbeb…` (this is also the evidence of the
+live commit; deployment `stock-monitor-2j7la3h6o`), activated 15:07:24. Receipt: status success, 0 errors,
+1,332 groups, 3,662 cells with a value, 5,662 missing with a reason, 0 manifest mismatches, 0 truncated reads.
+
+| Phase | Time | Largest single statement (`pg_stat_statements`) |
+|---|---|---|
+| members | 1.9 s | — |
+| facts read (`read_facts_batch_slice`, 21 calls) | 10.3 s | 1.59 s (mean 0.90 s) |
+| filings | 2.8 s | — |
+| compute | 0.3 s | — |
+| manifest uploads (600 registrations) | 17.4 s | 0.51 s |
+| staging (19 calls) | 7.8 s | 0.44 s |
+| activation | 1.6 s | 1.55 s |
+| **total** | **42.3 s** of 240 s | 1.59 s of 8 s |
+
+The phases after the facts read ran in-region for the first time in this call.
+
+Checks after the run:
+
+- `dq_freshness` `industry.agg.sic`: `fresh`, `last_ok_at` 15:07:25, `consecutive_errors` 0.
+- `replay-check --scheme sic --sample 50` on generation 5: 50 of 50 reproduced, seed `2026-W47`, 0 mismatches.
+- Generation 5 against generation 2 (9,324 cells each): 129 cells differ; every one of them has at least one member
+  whose facts `state_rev` changed between the runs; 0 cells differ with unchanged inputs.
+- Public API (logged out): `runId` `8c4d26bb-…`, generation 5, `freshness: fresh`.
+- Members with a successful facts sync: 743 of 811 (was 730 for generation 2).
+
+Industries passing both display thresholds for revenue (thresholds unchanged):
+
+| Bucket | Generation 2 | Generation 5 |
+|---|---|---|
+| FY2023 | 13 | 15 |
+| FY2024 | 11 | 14 |
+| FY2025 | 9 | 13 |
+
+Migrations applied to production for this, each after a passing rehearsal and with its history row:
+`20261201090000_facts_read_batch` (before the `d08fedac` deploy) and `20261203090000_facts_read_batch_slice`
+(before the `9d46dbeb` deploy; the broker research migrations `20261202090000/091000/092000` were applied in the
+same pass, in order).
+
+Not covered: the scheduled trigger itself. The first scheduled run is Sunday 2026-11-22 04:30; it calls the same
+route with the same secret. The signed-in page sample of §8 was taken on generation 2 and was not repeated on
+generation 5.
