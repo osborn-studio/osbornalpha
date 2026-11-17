@@ -43,6 +43,23 @@ describe('validatePoint',()=>{
   expect(ids(validatePoint(d('index_1982_84_100',null),'336.298','335.1'))).toEqual([]);                     // US CPI index level
   expect(ids(validatePoint(d('index_2009_11_100',null),'-1',null))).toEqual(['macro.range']);
  });
+ it('usd_mn / usd_bn profiles (Fed balance-sheet levels, RRP volumes)',()=>{
+  expect(KNOWN_UNITS).toContain('usd_mn');expect(KNOWN_UNITS).toContain('usd_bn');
+  expect(profileOf(d('usd_mn',null))).toEqual({min:0,max:20_000_000,maxRelJump:null});
+  expect(profileOf(d('usd_bn',null))).toEqual({min:0,max:10_000,maxRelJump:null});
+  expect(validatePoint(d('usd_mn',null),'6748145','6745635').passed).toBe(true);
+  expect(ids(validatePoint(d('usd_mn',null),'-1',null))).toEqual(['macro.range']);
+  expect(ids(validatePoint(d('usd_mn',null),'20000001',null))).toEqual(['macro.range']);
+  expect(validatePoint(d('usd_bn',null),'0.15','2500').passed).toBe(true);          // RRP collapses are real
+ });
+ it.each([
+  ['2007-05-02','6534','14887'],
+  ['2007-05-09','14887','4914'],
+  ['2023-06-14','44756','102118'],
+  ['2023-06-21','102118','276850'],
+ ])('accepts the real WTREGEN transition on %s',(_date,previous,current)=>{
+  expect(validatePoint(d('usd_mn',null),current,previous).passed).toBe(true);
+ });
  it('applies jump limits on levels, not on rates of change',()=>{
   expect(ids(validatePoint(d('pct','bond_yield'),'4.9','2.1'))).toEqual(['macro.jump']);
   expect(ids(validatePoint(d('pct','bond_yield'),'0.73','1.0'))).toEqual([]);

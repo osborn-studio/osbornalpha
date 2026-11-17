@@ -4,18 +4,20 @@ import { CLOCK_ORDER } from "./clock-model";
 export function ClockFramework({
   t,
   card,
+  auditOnly = false,
 }: {
   t: MacroT;
   card?: JudgmentCard | null;
+  auditOnly?: boolean;
 }) {
   const w = (key: string) => t(`judgment.widget.${key}`);
   return (
     <footer className="clock-footer">
-      <div>
+      {!auditOnly && <div>
         <h3>{w("framework")}</h3>
         <p className="clock-small">{w("frameworkNote")}</p>
-      </div>
-      <div className="clock-scenarios">
+      </div>}
+      {!auditOnly && <div className="clock-scenarios">
         {CLOCK_ORDER.map((r) => (
           <div key={r}>
             <h4>
@@ -24,7 +26,7 @@ export function ClockFramework({
             <p>{w(`${r}.watch`)}</p>
           </div>
         ))}
-      </div>
+      </div>}
       <div className="clock-audit-row">
         <a href={card?.methodology.href ?? "/macro?tab=methodology"}>
           {w("method")} ↗
@@ -46,7 +48,7 @@ export function ClockFramework({
             </dl>
           </details>
         )}
-        <span className="clock-small">{w("raw")} ≠ %</span>
+        {!auditOnly && <span className="clock-small">{w("raw")} ≠ %</span>}
       </div>
     </footer>
   );

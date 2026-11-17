@@ -2,9 +2,11 @@
 /** Local-only preview, bundled by scripts/preview/macro-clock.ts; never mounted by Next. */
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { NextIntlClientProvider } from "next-intl";
+import { AllocationTemplateCard } from "./AllocationTemplateCard";
 import { MacroRegimeClock } from "./MacroRegimeClock";
 import { clockFrom, clockMetadataFrom, parseJudgments } from "./judgment-view";
-import { clockRowsFrom } from "./clock-model";
+import { weightedClockFrom } from "./clock-weighted";
 import en from "../../../messages/en/macro.json";
 import zh from "../../../messages/zh/macro.json";
 import "../../app/globals.css";
@@ -50,6 +52,7 @@ function Preview() {
   const reason = clock.reason
     ? t(`judgment.clock.reasons.${clock.reason}`)
     : null;
+  const weighted = snap ? weightedClockFrom(snapshot, snap.snapshot_id, locale) : null;
   return (
     <main className="clock-preview-shell">
       <header className="preview-header">
@@ -98,13 +101,9 @@ function Preview() {
             selected={clock.selected}
             reason={reason}
             card={clock.card}
-            rows={
-              mode === "empty"
-                ? []
-                : snap
-                  ? clockRowsFrom(snapshot, snap.snapshot_id, locale)
-                  : []
-            }
+            rows={mode === "empty" ? [] : weighted?.rows ?? []}
+            weightedStatus={weighted?.status}
+            insufficientCoverage={weighted?.insufficientCoverage}
             metadata={
               snap ? clockMetadataFrom(snapshot, snap.snapshot_id) : null
             }
@@ -112,6 +111,9 @@ function Preview() {
             loading={!data || mode === "loading"}
             t={t}
           />
+          <NextIntlClientProvider locale={locale} messages={{ macro: locale === "en" ? en : zh }} timeZone="UTC">
+            <AllocationTemplateCard current={clock.selected} />
+          </NextIntlClientProvider>
         </div>
       </div>
     </main>

@@ -80,10 +80,10 @@ export function clockRowsFrom(
     };
   });
 }
-export function quadrantRows(rows: ClockRow[], regime: Regime) {
+export function quadrantRows<T extends { seriesId: string; weight: number; contribution: Record<Regime, number> | null }>(rows: T[], regime: Regime) {
   return rows
-    .map((row) => ({ ...row, amount: row.contribution[regime] ?? 0 }))
+    .map((row) => ({ ...row, amount: row.contribution?.[regime] ?? 0 }))
     .sort(
-      (a, b) => b.amount - a.amount || a.seriesId.localeCompare(b.seriesId),
+      (a, b) => b.amount - a.amount || b.weight - a.weight || a.seriesId.localeCompare(b.seriesId),
     );
 }

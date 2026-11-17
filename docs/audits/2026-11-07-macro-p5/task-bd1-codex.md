@@ -1,0 +1,7 @@
+Implemented B-Δ1 in this worktree without committing. The clock now reconciles stored contributions before displaying numbers, includes all weighted indicators and their data states, shows three drivers per phase, and opens frozen evidence for every row with an observation. Reconciliation failure hides the decomposition while retaining the F4 label and audit details. F4 fetch and parse failures have distinct unavailable copy.
+
+**Files changed:** `clock-weighted.ts` and its test; `clock-model.ts` and its test; `ClockBreakdown.tsx`, `ClockPhasePanel.tsx`, `ClockFramework.tsx`, `ClockPreview.tsx`, `MacroJudgmentSlot.tsx`, `MacroRegimeClock.tsx`, `clock-release.test.ts`, `investment-clock.css`, and both `messages/{zh,en}/macro.json` files.
+
+**Verification:** Vitest passed **214 tests across 18 files**. `npm run typecheck`, `npm run lint`, and `git diff --check` passed.
+
+**Deviations:** None from the requested scope. The first test run was blocked by a missing, already declared `react-test-renderer` package in `node_modules`; I restored it from the local npm cache. I regenerated stale Next route types before the passing typecheck. The two pre-existing untracked audit files were left untouched.

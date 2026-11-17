@@ -41,8 +41,10 @@ if [ "$OSB_MODE" = gate ]; then
   SB_URL=http://127.0.0.1:54399
   SB_ANON_KEY=verify-dummy-anon-key
 fi
+# MACRO_JUDGMENTS_ENABLED is pinned empty too, so /macro deterministically shows the static
+# allocation template (#231) instead of a judgment slot that needs a database.
 ENV_ARGS=("NEXT_PUBLIC_SUPABASE_URL=$SB_URL" "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SB_ANON_KEY"
-  SUPABASE_SERVICE_ROLE_KEY= NEXT_TELEMETRY_DISABLED=1)
+  SUPABASE_SERVICE_ROLE_KEY= MACRO_JUDGMENTS_ENABLED= NEXT_TELEMETRY_DISABLED=1)
 
 cd "$REPO_ROOT"
 setsid env "${ENV_ARGS[@]}" npx next dev -p "$OSB_PORT" > "$OSB_RUN_DIR/next.log" 2>&1 < /dev/null &

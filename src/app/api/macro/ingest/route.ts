@@ -29,6 +29,7 @@ import type {BatchError,BatchStatus} from '@/lib/dq/batches';
 import type {Row} from '@/lib/db/table-client';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import {authorizedCronRequest} from '@/lib/observability/cron-auth';
+import {DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION} from '@/lib/macro/display-catalog';
 import {CATALOG_VERSION,MACRO_CATALOG} from '@/lib/macro/catalog';
 import {productionMacroDeps} from '@/lib/macro/deps';
 import type {MacroDeps} from '@/lib/macro/deps';
@@ -79,6 +80,7 @@ const notRunning=(e:unknown)=>e instanceof Error&&e.message==='batch_not_running
 
 async function start(deps:MacroDeps,body:Extract<IngestBody,{action:'start'}>){
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
+ await deps.db.upsertCatalog(DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION,MACRO_RULES_VERSION);
  const {batchId}=await startBatch(deps.tables,{producer:PRODUCER,dataset:DATASET,codeVersion:deps.codeVersion,triggeredBy:'script',
   toolVersions:{...body.tool_versions,ingest:INGEST_ROUTE_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
  let claim:Awaited<ReturnType<MacroDeps['db']['claimIngest']>>;
