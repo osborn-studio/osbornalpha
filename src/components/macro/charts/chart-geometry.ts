@@ -1,3 +1,6 @@
+import type {Cycle} from '@/lib/macro/cycles';
+import type {AssetByCycle} from '@/lib/macro/series-extras';
+import {assetChangeView} from '../detail-model';
 // src/components/macro/charts/chart-geometry.ts
 // Pure geometry and data helpers for macro charts (spec §3.3, §3.4). Numbers here only position marks; every
 // printed number comes from value_text through macro-format.ts.
@@ -30,4 +33,29 @@ export function snapMarkers<T extends {time:string}>(times:readonly string[],mar
 /** Points whose month lies within a band's start..end months (inclusive); the first matching band wins. */
 export function bandPoints<D extends string>(times:readonly string[],bands:readonly {start:string;end:string;direction:D}[]):{time:string;direction:D}[]{
  return times.flatMap(time=>{const m=time.slice(0,7);const b=bands.find(x=>m>=x.start.slice(0,7)&&m<=x.end.slice(0,7));return b?[{time,direction:b.direction}]:[];});
+}
+
+/** Horizontal bar from a centre line at `half`: x is the bar's left edge in [0, 2·half]. */
+export function barGeometry(median:number|null,scaleMax:number,half:number):{x:number;width:number}{
+ if(median===null||!(scaleMax>0))return {x:half,width:0};
+ const width=Math.min(1,Math.abs(median)/scaleMax)*half;
+ return {x:median<0?half-width:half,width};
+}
+
+export interface AssetBarRow{asset_id:string;name:AssetByCycle['asset_name'];value:number|null;text:string}
+export interface AssetBarPanel{domainMax:number;rows:AssetBarRow[]}
+/** Separate symmetric scales for each cycle and unit. Missing data never enters a scale. */
+export function assetBarPanels(assetsByCycle:readonly AssetByCycle[],cycles:readonly Pick<Cycle,'start'|'end'>[]):{pct:AssetBarPanel;bp:AssetBarPanel}[]{
+ return cycles.map((_,index)=>{
+  const panels={pct:{domainMax:0,rows:[] as AssetBarRow[]},bp:{domainMax:0,rows:[] as AssetBarRow[]}};
+  for(const a of assetsByCycle){
+   if(a.cycle_index!==index||(a.change_kind!=='pct'&&a.change_kind!=='bp'))continue;
+   const n=a.change_text===null||a.change_text.trim()===''?NaN:Number(a.change_text);
+   const value=a.missing!==null||!Number.isFinite(n)?null:n;
+   const panel=panels[a.change_kind];
+   panel.rows.push({asset_id:a.asset_id,name:a.asset_name,value,text:value===null?'缺失':assetChangeView(a).text});
+   if(value!==null)panel.domainMax=Math.max(panel.domainMax,Math.abs(value));
+  }
+  return panels;
+ });
 }

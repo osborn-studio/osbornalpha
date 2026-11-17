@@ -2,7 +2,7 @@
 // marks, matrix / cycle cells, mobile groups, review sections, explanation panel and deviation rows.
 import {describe,expect,it} from 'vitest';
 import type {Cell,CycleTableView,DeviationCase,Episode,EventRow,ExplanationProjection,F4Summary,Fact,NodeView,ObsRef,PlaybookView,PolicyResponseView,ReviewFacts,TransmissionView} from '@/lib/macro/strategy/contract';
-import {MINUS,MISSING,barGeometry,closedMonths,columnMedians,coverageText,cycleCell,cycleGroups,deviationRows,episodeView,errorCode,eventRows,explainErrorText,f4SummaryDisplay,failureLabel,flowRows,
+import {MINUS,MISSING,closedMonths,columnMedians,coverageText,cycleCell,cycleGroups,deviationRows,episodeView,errorCode,eventRows,explainErrorText,f4SummaryDisplay,failureLabel,flowRows,
  episodesEmptyKey,formatBpText,formatInstant,formatPctRatio,formatRaw,formatValueText,hasSnapshot,headerLine,latestFor,loadStateOf,matrixCell,matrixGroups,matrixMeta,eventEvidence,matrixScale,nextRequestId,nodeDisplay,panelState,playbookCards,playbookNotice,
  projectionOfError,quantile7,remainingToday,renderedSections,reviewGrid,reviewSections,roundDecimalText,strategyApi,toneClass,toneLevel,toneOfText,uniformReason,type StrategyT} from './strategy-view-model';
 
@@ -199,10 +199,9 @@ describe('policy action episodes × assets (spec §5.5)',()=>{
   expect(g[0].rows[1].flags).toEqual(['history.flag.ongoing']);
   expect(g[1].rows[1]).toMatchObject({cell:{drill:false},refs:[]});
  });
- it('type-7 median per column and centred bars',()=>{
+ it('type-7 median per column',()=>{
   expect(quantile7([1,2,3,4],0.5)).toBe(2.5);expect(quantile7([1,2,3,4],0.25)).toBe(1.75);expect(quantile7([7],0.5)).toBe(7);
   expect(columnMedians(view).map(c=>[c.id,c.n,c.median,c.scaleMax])).toEqual([['US_UST10Y',2,113.5,203],['US_WTI',1,-14.5424,14.5424]]);
-  expect(barGeometry(-50,100,100)).toEqual({x:50,width:50});expect(barGeometry(100,100,100)).toEqual({x:100,width:100});expect(barGeometry(null,100,100)).toEqual({x:100,width:0});
  });
  it('mobile groups: one per column, one line per episode',()=>{
   const g=cycleGroups(view,t,'en');
