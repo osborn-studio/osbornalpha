@@ -1,4 +1,5 @@
 // Topic spec §4.1 / §5.4 financial facts behind the company gate (X19).
+import {DATASETS} from '@/lib/dq/datasets';
 import {digestOf,missing,type EvidenceResolver,type Resolved} from '../resolve';
 import type {EvidenceSources} from '../sources';
 export function factResolver(sources:EvidenceSources):EvidenceResolver<'financial_fact'>{
@@ -23,7 +24,7 @@ export function factResolver(sources:EvidenceSources):EvidenceResolver<'financia
      drawer:{kind:'financial_fact',identity,source:{publisher:info.publisher,adapter:filing?.form_type??'',url:filing?.url??null,locator:`${row.concept} · ${row.source_concept}`,evidence_sha256:null},
       times:{period:row.period_end,available_at:row.available_date,ingested_at:row.created_at},transform:{code_version:null,mapping_version:row.mapping_version,method_version:null},
       licence:{status:'public',note_key:row.market==='US'?'facts:sec':'facts:cninfo'},attribution_key:row.market==='US'?'facts:sec':'facts:cninfo',links:{module_href:issuer.ticker?`/stock/${issuer.ticker}`:'/intel/companies'}},
-     digest:digestOf(fact,identity),freshness:await sources.freshness(row.market==='US'?'facts.us':'facts.cn',ctx.now),
+     digest:digestOf(fact,identity),freshness:await sources.freshness(DATASETS.facts(row.market),ctx.now),
      ...(ctx.audience==='admin'&&!publicGate.get(row.fact_id)?.ok?{admin_only:true as const}:{})} satisfies Resolved;
    }));
   },
