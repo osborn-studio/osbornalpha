@@ -353,3 +353,10 @@ describe('deriveAndWrite',()=>{
   expect(e.partial.counts).toEqual({fetched:derived.length,inserted:derived.length,duplicates:0,versioned:0,quarantined:0,failed:0});   // the aborted series' rows are not counted
  });
 });
+
+it('routes BIS quality quarantine to macro.bis',async()=>{
+ const e=evidence('bad LPR',{url:'https://stats.bis.org/data'});e.adapter='bis_sdmx_csv';
+ const rec=await ingestEvidence(deps,{batchId:BATCH,adapter:'bis_sdmx_csv',retrievals:[{evidence:e,parsed:[{seriesId:'CN_LPR_1Y',periodEnd:'2026-10-31',valueText:'999',locator:{kind:'csv_row',line:2,column:11}}]}]});
+ expect(rec.counts.quarantined).toBe(1);expect(rec.counts.inserted).toBe(0);
+ expect(quarantined()).toEqual([expect.objectContaining({dataset:'macro.bis',key:'CN_LPR_1Y|2026-10-31',reason:'rule_failed:macro.range'})]);
+});
