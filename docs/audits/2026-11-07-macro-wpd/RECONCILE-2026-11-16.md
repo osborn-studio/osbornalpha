@@ -1,5 +1,7 @@
 # WP-D reconcile with main — 2026-11-16
 
+> Superseded on 2026-11-17 by `FINAL-STATE-2026-11-17.md`: the Fed series shipped display-only with no catalog bump, v3 was built and reverted, and the China rows stay missing. This file is kept as the record of the reconcile.
+
 Main `68701c48` (PR #226). Production per the commander: catalog `macro-catalog/30bcaa2a33c5`, `macro_regime@v2` (formula hash `dc26a628…`, closure narrowed by #132) registered and publishable, 22 judgments, `MACRO_JUDGMENTS_ENABLED` on. Both WP-D branches were merged with / rebuilt on this main (details at the end). Nothing here deploys or touches production.
 
 ## 1. Two changes to the plan that come out of the reconcile

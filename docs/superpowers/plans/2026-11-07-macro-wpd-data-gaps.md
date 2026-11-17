@@ -12,6 +12,19 @@
 
 ---
 
+## 修订 B（2026-11-17，最终状态；本节优先于修订 A 与下文）
+
+完整记录见 `docs/audits/2026-11-07-macro-wpd/FINAL-STATE-2026-11-17.md`。
+
+- **B1 已交付**：美联储三序列（WALCL、RRPONTSYD、WTREGEN）以**仅展示**（权重 0）方式上线，走不入哈希的展示注册表（#227、#233），**没有**目录版本升级，`macro_regime@v2` 与 `macro-catalog/30bcaa2a33c5` 不变。
+- **B2 LPR 1Y 经 BIS：已调研、已实现、未发布**。owner 2026-11-16 决定不申请 CFETS / PBOC 授权；BIS `WS_CBPOL`（`M.CN`）可再分发，#236 据此实现了 `macro_regime@v3`；owner 2026-11-17 决定**不发布 v3**，#238 回滚 #236。`CN_LPR_1Y` 保持 `missing`。代码停放在分支 `claude/macro-wpd-catalog-v3`，owner 未要求前不再开 PR。
+- **B3 社融存量同比、MLF 1Y 保持 `missing`**：没有可再分发的官方来源（理由见最终记录 §1）。
+- **B4 LPR 5Y 与报价日事件取消**：不进目录。
+- **B5 “唯一一次目录升级 + v3”未发生**：下文 Task 9–12、修订 A 的 A5–A7 作废；#228 的解析器与采集器分支保留为离线、不可达的研究代码。
+- **B6 剩余 owner 决定**：见 `docs/research/macro-asset-coverage-2026-11-16.md` 与最终记录 §5。
+
+---
+
 ## 修订 A（2026-11-16，与 main 对账之后；本节与下文冲突时以本节为准）
 
 完整对账见 `docs/audits/2026-11-07-macro-wpd/RECONCILE-2026-11-16.md`。

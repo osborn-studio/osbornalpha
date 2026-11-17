@@ -4,6 +4,8 @@ Scope: which asset series the macro workbench could add (US equity indices, CSI 
 
 Catalog today (main `68701c48`): `US_SP500`, `US_NASDAQCOM`, `US_DJIA`, `CN_CSI300` are `restricted` (rights `third_party`, via FRED for the US three, via AKShare/CSI for CSI 300); `US_WTI*` active (EIA via FRED); `US_UST10Y` / `CN_CGB10Y` are asset *views* of the 10-year yields (a yield, not a holding return). There is no Hong Kong, gold, copper or total-return row, and `Region` only knows US and CN.
 
+> **Status, 2026-11-17:** WP-D is closed and this memo is the standing list of owner decisions for macro data coverage. Nothing in it has been decided or built since it was written. Two changes to the "catalog today" paragraph above: the Fed liquidity series (WALCL, RRPONTSYD, WTREGEN) are now live as display-only rows in the unhashed display registry (#233), and the China rows `CN_LPR_1Y`, `CN_AFRE_STOCK_YOY`, `CN_MLF_1Y` remain `missing` (LPR via BIS was built and not shipped). The China decisions (O-BIS, O-LPR, O-AFRE, O-MLF) are listed with the ones below in `docs/audits/2026-11-07-macro-wpd/FINAL-STATE-2026-11-17.md` §5.
+
 ## Summary table
 
 | Asset | Primary source (publisher) | Rights found | Price vs total return | Trading-day alignment | Verdict |
