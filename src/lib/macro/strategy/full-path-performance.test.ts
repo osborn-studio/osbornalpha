@@ -24,6 +24,9 @@ import {strategyMemo} from './memo';
 import {memoryStrategyPort} from './port';
 import {fedTargetFixture,fixture,monthly,obs,snap} from './testing/fixture';
 import {macroDbStrategyPort} from './wiring';
+import {strategyHistoriesReader} from './history-rpc';
+import {buildTransmissionManifest} from './transmission';
+import {buildPolicyResponseManifest} from './policy-response';
 
 const CREATED='2026-11-07T00:00:00.000Z';
 const series=['US_DGS10','CN_CGB_10Y','US_WTI','US_DTWEXBGS','CN_USDCNY_CP'];
@@ -49,7 +52,17 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
   if(url.origin!=='https://fixture.invalid')throw new Error('non-fixture transport forbidden');
   const table=url.pathname.replace('/rest/v1/','');
   let result:unknown,total=0,offset=0,rowCount=0;
-  if(table==='rpc/macro_put_manifest_json'||table==='rpc/macro_put_manifest_gz'){
+  if(table==='rpc/macro_strategy_histories'||table==='rpc/macro_latest_observations'){
+   expect(req.headers.get('apikey')).toBe('fixture-anon-key');
+   const args=JSON.parse(body),ids:string[]=args.p_series??args.p_series_ids;
+   const groups=ids.map(series_id=>{
+    const found=rows.macro_observations.filter(r=>r.series_id===series_id&&r.status==='ok'&&String(r.available_at)<=new Date(args.p_as_of).toISOString()&&(!args.p_from||String(r.period_end)>=args.p_from)&&(!args.p_to||String(r.period_end)<=args.p_to));
+    const by=new Map<string,Row>();
+    for(const r of found){const old=by.get(String(r.period_end));if(!old||Number(r.version)>Number(old.version))by.set(String(r.period_end),r);}
+    return {series_id,raw_count:found.length,rows:[...by.values()].sort((a,b)=>String(a.period_end).localeCompare(String(b.period_end)))};
+   });
+   result=table==='rpc/macro_latest_observations'?groups.flatMap(g=>g.rows.slice(-1)):groups.map(g=>({...g,rows:g.rows.map(r=>[r.observation_id,r.period_end,r.value_text,r.version,r.available_at,r.ingested_at,r.retrieval_id,r.derived_from,r.transform])}));
+  }else if(table==='rpc/macro_put_manifest_json'||table==='rpc/macro_put_manifest_gz'){
    expect(req.method).toBe('POST');
    const args=JSON.parse(body),gz=table.endsWith('_gz');
    const decoded=gz?JSON.parse(gunzipSync(Buffer.from(args.p_body_gz,'base64')).toString()):args.p_body;
@@ -108,7 +121,7 @@ function fixtureTransport(fault?:{offset:number;kind:'timeout'|'short'}){
  const client=(key:string)=>createClient('https://fixture.invalid',key,{auth:{persistSession:false,autoRefreshToken:false},global:{fetch:boundedProbe}});
  const clients={admin:client('fixture-admin-key'),anon:client('fixture-anon-key')};
  const port=macroDbStrategyPort(supabaseMacroDb(clients));
- return {port,db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
+ return {port,rpcPort:macroDbStrategyPort(supabaseMacroDb(clients),{historiesReader:strategyHistoriesReader(clients.anon)}),db:strategyDbOver(supabaseTransport(clients)),calls,rows,peak:()=>peak,historyHeaders,
   reference:memoryStrategyPort(fixture({observations,snapshots,catalog:[...port.catalog()],catalogVersion:port.catalogVersion(),rules:port.rules()}))};
 }
 
@@ -214,3 +227,38 @@ it.each([{offset:0,kind:'timeout'},{offset:1000,kind:'timeout'},{offset:0,kind:'
  expect(t.calls.some(c=>c.table.startsWith('rpc/macro_put_manifest'))).toBe(false);
  expect(t.historyHeaders.filter(h=>h==='count=exact')).toHaveLength(13);
  });
+
+// Cold read comparison uses the same fixture, client adapters and complete manifest hashes.
+it('compares legacy and RPC cold manifests and records requests and response bytes',async()=>{
+ const t=fixtureTransport(),samples:Record<string,unknown>[]=[];
+ const options={now:new Date(CREATED),codeVersion:'fixture-full-path-v1'};
+ const builds=[
+  ...(['US','CN'] as const).map(region=>({name:`transmission-${region}`,build:(port:typeof t.port)=>buildTransmissionManifest(port,{...options,region})})),
+  ...([1,3,6] as const).map(window=>({name:`policy-response-${window}`,build:(port:typeof t.port)=>buildPolicyResponseManifest(port,{...options,window})})),
+  ...(['event_day','first_trading_day','month_end'] as const).map(boundary=>({name:`cycle-table-${boundary}`,build:(port:typeof t.port)=>buildCycleTableManifest(port,{...options,boundary})})),
+ ];
+ for(const route of builds){
+  const hashes:string[]=[];const measurements:{requests:number;bytes:number}[]=[];
+  for(const [mode,port] of [['legacy',t.port],['rpc',t.rpcPort]] as const){
+   t.calls.length=0;const start=performance.now(),manifest=await route.build(port);
+   const hash=digest(manifest);hashes.push(hash);
+   const history=t.calls.filter(c=>c.table==='macro_observations'||c.table==='rpc/macro_strategy_histories');
+   const sample={route:route.name,mode,requests:history.length,bytes:history.reduce((sum,c)=>sum+c.responseBytes,0),ms:performance.now()-start,manifest_hash:hash};
+   samples.push(sample);measurements.push(sample);
+   if(mode==='rpc'&&route.name.startsWith('cycle-table'))expect(history.filter(c=>c.table==='rpc/macro_strategy_histories')).toHaveLength(1);
+  }
+  expect(hashes[1]).toBe(hashes[0]);
+  if(route.name.startsWith('cycle-table')){
+   expect(measurements[1].requests).toBeLessThan(measurements[0].requests/10);
+   expect(measurements[1].bytes).toBeLessThan(measurements[0].bytes/2);
+  }
+ }
+ console.info('cold history comparison',JSON.stringify(samples));
+ const output=process.env.MACRO_FULL_PATH_BENCHMARK_OUTPUT;
+ if(output){
+  const root=realpathSync('/tmp/osstack'),target=resolve(output+'.histories.json'),parent=realpathSync(dirname(target));
+  if(parent!==root&&!parent.startsWith(root+sep))throw new Error('benchmark output must be under /tmp/osstack/');
+  const fd=openSync(join(parent,basename(target)),constants.O_WRONLY|constants.O_CREAT|constants.O_TRUNC|constants.O_NOFOLLOW);
+  try{writeFileSync(fd,JSON.stringify({scope:'Simulated HTTP fixture, real adapters/builders; excludes PostgreSQL/RLS and network.',samples},null,2)+'\n');}finally{closeSync(fd);}
+ }
+},60000);
