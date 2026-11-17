@@ -154,3 +154,10 @@ export function selectVersion(versions:readonly VersionJson[],observationId:stri
  if(observationId===null)return versions[0]??null;
  return versions.find(v=>v.observation_id===observationId)??null;
 }
+
+/** Overview cards use only the frozen envelope rows, in regional editorial order. */
+export const KEY_INDICATORS={US:['US_DFF','US_DGS10','US_CPI_YOY','US_UNRATE'],CN:['CN_PMI_MFG','CN_CPI_YOY','CN_CGB_10Y','CN_M2_YOY']} as const;
+export function keyIndicatorRows(env:OverviewEnvelopeJson,region:'US'|'CN'):IndicatorRowJson[]{
+ const by=new Map(env.indicators.map(r=>[r.series_id,r]));
+ return KEY_INDICATORS[region].flatMap(id=>{const row=by.get(id);return row?[row]:[];});
+}

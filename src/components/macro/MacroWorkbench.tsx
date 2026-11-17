@@ -15,6 +15,7 @@ import { ChangesCard } from './ChangesCard';
 import { CorrelationWorkbench } from './CorrelationWorkbench';
 import { IndicatorDetail } from './IndicatorDetail';
 import { IndicatorTable } from './IndicatorTable';
+import { KeyIndicatorCards } from './KeyIndicatorCards';
 // MACRO-P3
 import { strategyLinkTabs } from './strategy-links';
 // /MACRO-P3
@@ -147,6 +148,7 @@ export function MacroWorkbench({ initialRegion, initialTab, judgmentsEnabled, op
             <ChangesCard counts={changeCounts(env)} lines={changeLines(env, locale, t)} t={t} />
             <CatalogCoverage coverage={coverageOf(env, locale)} collection={coll?.items ?? []} t={t} onMethodology={() => go(region, 'methodology')} />
           </div>
+          <KeyIndicatorCards key={region} region={region} env={env} />
           <section id="macro-indicators" className="card-base space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold">{t('table.title')}</h2>

@@ -9,6 +9,7 @@ import { bandPoints, snapMarkers, withAlpha } from './chart-geometry';
 
 export interface LinePoint { time: string; value: number }
 export interface ChartBand { start: string; end: string; direction: 'up' | 'down' | 'plateau' }
+export interface MarkerLayers { derived?: boolean; calendar?: boolean }
 export interface ChartMarker { time: string; kind: 'derived' | 'calendar'; text: string }
 
 function cssVariable(name: string, fallback: string): string {
@@ -16,8 +17,8 @@ function cssVariable(name: string, fallback: string): string {
   return value || fallback;
 }
 
-export function MacroLineChart({ points, bands = [], markers = [], height = 260, ariaLabel }: {
-  points: LinePoint[]; bands?: ChartBand[]; markers?: ChartMarker[]; height?: number; ariaLabel: string;
+export function MacroLineChart({ points, bands = [], markers = [], height = 260, layers, ariaLabel }: {
+  points: LinePoint[]; bands?: ChartBand[]; markers?: ChartMarker[]; height?: number; layers?: MarkerLayers; ariaLabel: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -59,7 +60,7 @@ export function MacroLineChart({ points, bands = [], markers = [], height = 260,
       }
       const line = chart.addLineSeries({ color: text, lineWidth: 2, priceLineVisible: false });
       line.setData(points.map((p) => ({ time: p.time as Time, value: p.value })));
-      line.setMarkers(snapMarkers(times, markers).map((m): SeriesMarker<Time> => ({
+      line.setMarkers(snapMarkers(times, markers.filter(m => m.kind === 'derived' ? layers?.derived !== false : layers?.calendar === true)).map((m): SeriesMarker<Time> => ({
         time: m.time as Time,
         position: m.kind === 'derived' ? 'aboveBar' : 'belowBar',
         shape: m.kind === 'derived' ? 'arrowDown' : 'circle',
@@ -78,6 +79,6 @@ export function MacroLineChart({ points, bands = [], markers = [], height = 260,
       observer?.disconnect();
       chart?.remove();
     };
-  }, [points, bands, markers, height]);
+  }, [points, bands, markers, height, layers?.derived, layers?.calendar]);
   return <div ref={ref} role="img" aria-label={ariaLabel} style={{ height }} className="w-full" />;
 }
