@@ -10,7 +10,7 @@ logged-out HTTP requests. Nothing licence-gated was loaded; no Vercel environmen
 |---|---|
 | `industry_metric_runs` / `industry_metrics` non-empty | **met** — 2 runs (generation 2 `active`, generation 1 `superseded`), 9,324 metric rows per run |
 | fresh `dq_freshness` row for the aggregate job | **met** — `industry.agg.sic` `fresh` (§5) |
-| US industry pages show aggregates from a published run | **met on the data path** (public API serves the active run, replay reproduces); **signed-in page sample OPEN** (§8) |
+| US industry pages show aggregates from a published run | **met** — public API serves the active run, replay reproduces, signed-in page sample passes (§8) |
 | owner checklist for A / H | delivered in `03-owner-checklist.md` |
 
 ## 2. Migration
@@ -123,14 +123,42 @@ Final reads (replay check on the active run, freshness row, logged-out page stat
 
 ## 8. Open
 
-1. **Signed-in page sample — OPEN.** The pages require a session (logged out they redirect to `/login`), and the
-   owner's Chrome was not available. To check, signed in:
-   1. `https://osbornalpha.com/intel/industries?scheme=sic` — heatmap with columns FY2023–FY2025, the snapshot notice
-      (constituents as of 2026-11-17, not historical membership), the reconstruction badge; values for the nine codes
-      in §7; 7372 shown as low coverage 53/69; small industries shown as too few members (n < 5).
-   2. Click 5331 FY2025 → source drawer with `reproduced` and the input facts (6 of 7 members).
-   3. `https://osbornalpha.com/intel/industries?scheme=sic&view=table` — same cells as a table.
-   4. `https://osbornalpha.com/intel/industries/sic/5331` — detail page with the aggregate series and constituents.
+1. **Signed-in page sample — taken, passes (2026-11-17).** Taken by the commander session in the owner's signed-in
+   Chrome on the active run (generation 2). UI locale English; the zh locale was not sampled.
+   1. `/intel/industries?scheme=sic` renders: scheme "SIC · US (SEC)", snapshot-constituents notice, facts as of
+      2026-11-17, run 2026-11-17 05:36 gen 2 fresh, method `industry-agg-us/1.0`, Reconstruction badge,
+      "444 industries · 3 period ends", columns FY2023 / FY2024 / FY2025. Revenue (bn USD):
+
+      | SIC | FY2023 | FY2024 | FY2025 |
+      |---|---|---|---|
+      | 5331 | 878.31 | 929.94 | 985.22 |
+      | 5961 | Low coverage 4/6 | Low coverage 4/6 | 764.16 |
+      | 6282 | 15.63 | 20.99 | 22.89 |
+      | 3577 | 16.93 | 18.47 | 20.78 |
+      | 7389 | 270.10 | 309.93 | 344.16 |
+      | 7372 | Low coverage 51/69 | Low coverage 53/69 | Low coverage 53/69 |
+
+      The FY2025 column matches §7 for all five value cells and for 7372.
+   2. Source drawer on 5331 FY2025 opens: RETAIL-VARIETY STORES · Revenue · 2025-12-31 · 985.22 bn USD; period
+      2025-01-01 → 2025-12-31 · 12M; method `industry-agg-us/1.0` · `facts-derive/1.0`; history class
+      Reconstruction; code version `851f512`; manifest `604f…ea8e`; coverage 6 / 7 (1 missing concept, 0
+      unresolved); the replay section says "reproduced".
+   3. `&view=table`: 5331 — 7 (0) members, FY2025, 985.22 bn USD, 6/7, YoY +5.9 %; 7372 — 69 (0), FY2025,
+      Low coverage 53/69.
+   4. `/intel/industries/sic/5331` renders without error: 7 members, latest inclusion 2026-11-11, series tabs with
+      chart and table, FY2025 985.22 bn USD 6/7.
+
+   **Copy defects seen in the sample (not fixed here).** Read-only check of the source:
+   - The SIC pages show a notice saying "SW membership availability is assumed at the inclusion date …". The
+     message `notices.reconstruction` (`messages/{en,zh}/industries.json`) was written for SW2021 and is rendered
+     for every run with `historyClass === 'reconstruction'`, whatever the scheme
+     (`src/app/(app)/intel/industries/page.tsx:81`, `…/[scheme]/[code]/page.tsx:60`). US runs are always
+     `reconstruction`, so the Shenwan wording appears on every SIC page, in both locales, next to the correct
+     `snapshotConstituents` notice. Fix: render `reconstruction` only when the run has no `membershipOn` (SW2021),
+     or add a SIC variant of the body; the snapshot notice already states the US basis.
+   - The drawer formula for revenue reads "Σ revenue (quarterly: q_single_revenue)" (`formulas.revenue_sum`); the
+     quarterly clause is the CN method and does not apply to the 12M-only US run. Fix: a scheme-specific formula
+     string for SIC.
 2. **Cron path not exercised.** `/api/cron/industry-sync?job=aggregate-sic` first fires on Sunday 2026-11-22 04:30.
    From this machine the job takes 15–18 minutes; the route has a 240 s budget and answers
    `time_budget_exceeded` without publishing when it runs out. In-region runtime is unmeasured. If the cron run
