@@ -5,7 +5,7 @@ import {memoryFactsDb} from '../facts/memory-facts-db';
 import {memoryIndustryDb} from './memory-industry-db';
 import {fixtureSecFetch,submissionsUrl} from './providers/sec-sic';
 import {RETIRED_DUE,claimSicScopeRow,finishSicScopeRow,planSicClassifications,runClassificationsSic,runMembershipsSic,syncSicScope} from './sic';
-import type {IndustryDb,IndustryDeps,ManifestStore} from './types';
+import type {IndustryDb,IndustryDeps,ManifestStore} from './types-us';
 
 const AAPL='b0000000-0000-4000-8000-000000000001',MSFT='b0000000-0000-4000-8000-000000000002',NVDA='b0000000-0000-4000-8000-000000000003';
 const GONE='b0000000-0000-4000-8000-000000000004',ODD='b0000000-0000-4000-8000-000000000005',NOCIK='b0000000-0000-4000-8000-000000000006',RETIRED='b0000000-0000-4000-8000-000000000007';

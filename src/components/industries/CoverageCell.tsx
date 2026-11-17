@@ -5,7 +5,7 @@
 import {useLocale,useTranslations} from 'next-intl';
 import {formatMetricValue} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
-import type {AggMetric} from '@/lib/industry/types';
+import type {AggMetric} from '@/lib/industry/types-us';
 import {missingReasonOf} from './cell-text';
 
 export function CoverageCell({cell,metric}:{cell:PublicCell|null;metric:AggMetric}){

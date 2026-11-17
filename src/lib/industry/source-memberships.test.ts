@@ -8,7 +8,7 @@ import {fixtureTushareCall} from './providers/tushare-industry';
 import type {TushareCall} from './providers/tushare-industry';
 import {findSourceOverlaps,isNullToDate,planSourceMemberships,runMembershipsSw,sameContent,sourceKey} from './source-memberships';
 import type {FetchedMember} from './source-memberships';
-import type {IndustryDeps,ManifestStore,SourceMembershipRow} from './types';
+import type {IndustryDeps,ManifestStore,SourceMembershipRow} from './types-us';
 
 const NOW='2026-11-09T02:00:00.000Z';
 const loc=(row:number)=>({api:'index_member_all',params:{l1_code:'801080.SI',is_new:'Y'},page:1,offset:0,row});

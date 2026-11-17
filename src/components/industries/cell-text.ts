@@ -4,7 +4,7 @@
 import {formatMetricValue} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
-import type {AggMetric} from '@/lib/industry/types';
+import type {AggMetric} from '@/lib/industry/types-us';
 
 export type Translate=(key:string,values?:Record<string,string|number>)=>string;
 

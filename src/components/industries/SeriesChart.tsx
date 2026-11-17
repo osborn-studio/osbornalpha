@@ -4,7 +4,7 @@
 // drawer; missing points break the line and appear in the table as '—' with the reason.
 import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
-import type {AggMetric,Scheme} from '@/lib/industry/types';
+import type {AggMetric,Scheme} from '@/lib/industry/types-us';
 import {CoverageCell} from './CoverageCell';
 import {cellText} from './cell-text';
 import type {Translate} from './cell-text';

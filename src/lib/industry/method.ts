@@ -20,7 +20,7 @@ import {canonicalJson,sha256Hex} from './canonical-json';
 import {decCmp,decMul} from './decimal';
 import {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE,METHOD_VERSION} from './method-constants';
 import {SW2021_CODE_ALIASES} from './sw2021';
-import type {AggDuration,AggMetric,ClassificationRow,MetricRunRow} from './types';
+import type {AggDuration,AggMetric,ClassificationRow,MetricRunRow} from './types-us';
 
 export {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE,METHOD_VERSION};
 export {FORMULA_VERSION};

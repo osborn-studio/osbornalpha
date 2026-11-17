@@ -18,7 +18,7 @@ import type {IssuerFacts} from './aggregate';
 import {BATCH,ISSUER_A,ISSUER_B,cellRow,classRow,membershipRow,runRow,stubIndustryDb} from './fixture-rows';
 import {buildAggregateManifest,encodeManifest} from './manifest';
 import type {IssuerCard,ReadDb,ReadDeps,ReplayDeps,ValuationReplayDeps} from './read';
-import type {AggregateManifest,ManifestMember,MetricCellRow} from './types';
+import type {AggregateManifest,ManifestMember,MetricCellRow} from './types-us';
 
 export const E2E_COOKIE='industry_e2e';
 /** Fails closed (Codex task20 P2): only an isolated local test server — flag on, not production, not Vercel, no Supabase credentials. */

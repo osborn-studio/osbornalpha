@@ -6,7 +6,7 @@
 import Link from 'next/link';
 import {useLocale,useTranslations} from 'next-intl';
 import type {NodeView,PublicCell,RunHeader} from '@/lib/industry/read';
-import type {AggMetric,Scheme} from '@/lib/industry/types';
+import type {AggMetric,Scheme} from '@/lib/industry/types-us';
 import {orderSicRows} from './row-model';
 import {CoverageCell} from './CoverageCell';
 import {cellText} from './cell-text';

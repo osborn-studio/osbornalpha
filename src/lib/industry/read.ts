@@ -22,7 +22,7 @@ import {InputIndex,pickInputs} from './aggregate';
 import type {PoolDerived,PoolFact} from './aggregate';
 import {canonicalJson} from './canonical-json';
 import {replayCell,replayFromManifest} from './replay';
-import type {AggDuration,AggMetric,AggregateManifest,CellStatus,ClassificationRow,DatasetKey,FreshnessRow,HistoryClass,IndustryDb,ManifestCell,ManifestStore,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,MissingReason,Scheme,SchemeVersion,ValuationCellRow} from './types';
+import type {AggDuration,AggMetric,AggregateManifest,CellStatus,ClassificationRow,DatasetKey,FreshnessRow,HistoryClass,IndustryDb,ManifestCell,ManifestStore,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,MissingReason,Scheme,SchemeVersion,ValuationCellRow} from './types-us';
 
 export const SCHEME_VERSION:Record<Scheme,SchemeVersion>={sw2021:'2021',sic:'sec-current'};
 export const AGG_METRICS:readonly AggMetric[]=['revenue_sum','net_income_parent_sum','gross_margin','roe','revenue_yoy','net_income_yoy','member_count'];

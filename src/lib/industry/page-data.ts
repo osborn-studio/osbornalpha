@@ -13,7 +13,7 @@ import {defaultMetric,durationsForScheme,metricsForScheme,SCHEME_VERSION,utcDate
 import type {ConstituentsQuery,DetailQuery,ListQuery,ReadDeps,Window} from './read';
 import {CODE_RE,MAX_PAGE_SIZE,MAX_PERIODS} from './route-params';
 import {forgetView,forgetViews,rememberView,rememberedView} from './stale-views';
-import type {AggDuration,AggMetric,Scheme} from './types';
+import type {AggDuration,AggMetric,Scheme} from './types-us';
 
 export interface PageLoad<T>{view:T|null;error:'read_failed'|null;staleAt:string|null;preview:boolean}
 export interface PageDeps{publicDeps:(now:Date)=>ReadDeps;adminDeps:(now:Date)=>ReadDeps;isAdmin:()=>Promise<boolean>}

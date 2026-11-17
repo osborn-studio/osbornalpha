@@ -6,7 +6,7 @@
 import {formatMetricValue} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
 import type {PublicCell} from '@/lib/industry/read';
-import type {AggMetric,Scheme} from '@/lib/industry/types';
+import type {AggMetric,Scheme} from '@/lib/industry/types-us';
 
 export interface SeriesPoint{periodEnd:string;cell:PublicCell|null}
 export interface SeriesGeometry{

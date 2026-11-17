@@ -11,7 +11,7 @@ import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';
 import {DEFERRED_JOBS,isIndustryJob,jobGate,productionIndustryDeps,runIndustryJob} from '@/lib/industry/jobs';
 import type {RunnerReceipt} from '@/lib/industry/jobs';
-import {IndustryDbError} from '@/lib/industry/types';
+import {IndustryDbError} from '@/lib/industry/types-us';
 
 export const dynamic='force-dynamic';
 export const maxDuration=300;

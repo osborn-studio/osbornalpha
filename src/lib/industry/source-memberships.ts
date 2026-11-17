@@ -25,7 +25,7 @@ import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {errorMessage,loaderOutcome,parkConflict,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
 import {createHash} from 'node:crypto';
-import type {IndustryDeps,SourceMembershipInput,SourceMembershipRow} from './types';
+import type {IndustryDeps,SourceMembershipInput,SourceMembershipRow} from './types-us';
 import type {IndexMemberRow,RowLocator,SnapshotCapture,TusharePage} from './providers/tushare-industry';
 import {IndustryProviderError,defaultTushareCall,fetchIndexClassify,fetchIndexMembers,locatorOf,ymdToIso} from './providers/tushare-industry';
 import type {RunResult} from './classifications';

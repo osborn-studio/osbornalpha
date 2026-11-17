@@ -9,7 +9,7 @@ vi.mock('@/lib/industry/jobs',async(importOriginal)=>{
  return {...real,runIndustryJob:mocks.run,productionIndustryDeps:mocks.deps};
 });
 
-import {IndustryDbError} from '@/lib/industry/types';
+import {IndustryDbError} from '@/lib/industry/types-us';
 import {GET,POST} from './route';
 
 const AUTH={authorization:'Bearer cron-secret'};

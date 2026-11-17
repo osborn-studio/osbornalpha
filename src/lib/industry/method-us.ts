@@ -4,7 +4,7 @@ import {canonicalJson,sha256Hex} from './canonical-json';
 import {assertDay} from './method';
 import type {CellSpec} from './method';
 import {DISPLAY_MIN_COVERAGE} from './method-constants';
-import type {AggMetric,MetricRunRow} from './types';
+import type {AggMetric,ExpectedGridUs} from './types-us';
 export const METHOD_VERSION_US='industry-agg-us/1.0';
 export const US_HISTORY_BUCKETS=3;
 export const DISPLAY_MIN_MEMBERS_SIC=5;
@@ -31,7 +31,7 @@ export function cellSpecsUs(pe:string):CellSpec[]{
  assertDay('periodEnd',pe);if(!pe.endsWith('-12-31'))throw new Error('invalid_us_bucket');
  return AGG_METRICS_US.map(metric=>({metric,duration:metric==='member_count'?'INSTANT':'12M',period_start:metric==='member_count'?pe:`${pe.slice(0,4)}-01-01`,period_end:pe,unit:metric==='member_count'?'count':metric.endsWith('_sum')?'USD':'ratio'}));
 }
-export function expectedGridUs(codes:readonly string[],factsAsOf:string):MetricRunRow['expected_grid']{
+export function expectedGridUs(codes:readonly string[],factsAsOf:string):ExpectedGridUs{
  const uniq=[...new Set(codes)].sort();if(!uniq.length)throw new Error('invalid_grid:no_codes');
  return {codes:uniq,period_ends:usBuckets(factsAsOf),metrics:[...AGG_METRICS_US],cell_rule:'fiscal_year_bucket/1',membership_on:factsAsOf};
 }

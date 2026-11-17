@@ -24,7 +24,7 @@ import {canonicalDecimal} from '../facts/json-numbers';
 import {decAbs,decAdd,decCmp,decDiv,decMul,decSub,decSum} from './decimal';
 import {AGG_CURRENCY,cellSpecs,shiftYears} from './method';
 import type {CellSpec} from './method';
-import type {AggMetric,ManifestCell,ManifestRole,MissingReason,RoleReason} from './types';
+import type {AggMetric,ManifestCell,ManifestRole,MissingReason,RoleReason} from './types-us';
 
 export interface IssuerFacts{issuer_id:string;stateRev:number;truncated:boolean;rows:FactRow[];derived:MetricRow[]}
 export interface AggregateCellInput{code:string;period_end:string;financial:boolean;members:readonly string[];nUnresolved:number;issuers:ReadonlyMap<string,IssuerFacts>}

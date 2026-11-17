@@ -4,7 +4,7 @@
 // rationals and values are formatted by string arithmetic: no value passes through a JS number
 // (plan contract: decimal strings end to end).
 import {DISPLAY_MAX_UNRESOLVED,DISPLAY_MIN_COVERAGE,DISPLAY_MIN_MEMBERS_SIC} from './method-constants';   // NOT ./method: it hashes via node:crypto and this file is rendered by client components
-import type {AggMetric,CellStatus,ValuationCellRow} from './types';
+import type {AggMetric,CellStatus,ValuationCellRow} from './types-us';
 
 export type CellDisplay='value'|'insufficient'|'unresolved'|'missing'|'members'|'coverageSic';
 export type Locale='zh'|'en';

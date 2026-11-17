@@ -14,8 +14,8 @@ import {replayFromManifest} from './replay';
 import {buildCellManifest,runIndustryAggregation} from './run-aggregation';
 import type {AggregationOptions} from './run-aggregation';
 import {CONFIG_HASH,METHOD_VERSION} from './method';
-import {IndustryDbError} from './types';
-import type {ClassificationRow,IndustryDb,IndustryDeps,ManifestStore} from './types';
+import {IndustryDbError} from './types-us';
+import type {ClassificationRow,IndustryDb,IndustryDeps,ManifestStore} from './types-us';
 
 // ---- fixture: one food industry (3 members + 1 unresolved record) and one bank industry (2 members) ----
 const FOOD='801120.SI',BANK='801780.SI';

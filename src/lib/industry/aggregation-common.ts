@@ -1,7 +1,7 @@
 // Shared orchestration helpers: manifest membership, row mapping, bounded work and dry-run reporting.
 import {decCmp,decMul} from './decimal';
 import {DISPLAY_MIN_COVERAGE} from './method-constants';
-import type {AggregateManifest,ManifestMember,MembershipRow,SourceMembershipRow,StagedMetricCell} from './types';
+import type {AggregateManifest,ManifestMember,MembershipRow,SourceMembershipRow,StagedMetricCell} from './types-us';
 export function memberOf(row:MembershipRow,src:SourceMembershipRow|undefined):ManifestMember{
  const p=row.provenance;
  return {issuer_id:row.issuer_id,ticker:src?.ts_code??null,valid_from:row.valid_from,valid_to:row.valid_to,available_date:row.available_date,valid_to_available_date:row.valid_to_available_date,

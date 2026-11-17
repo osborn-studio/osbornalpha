@@ -33,7 +33,7 @@ import type {AggregationPreview} from './aggregation-common';
 import {runIndustryAggregation} from './run-aggregation';
 import {runClassificationsSic,runMembershipsSic} from './sic';
 import {runMembershipsSw} from './source-memberships';
-import type {IndustryDb,IndustryDeps,ManifestStore,MetricCellRow,Scheme,SchemeVersion} from './types';
+import type {IndustryDb,IndustryDeps,ManifestStore,MetricCellRow,Scheme,SchemeVersion} from './types-us';
 
 export const INDUSTRY_JOBS=['load-a-share','facts-scope','memberships-sw','memberships-sic','marks','official','aggregate','aggregate-sic','valuation'] as const;
 export type IndustryJob=typeof INDUSTRY_JOBS[number];

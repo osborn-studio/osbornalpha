@@ -7,7 +7,7 @@ import {memoryManifestStore} from './manifest';
 import {AGG_CONCEPTS_US,expectedGridUs} from './method-us';
 import {replayFromManifest} from './replay';
 import {runIndustryAggregationUs} from './run-aggregation-us';
-import type {IndustryDeps} from './types';
+import type {IndustryDeps} from './types-us';
 async function fixture(ready=3,size=6){
  const tables=memoryTableClient({ingest_batches:['batch_id'],dq_freshness:['dataset'],dq_quarantine:['id'],issuers:['issuer_id']});
  const db=memoryIndustryDb({tables}),manifests=memoryManifestStore(db),base=memoryFactsDb(tables);

@@ -17,7 +17,7 @@ import {canonicalJson} from './canonical-json';
 import {MANIFEST_SCHEMA} from './manifest';
 import {cellSpecs} from './method';
 import type {CellSpec} from './method';
-import type {AggregateManifest,ManifestCell} from './types';
+import type {AggregateManifest,ManifestCell} from './types-us';
 
 export interface ReplayResult{cells:ManifestCell[];reproduced:boolean;mismatches:string[]}
 export interface CellReplay{cell:ManifestCell|null;reproduced:boolean;mismatches:string[]}

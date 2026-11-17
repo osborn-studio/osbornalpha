@@ -7,7 +7,7 @@
 import {formatMetricValue} from '@/lib/industry/display';
 import type {Locale} from '@/lib/industry/display';
 import type {NodeView,PublicCell} from '@/lib/industry/read';
-import type {AggMetric,MissingReason} from '@/lib/industry/types';
+import type {AggMetric,MissingReason} from '@/lib/industry/types-us';
 
 export const ALPHA_MIN=0.12,ALPHA_MAX=0.6;
 export type HeatText=

@@ -2,7 +2,7 @@
 import {describe,expect,it} from 'vitest';
 import {E2E_TAMPERED,e2eCells,fixtureReadDeps,fixtureReplayDeps} from './e2e-fixture';
 import {constituentsView,industryDetailView,industryListView,replayView} from './read';
-import type {AggDuration,AggMetric} from './types';
+import type {AggDuration,AggMetric} from './types-us';
 
 describe('E2E fixture is self-consistent (Codex round 1 #8)',()=>{
  it('every ok cell replays from its own manifest to the stored value; only the tampered cell does not',async()=>{

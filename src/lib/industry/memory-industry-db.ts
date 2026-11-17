@@ -18,17 +18,19 @@
 // Decimal strings are
 // stored as given (callers pass canonical decimals); market_cap is close × total_share with
 // PostgreSQL's result scale (sum of the input scales).
+import {withUsIndustryTypes} from './types-us';
+import type {IndustryDbBoundary} from './types-us';
 import {createHash,randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {Row,TableClient} from '../db/table-client';
 import type {FactsDb} from '../facts/types';
 import {MANIFEST_GC_GRACE_SECONDS,distinctTsCodes,levelColumn,planDelistings,sameClassification} from './db';
 import {DEFAULT_LICENSES} from './licenses';
-import {IndustryDbError} from './types';
+import {IndustryDbError} from './types-us';
 import type {
  AggDuration,AggMetric,ApplyMembershipsResult,ClassificationRow,CorrectWindowsResult,DelistingRow,FreshnessRow,IndustryDb,LicenseStatus,ManifestGcClaim,ManifestUnresolved,MarkInput,MarkRow,MembershipRow,
  MetricCellRow,MetricRunRow,ObservationResult,OfficialInput,RunDependency,RunKind,SourceMembershipRow,StagedMetricCell,ValuationCellRow,ValuationRunRow,
-} from './types';
+} from './types-us';
 
 export interface MemoryOfficialRow{observation_id:string;scheme:string;version:string;code:string;trade_date:string;metric:string;fetch_event_id:string;value:string;observed_at:string;source:string;upstream:string;raw_hash:string;locator:Record<string,unknown>;batch_id:string;status:'ok'|'superseded';supersedes:string|null}
 export interface MemoryIndustryDb extends IndustryDb{
@@ -86,7 +88,7 @@ const VAL_METRICS=['pe_ttm','pe_static','pb','market_cap'];
 const REQUIRED_DURATIONS:Partial<Record<AggMetric,readonly (readonly [AggDuration,boolean])[]>>={revenue_sum:[['3M',false],['12M',true]],net_income_parent_sum:[['3M',false],['12M',true]],
  gross_margin:[['12M',true]],roe:[['TTM',false]],revenue_yoy:[['3M',false],['12M',true]],net_income_yoy:[['3M',false],['12M',true]],member_count:[['INSTANT',false]]};
 
-export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'scopeAll'>}={}):MemoryIndustryDb{
+export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'scopeAll'>}={}):MemoryIndustryDb&IndustryDbBoundary{
  const tables=opts.tables??memoryTableClient({dq_quarantine:['id'],dq_freshness:['dataset']});
  interface State{
   licences:Map<string,LicenseStatus>;classes:Map<string,ClassificationRow>;sources:Map<string,SourceMembershipRow>;memberships:Map<string,MembershipRow>;
@@ -581,5 +583,5 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
   const f=raw[k] as unknown as (...a:unknown[])=>Promise<unknown>;
   (db as unknown as Record<string,unknown>)[k]=serialize(f);
  }
- return db;
+ return withUsIndustryTypes(db);
 }

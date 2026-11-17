@@ -10,7 +10,7 @@ import {supabaseIndustryDb} from '@/lib/industry/db';
 import {supabaseManifestStore} from '@/lib/industry/manifest';
 import {adminReplayView} from '@/lib/industry/read';
 import {codeOf,metricOf,optionalDurationOf,schemeOf,uuidOf} from '@/lib/industry/route-params';
-import type {AggDuration,AggMetric} from '@/lib/industry/types';
+import type {AggDuration,AggMetric} from '@/lib/industry/types-us';
 import {getAdminSupabase} from '@/lib/supabase/admin';
 
 export const dynamic='force-dynamic';

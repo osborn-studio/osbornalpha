@@ -27,8 +27,8 @@ import {recordAttempt} from '../dq/freshness';
 import {quarantine} from '../dq/quarantine';
 import {errorMessage,loaderOutcome,parkConflict,summarizeSkips,withSkippedSummary} from '../entities/load-sec';
 import type {RunResult} from './classifications';
-import type {ClassificationRow,IndustryDeps} from './types';
-import {IndustryDbError} from './types';
+import type {ClassificationRow,IndustryDeps} from './types-us';
+import {IndustryDbError} from './types-us';
 import type {SicCodeRow} from './providers/sec-sic';
 import {fetchSicCodeTable,fetchSubmissionsSic,normalizeCik10} from './providers/sec-sic';
 

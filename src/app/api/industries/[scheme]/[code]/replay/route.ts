@@ -11,7 +11,7 @@ import {QueryError,dateParam,errorResponse,paramErrorResponse,readParams} from '
 import {replayDeps,valuationReplayDeps} from '@/lib/industry/public-deps';
 import {SCHEME_VERSION,replayView,valuationReplayView} from '@/lib/industry/read';
 import {clientIp,codeOf,metricOf,modeOf,optionalDurationOf,replayLimiter,schemeOf,uuidOf,valuationMetricOf} from '@/lib/industry/route-params';
-import type {AggDuration,AggMetric,Scheme} from '@/lib/industry/types';
+import type {AggDuration,AggMetric,Scheme} from '@/lib/industry/types-us';
 import type {ValuationMetric} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';

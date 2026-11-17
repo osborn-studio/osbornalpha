@@ -6,7 +6,7 @@ import type {AggregateCellResult,IssuerFacts,PoolFact} from './aggregate';
 import {decSub} from './decimal';
 import type {CellSpec} from './method';
 import {cellSpecsUs,isFinancialCodeUs} from './method-us';
-import type {ManifestCell,ManifestRole,RoleReason} from './types';
+import type {ManifestCell,ManifestRole,RoleReason} from './types-us';
 export interface AggregateCellInputUs{code:string;period_end:string;members:readonly string[];issuers:ReadonlyMap<string,IssuerFacts>}
 type PickUs<F>={ok:true;facts:F[];values:string[]}|{ok:false;reason:RoleReason};
 export function pickInputsUs<F extends PoolFact>(spec:CellSpec,id:string,facts:readonly F[]):PickUs<F>{

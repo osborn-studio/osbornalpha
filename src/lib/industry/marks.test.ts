@@ -8,8 +8,8 @@ import {memoryIndustryDb} from './memory-industry-db';
 import {fetchDailyBasic,fixtureTushareCall} from './providers/tushare-industry';
 import {planMarkRows,runMarks,upstreamOf} from './marks';
 import type {DailyBasicFetch,DailyBasicRow,MarksDeps} from './marks';
-import {IndustryDbError} from './types';
-import type {IndustryDb} from './types';
+import {IndustryDbError} from './types-us';
+import type {IndustryDb} from './types-us';
 import {supabaseIndustryDb} from './db';
 import type {SupabaseClient} from '@supabase/supabase-js';
 

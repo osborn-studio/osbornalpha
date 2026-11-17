@@ -17,11 +17,11 @@ export type HistoryClass='point_in_time'|'reconstruction';
 export type MetricRunStatus='building'|'active'|'superseded'|'failed';
 export type ValuationRunStatus='building'|'published'|'active'|'superseded'|'failed';
 export type RunKind='aggregate'|'valuation';
-export type AggMetric='net_margin'|'revenue_sum'|'net_income_parent_sum'|'gross_margin'|'roe'|'revenue_yoy'|'net_income_yoy'|'member_count';
+export type AggMetric='revenue_sum'|'net_income_parent_sum'|'gross_margin'|'roe'|'revenue_yoy'|'net_income_yoy'|'member_count';
 export type AggDuration='3M'|'12M'|'TTM'|'INSTANT';
 export type CellStatus='ok'|'missing';
 export type MissingReason='empty_set'|'zero_denominator'|'no_members'|'financial_excluded'|'unresolved_over_limit'|'manifest_mismatch';
-export type RoleReason='ambiguous_period'|'period_mismatch'|'missing_concept'|'unit_excluded'|'read_truncated'|'version_inconsistent'|'not_in_comparable_set'|'financial_excluded';
+export type RoleReason='missing_concept'|'unit_excluded'|'read_truncated'|'version_inconsistent'|'not_in_comparable_set'|'financial_excluded';
 export type ObservationKind='marks'|'official';
 export type ObservationOutcome='inserted'|'duplicate'|'superseded_previous';
 
@@ -74,7 +74,7 @@ export interface ObservationResult{inserted:number;duplicates:number;superseded:
 export interface MetricRunRow{
  run_id:string;scheme:Scheme;version:SchemeVersion;level:number;generation:number;facts_as_of:string;knowledge_date:string;
  history_class:HistoryClass;method_version:string;config_hash:string;formula_version:string;code_version:string;
- expected_grid:{codes:string[];period_ends:string[];metrics:AggMetric[];cell_rule?:string|null;membership_on?:string|null};fingerprint_at:string;reused_from_run:string|null;batch_id:string;
+ expected_grid:{codes:string[];period_ends:string[];metrics:AggMetric[]};fingerprint_at:string;reused_from_run:string|null;batch_id:string;
  status:MetricRunStatus;coverage_summary:Record<string,unknown>;created_at:string;activated_at:string|null;
 }
 export type NewMetricRun=Omit<MetricRunRow,'run_id'|'generation'|'status'|'coverage_summary'|'created_at'|'activated_at'>;
@@ -116,7 +116,7 @@ export interface ManifestStore{
 
 export interface FreshnessRow{dataset:string;status:'fresh'|'stale'|'error'|'missing';last_ok_at:string|null}
 
-export type IndustryDbErrorCode='invalid_cell_rule'|'invalid_membership_basis'|'membership_conflict'|'membership_overlap'|'same_day_change'|'incomplete_run'|'obsolete_run'|'dependencies_incomplete'|'dependency_regression'|'pairs_mismatch'|'illegal_transition'|'run_not_building'|'fetch_event_payload_changed'|'manifest_gc_in_progress'|'lease_lost'|'unknown';
+export type IndustryDbErrorCode='membership_conflict'|'membership_overlap'|'same_day_change'|'incomplete_run'|'obsolete_run'|'dependencies_incomplete'|'dependency_regression'|'pairs_mismatch'|'illegal_transition'|'run_not_building'|'fetch_event_payload_changed'|'manifest_gc_in_progress'|'lease_lost'|'unknown';
 export class IndustryDbError extends Error{constructor(public code:IndustryDbErrorCode,message?:string){super(message??code);this.name='IndustryDbError';}}
 
 export interface IndustryDb{

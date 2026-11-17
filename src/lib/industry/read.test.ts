@@ -1,6 +1,6 @@
 // src/lib/industry/read.test.ts
 import {beforeEach,describe,expect,it,vi} from 'vitest';
-import type {AggregateManifest,FreshnessRow,MembershipRow} from './types';
+import type {AggregateManifest,FreshnessRow,MembershipRow} from './types-us';
 
 // memberships.ts (Task 8) and replay.ts (Task 11) are replaced by spec-formula stand-ins so this file
 // tests the read models only.

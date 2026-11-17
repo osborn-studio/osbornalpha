@@ -3,7 +3,7 @@
 // kinds, the replay URL (public route, or the admin route for the internal preview), normalisation of
 // both replay responses, and the role / input / diff summaries rendered in sections 2–4.
 import type {FactCellView,MembershipView,NodeView,PublicCell,PublicValuation,ReplayDiff,RunHeader} from '@/lib/industry/read';
-import type {AggregateManifest,ManifestCell,Scheme} from '@/lib/industry/types';
+import type {AggregateManifest,ManifestCell,Scheme} from '@/lib/industry/types-us';
 
 export type DrawerPayload=
  |{kind:'aggregate';scheme:Scheme;code:string;nodeName:string;cell:PublicCell;header:RunHeader;preview:boolean}

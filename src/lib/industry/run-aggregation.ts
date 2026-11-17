@@ -52,8 +52,8 @@ import {membersAtPure} from './memberships';
 import {AGG_CONCEPTS,CONFIG_HASH,DEFAULT_HISTORY_START,METHOD_VERSION,READINESS_MIN_PERCENT,assertDay,cellKey,expectedGrid,isFinancialNode} from './method';
 import {replayFromManifest} from './replay';
 import type {ReplayResult} from './replay';
-import {IndustryDbError} from './types';
-import type {AggregateManifest,HistoryClass,IndustryDb,IndustryDeps,ManifestMember,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,RunDependency,Scheme,SchemeVersion,SourceMembershipRow,StagedMetricCell} from './types';
+import {IndustryDbError} from './types-us';
+import type {AggregateManifest,HistoryClass,IndustryDb,IndustryDeps,ManifestMember,ManifestUnresolved,MembershipRow,MetricCellRow,MetricRunRow,RunDependency,Scheme,SchemeVersion,SourceMembershipRow,StagedMetricCell} from './types-us';
 
 export interface AggregationOptions{
  scheme:Extract<Scheme,'sw2021'>;version:Extract<SchemeVersion,'2021'>;level:number;factsAsOf:string;

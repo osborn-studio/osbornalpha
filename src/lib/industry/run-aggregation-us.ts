@@ -17,8 +17,8 @@ import {assertDay,cellKey} from './method';
 import {AGG_CONCEPTS_US,CONFIG_HASH_US,METHOD_VERSION_US,READINESS_MIN_PERCENT_US,expectedGridUs} from './method-us';
 import {replayFromManifest} from './replay';
 import type {AggregationHooks,AggregationReceipt,AggregationTimings} from './run-aggregation';
-import {IndustryDbError} from './types';
-import type {IndustryDeps,RunDependency,StagedMetricCell} from './types';
+import {IndustryDbError} from './types-us';
+import type {IndustryDeps,RunDependency,StagedMetricCell} from './types-us';
 export interface AggregationOptionsUs{factsAsOf:string;dryRun?:boolean;triggeredBy?:TriggeredBy;concurrency?:number;deadlineMs?:number}
 export const AGGREGATION_CONCURRENCY_US=16;
 class RunError extends Error{constructor(public code:string,message=code){super(message);}}

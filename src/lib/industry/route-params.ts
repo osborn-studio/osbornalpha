@@ -6,7 +6,7 @@
 import {QueryError,UUID_RE,dateParam,listParam} from '../facts/public-route';
 import {AGG_DURATIONS,defaultMetric,durationsForScheme,metricsForScheme,SCHEME_VERSION} from './read';
 import type {ValuationMetric,Window} from './read';
-import type {AggDuration,AggMetric,Scheme,SchemeVersion} from './types';
+import type {AggDuration,AggMetric,Scheme,SchemeVersion} from './types-us';
 
 export const CODE_RE=/^[A-Za-z0-9.\-]{1,32}$/;
 export const MAX_PERIODS=44;

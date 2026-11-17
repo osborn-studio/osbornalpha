@@ -12,10 +12,10 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
 import {recordAttempt} from '../dq/freshness';
-import {IndustryDbError} from './types';
+import {IndustryDbError} from './types-us';
 import type {
  AggMetric,ClassificationRow,DatasetKey,IndustryDb,LicenseStatus,MarkInput,MembershipTarget,NewMetricRun,OfficialInput,SchemeVersion,SourceMembershipInput,StagedMetricCell,
-} from './types';
+} from './types-us';
 
 export interface IndustryContractHarness{
  db:IndustryDb;tables:TableClient;
