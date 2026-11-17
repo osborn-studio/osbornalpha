@@ -1,6 +1,9 @@
 import {describe,it,expect,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
+import {memoryFactsBatchReader} from '../facts/read-batch';
+import {encodeManifest} from './manifest';
 import {memoryFactsDb} from '../facts/memory-facts-db';
+import {FactsDbError} from '../facts/types';
 import type {FactRow,ScopeRow} from '../facts/types';
 import {memoryIndustryDb} from './memory-industry-db';
 import {memoryManifestStore} from './manifest';
@@ -125,4 +128,42 @@ describe('US run',()=>{
   expect(r).toMatchObject({status:'failed',code:'facts_scope_not_ready'});expect(await db.metricRun(r.runId!)).toMatchObject({status:'failed',coverage_summary:{universe:6,ready:2,min_percent:50}});
   const empty={...deps,db:{...db,membershipCandidates:async()=>[]}};expect(await runIndustryAggregationUs(empty,{factsAsOf:'2026-04-01',dryRun:true})).toMatchObject({status:'failed',code:'facts_scope_not_ready'});
  });
+});
+
+describe('US batch envelopes',()=>{
+ it('keeps receipts, rows, dependencies and all canonical manifests identical',async()=>{
+  const {deps,db,facts}=await fixture();
+  const stage=vi.spyOn(db,'stageMetricRows'),dependencies=vi.spyOn(db,'stageRunDependencies');
+  const canonical:unknown[][]=[[],[]];
+  const run=async(i:number)=>runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01'},{replay:m=>{canonical[i].push(encodeManifest(m));return replayFromManifest(m);}});
+  const a=await run(0),rows=stage.mock.calls.map(c=>c[1]),refs=dependencies.mock.calls.map(c=>c.slice(1));stage.mockClear();dependencies.mockClear();
+  deps.factsBatch=memoryFactsBatchReader({readFacts:facts.readFacts.getMockImplementation()!});facts.readFacts.mockClear();
+  const b=await run(1);
+  const content=({timings:_,batchId:__,runId:___,generation:____,activatedAt:_____,...r}:typeof a)=>r;
+  expect(a.status).toBe('active');expect(content(b)).toEqual(content(a));
+  expect(stage.mock.calls.map(c=>c[1])).toEqual(rows);expect(dependencies.mock.calls.map(c=>c.slice(1))).toEqual(refs);
+  expect(canonical[1]).toEqual(canonical[0]);expect(facts.readFacts).not.toHaveBeenCalled();
+ });
+ it('chunks each issuer once and bounds concurrent chunks',async()=>{
+  const {deps,facts,ids}=await fixture(11,11),reader=memoryFactsBatchReader({readFacts:facts.readFacts.getMockImplementation()!});let active=0,max=0;
+  const readFactsBatch=vi.fn(async(...args:Parameters<typeof reader.readFactsBatch>)=>{active++;max=Math.max(max,active);await new Promise(r=>setTimeout(r,1));try{return await reader.readFactsBatch(...args);}finally{active--;}});
+  deps.factsBatch={readFactsBatch};
+  expect(await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01',dryRun:true,envelopeBatch:3,envelopeBatchConcurrency:2})).toMatchObject({status:'dry_run'});
+  expect(readFactsBatch).toHaveBeenCalledTimes(4);expect(max).toBe(2);expect(readFactsBatch.mock.calls.flatMap(c=>[...c[0]])).toEqual(ids);expect(facts.readFacts).not.toHaveBeenCalled();
+ });
+ it.each(['missing','issuer','market'])('fails closed for %s envelope',async mode=>{
+  const {deps,db,facts}=await fixture(),reader=memoryFactsBatchReader({readFacts:facts.readFacts.getMockImplementation()!});
+  deps.factsBatch={readFactsBatch:async(...args)=>{const out=await reader.readFactsBatch(...args),id=args[0][0];if(mode==='missing')out.delete(id);else out.get(id)!.rows[0]={...out.get(id)!.rows[0],...(mode==='issuer'?{issuer_id:'other'}:{market:'CN' as const})};return out;}};
+  const activate=vi.spyOn(db,'activateMetricRun');expect(await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01'})).toMatchObject({status:'failed',code:mode==='missing'?'batch_incomplete':'envelope_scope_mismatch'});expect(activate).not.toHaveBeenCalled();
+ });
+ it('checks budget between chunks',async()=>{
+  const {deps,db,facts}=await fixture(),reader=memoryFactsBatchReader({readFacts:facts.readFacts.getMockImplementation()!});let elapsed=0;const start=deps.now().getTime();deps.now=()=>new Date(start+elapsed);
+  const readFactsBatch=vi.fn(async(...args:Parameters<typeof reader.readFactsBatch>)=>{const out=await reader.readFactsBatch(...args);elapsed=101;return out;});deps.factsBatch={readFactsBatch};
+  const activate=vi.spyOn(db,'activateMetricRun');expect(await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01',deadlineMs:100,envelopeBatch:2,envelopeBatchConcurrency:1})).toMatchObject({status:'failed',code:'time_budget_exceeded'});expect(readFactsBatch).toHaveBeenCalledTimes(1);expect(activate).not.toHaveBeenCalled();
+ });
+});
+
+it('reports adapter incomplete responses with the same stable batch code',async()=>{
+ const {deps,db}=await fixture();deps.factsBatch={readFactsBatch:async()=>{throw new FactsDbError('unknown','batch_incomplete:missing');}};
+ const activate=vi.spyOn(db,'activateMetricRun');expect(await runIndustryAggregationUs(deps,{factsAsOf:'2026-04-01'})).toMatchObject({status:'failed',code:'batch_incomplete'});expect(activate).not.toHaveBeenCalled();
 });

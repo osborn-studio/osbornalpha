@@ -1,5 +1,6 @@
 // US SIC snapshot aggregation (§19), deliberately no cross-run reuse in v1. One snapshot membership
-// set and one US envelope per issuer serve all buckets. Reads/uploads are bounded (default sixteen);
+// set and one US envelope per issuer serve all buckets. Batch reads use 40 issuers × two chunks;
+// fallback reads/uploads are bounded (default sixteen);
 // staging follows code/bucket/metric order regardless of completion order. dryRun computes and
 // self-checks every manifest with zero mutations, including no batch, quarantine or freshness writes.
 import type {TriggeredBy,BatchError} from '../dq/batches';
@@ -7,6 +8,8 @@ import {emptyCounts,startBatch,finishBatch} from '../dq/batches';
 import {quarantine} from '../dq/quarantine';
 import {recordAttempt} from '../dq/freshness';
 import {FORMULA_VERSION} from '../facts/derive';
+import {FACTS_BATCH_MAX} from '../facts/read-batch';
+import {FactsDbError} from '../facts/types';
 import type {FilingRow} from '../facts/types';
 import {computeAggregateCellUs} from './aggregate-us';
 import type {IssuerFacts} from './aggregate';
@@ -19,8 +22,10 @@ import {replayFromManifest} from './replay';
 import type {AggregationHooks,AggregationReceipt,AggregationTimings} from './run-aggregation';
 import {IndustryDbError} from './types-us';
 import type {IndustryDeps,RunDependency,StagedMetricCell} from './types-us';
-export interface AggregationOptionsUs{factsAsOf:string;dryRun?:boolean;triggeredBy?:TriggeredBy;concurrency?:number;deadlineMs?:number}
+export interface AggregationOptionsUs{factsAsOf:string;dryRun?:boolean;triggeredBy?:TriggeredBy;concurrency?:number;envelopeBatch?:number;envelopeBatchConcurrency?:number;deadlineMs?:number}
 export const AGGREGATION_CONCURRENCY_US=16;
+export const ENVELOPE_BATCH_US=40;
+export const ENVELOPE_BATCH_CONCURRENCY_US=2;
 class RunError extends Error{constructor(public code:string,message=code){super(message);}}
 export async function runIndustryAggregationUs(deps:IndustryDeps,opts:AggregationOptionsUs,hooks:AggregationHooks={}):Promise<AggregationReceipt>{
  const timings:AggregationTimings={members:0,envelopes:0,filings:0,compute:0,manifests:0,stage:0,activate:0,total:0};
@@ -54,12 +59,30 @@ export async function runIndustryAggregationUs(deps:IndustryDeps,opts:Aggregatio
   }
   if(!coverage.facts_scope_ready)throw new RunError('facts_scope_not_ready',`${ready}/${universe.length}`);
   mark('envelopes');
-  const issuers=new Map<string,IssuerFacts>(await mapBounded(universe,async id=>{
+  let issuers:Map<string,IssuerFacts>;
+  if(deps.factsBatch){
+   const reader=deps.factsBatch,size=opts.envelopeBatch??ENVELOPE_BATCH_US;
+   if(!Number.isInteger(size)||size<1||size>FACTS_BATCH_MAX)throw new RunError('invalid_envelope_batch');
+   const chunks:string[][]=[];for(let i=0;i<universe.length;i+=size)chunks.push(universe.slice(i,i+size));
+   const entries=await mapBounded(chunks,async ids=>{
+    checkBudget();
+    const envelopes=await reader.readFactsBatch(ids,'US',{concepts:[...AGG_CONCEPTS_US],asOf:opts.factsAsOf,history:true});
+    for(const id of envelopes.keys())if(!ids.includes(id))throw new RunError('batch_incomplete',id);
+    return ids.map((id):readonly [string,IssuerFacts]=>{
+     const env=envelopes.get(id);if(!env)throw new RunError('batch_incomplete',id);
+     if(env.rows.some(r=>r.issuer_id!==id||r.market!=='US'))throw new RunError('envelope_scope_mismatch',id);
+     return [id,{issuer_id:id,stateRev:env.stateRev,truncated:env.truncated,rows:env.truncated?[]:env.rows,derived:[]}] as const;
+    });
+   },opts.envelopeBatchConcurrency??ENVELOPE_BATCH_CONCURRENCY_US);
+   issuers=new Map(entries.flat());
+  }else{
+   issuers=new Map<string,IssuerFacts>(await mapBounded(universe,async id=>{
    checkBudget();
    const env=await facts.readFacts(id,'US',{concepts:[...AGG_CONCEPTS_US],asOf:opts.factsAsOf,history:true});
    if(env.rows.some(r=>r.issuer_id!==id||r.market!=='US'))throw new RunError('envelope_scope_mismatch',id);
    return [id,{issuer_id:id,stateRev:env.stateRev,truncated:env.truncated,rows:env.truncated?[]:env.rows,derived:[]}] as const;
   },concurrency));
+  }
   checkBudget();
   receipt.truncatedIssuers=universe.filter(id=>issuers.get(id)!.truncated);
   mark('compute');
@@ -116,7 +139,7 @@ export async function runIndustryAggregationUs(deps:IndustryDeps,opts:Aggregatio
   receipt.activatedAt=(await db.activateMetricRun(receipt.runId!)).activatedAt;
   receipt.status='active';counts.fetched=staged.length;counts.inserted=staged.length;ok=true;
  }catch(e){
-  receipt.status='failed';receipt.code=e instanceof RunError||e instanceof IndustryDbError?e.code:'compute_failed';counts.failed=1;
+  receipt.status='failed';receipt.code=e instanceof RunError||e instanceof IndustryDbError?e.code:e instanceof FactsDbError&&e.message.startsWith('batch_incomplete:')?'batch_incomplete':'compute_failed';counts.failed=1;
   errors.push({code:receipt.code,message:(e instanceof Error?e.message:String(e)).slice(0,300)});
   if(!dry&&receipt.runId)try{await db.failRun('aggregate',receipt.runId,receipt.code);}catch(e){errors.push({code:'fail_run_failed',message:String(e).slice(0,300)});}
  }finally{

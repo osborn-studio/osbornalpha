@@ -140,7 +140,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    expect(await fn(role,'public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean)')).toBe(true);
    expect(await fn(role,'public.fact_state_rev(uuid,text)')).toBe(true);
   }
-  for(const sig of ['public.begin_sync_run(uuid,text,uuid,int)','public.reconcile_fact_sync_scope(text,jsonb,timestamptz)','public.resolve_facts_quarantine(uuid,uuid[],uuid)','public.replace_financial_metrics(uuid,text,bigint,jsonb)']){
+  for(const sig of ['public.read_facts_batch(uuid[],text,text[],date,boolean)','public.begin_sync_run(uuid,text,uuid,int)','public.reconcile_fact_sync_scope(text,jsonb,timestamptz)','public.resolve_facts_quarantine(uuid,uuid[],uuid)','public.replace_financial_metrics(uuid,text,bigint,jsonb)']){
    for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
