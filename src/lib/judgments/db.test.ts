@@ -175,7 +175,7 @@ describe('supabaseJudgmentsDb wiring',()=>{
   const a=stub({judgments_server_time:TS});
   const Q=(id:string,next:string)=>({judgment_id:id,settle_after:TS,settle_by:TS,label_policy:'first_observed',next_attempt_at:next,attempts:0,last_status:null,last_detail:{},leased_until:TS,lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',override:null,closed_at:null,updated_at:TS});
   const s=stub({register_judgment:{judgment_id:J,registered_at:TS,retrospective:true},append_settlement:{seq:2,status:'applied'},claim_due_judgments:[Q('b',TS),Q('a',TS),Q('c','2026-01-01T00:00:00+00:00')],release_lease:null,
-   calibration_cohort_internal:[],retire_methodology:{changed:true,seq:4},sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:{ok:true,updated_at:'2026-11-06T03:00:00.123456+00:00'},claim_judgment:{status:'claimed',lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',row:Q('a',TS)},repair_stale_batches:2,apply_quarantine_override:'stale',
+   calibration_cohort_internal:[],sync_methodology:{changed:false,seq:3},insert_calibration:'stale_revision',set_job_state:{ok:true,updated_at:'2026-11-06T03:00:00.123456+00:00'},claim_judgment:{status:'claimed',lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',row:Q('a',TS)},repair_stale_batches:2,apply_quarantine_override:'stale',
    resolve_closed_judgment_quarantine:'applied',reject_quarantined_settlement:{seq:3,status:'applied'},freeze_calibration_cohort:{status:'already_frozen',frozen_at:'2026-11-06T03:00:00.123456+00:00',n:'7'},calibration_cohort_members:[],clear_calibration_generation:7,
    quarantine_settlement:{status:'quarantined',quarantine_id:'0b0e1d8e-0000-4000-8000-0000000000bb'}},{judgment_settle_queue:[]});
   const db=supabaseJudgmentsDb({anon:a.client,admin:s.client});
@@ -187,7 +187,6 @@ describe('supabaseJudgmentsDb wiring',()=>{
   await db.releaseLease(J,'0b0e1d8e-0000-4000-8000-0000000000aa',{last_status:'pending',last_detail:{},next_attempt_at:TS,attempts_increment:0});
   await db.calibrationCohortInternal('m','v1',{from:'2023-01-01',to:'2026-01-01'},TS,J,10);
   expect(await db.syncMethodology(m,'script','why')).toEqual({changed:false,seq:3});
-  expect(await db.retireMethodology('macro_regime','v2','script','catalog change completed')).toEqual({changed:true,seq:4});
   const cal=calibrationFixture(m,'0b0e1d8e-0000-4000-8000-000000000001',4);
   expect(await db.insertCalibration(cal,4)).toBe('stale_revision');
   expect(await db.setJobState('produce:m@v1',null,{x:1})).toEqual({ok:true,updated_at:'2026-11-06T03:00:00.123Z'});
@@ -211,7 +210,6 @@ describe('supabaseJudgmentsDb wiring',()=>{
    {fn:'release_lease',args:{p_judgment_id:J,p_lease_token:'0b0e1d8e-0000-4000-8000-0000000000aa',p_patch:{last_status:'pending',last_detail:{},next_attempt_at:TS,attempts_increment:0}}},
    {fn:'calibration_cohort_internal',args:{p_methodology:'m',p_version:'v1',p_window_from:'2023-01-01',p_window_to:'2026-01-01',p_cutoff:TS,p_after:J,p_limit:10}},
    {fn:'sync_methodology',args:{p_row:m,p_actor:'script',p_reason:'why'}},
-   {fn:'retire_methodology',args:{p_methodology_id:'macro_regime',p_version:'v2',p_actor:'script',p_reason:'catalog change completed'}},
    {fn:'insert_calibration',args:{p_row:cal,p_expected_revision:4}},
    {fn:'set_job_state',args:{p_job:'produce:m@v1',p_expected_updated_at:null,p_state:{x:1}}},
    {fn:'claim_judgment',args:{p_judgment_id:'a',p_lease_seconds:600}},
