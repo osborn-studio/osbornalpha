@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   calculateCostMicrormb,
   calculateCostUsd,
@@ -8,6 +8,7 @@ import {
   maxInputTokensFor,
   normalizeUsage,
   PRICING_VERSION,
+  pricedAsModel,
   reservationCostMicrormb,
 } from './llm-pricing';
 
@@ -22,6 +23,22 @@ describe('pricing defaults', () => {
 });
 
 describe('normalizeUsage', () => {
+  it('preserves relay completion totals including reasoning tokens and zero cached tokens', () => {
+    expect(normalizeUsage({
+      prompt_tokens: 12,
+      completion_tokens: 40,
+      total_tokens: 52,
+      completion_tokens_details: { reasoning_tokens: 38 },
+      prompt_tokens_details: { cached_tokens: 0 },
+    })).toEqual({
+      inputTokens: 12,
+      outputTokens: 40,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 12,
+      estimated: false,
+    });
+  });
+
   it('normalizes DeepSeek cache-hit and cache-miss detail', () => {
     expect(normalizeUsage({
       prompt_tokens: 1_000,
@@ -320,5 +337,94 @@ describe('DeepSeek pricing', () => {
       estimated: false,
     }, DEFAULT_USD_CNY_MICROS)).toThrow('pricing_unavailable');
     expect(() => maxInputTokensFor('openai', 'gpt-4o')).toThrow('pricing_unavailable');
+  });
+});
+
+describe('LLM_PRICING_MODEL alias', () => {
+  const M = 'deepseek-v4.1-flash-1017';
+  const reviewed = 'deepseek-v4-flash';
+  const usage = normalizeUsage({
+    prompt_tokens: 1_000, prompt_cache_hit_tokens: 300,
+    prompt_cache_miss_tokens: 700, completion_tokens: 500,
+  });
+
+  beforeEach(() => {
+    for (const name of [
+      'LLM_PROVIDER', 'LLM_MODEL', 'LLM_BASE_URL',
+      'LLM_PRICING_MODEL', 'LLM_BASE_URL_ALLOW_INSECURE',
+    ]) vi.stubEnv(name, undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  function enableAlias() {
+    vi.stubEnv('LLM_PROVIDER', 'deepseek');
+    vi.stubEnv('LLM_MODEL', M);
+    vi.stubEnv('LLM_BASE_URL', 'http://47.84.11.10/v1');
+    vi.stubEnv('LLM_BASE_URL_ALLOW_INSECURE', '1');
+    vi.stubEnv('LLM_PRICING_MODEL', reviewed);
+  }
+
+  function expectUnpriced(provider = 'deepseek', model = M) {
+    expect(() => maxInputTokensFor(provider, model)).toThrow('pricing_unavailable');
+    expect(() => reservationCostMicrormb(provider, model, 1_000, 500)).toThrow('pricing_unavailable');
+    expect(() => calculateCostMicrormb(provider, model, usage)).toThrow('pricing_unavailable');
+    expect(() => pricedAsModel(provider, model)).toThrow('pricing_unavailable');
+  }
+
+  it('fails closed without env configuration', () => {
+    expectUnpriced();
+  });
+
+  it('uses exactly the reviewed limits and costs with full env configuration', () => {
+    enableAlias();
+    const actual = [
+      maxInputTokensFor('deepseek', M),
+      reservationCostMicrormb('deepseek', M, 1_000, 500),
+      calculateCostMicrormb('deepseek', M, usage),
+    ];
+    expect(actual).toEqual([
+      maxInputTokensFor('deepseek', reviewed),
+      reservationCostMicrormb('deepseek', reviewed, 1_000, 500),
+      calculateCostMicrormb('deepseek', reviewed, usage),
+    ]);
+    for (const value of actual) expect(value).toBeGreaterThan(0);
+    expect(pricedAsModel('deepseek', M)).toBe(reviewed);
+  });
+
+  it.each([
+    ['LLM_BASE_URL', undefined],
+    ['LLM_BASE_URL_ALLOW_INSECURE', undefined],
+    ['LLM_PRICING_MODEL', undefined],
+    ['LLM_PRICING_MODEL', 'not-reviewed'],
+    ['LLM_PRICING_MODEL', '   '],
+    ['LLM_PROVIDER', undefined],
+    ['LLM_PROVIDER', 'openai'],
+    ['LLM_MODEL', ''],
+  ])('fails closed with %s=%s', (name, value) => {
+    enableAlias();
+    vi.stubEnv(name, value);
+    expectUnpriced();
+  });
+
+  it('requires the exact model case and matching provider argument', () => {
+    enableAlias();
+    expectUnpriced('deepseek', 'DeepSeek-V4.1-Flash-1017');
+    expectUnpriced('openai');
+  });
+
+  it('normalizes only the provider env and pricing target', () => {
+    enableAlias();
+    vi.stubEnv('LLM_PROVIDER', ' DEEPSEEK ');
+    vi.stubEnv('LLM_PRICING_MODEL', ' deepseek-v4-flash ');
+    expect(pricedAsModel('deepseek', M)).toBe(reviewed);
+  });
+
+  it('always prefers an exact reviewed hit with or without env configuration', () => {
+    expect(pricedAsModel('deepseek', reviewed)).toBe(reviewed);
+    enableAlias();
+    expect(pricedAsModel('deepseek', reviewed)).toBe(reviewed);
+    vi.stubEnv('LLM_MODEL', reviewed);
+    vi.stubEnv('LLM_PRICING_MODEL', 'not-reviewed');
+    expect(pricedAsModel('deepseek', reviewed)).toBe(reviewed);
   });
 });

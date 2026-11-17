@@ -196,3 +196,62 @@ describe('response shape validation', () => {
     await expect(chat({ ...CFG, maxResponseBytes: 1024 }, MSG)).rejects.toMatchObject({ name: 'LlmResponseShapeError' });
   });
 });
+
+describe('relay reasoning responses', () => {
+  function relayResponse(content = 'OK') {
+    return {
+      id: 'x',
+      object: 'chat.completion',
+      model: 'deepseek-v4.1-flash-1017',
+      choices: [{
+        index: 0,
+        finish_reason: 'stop',
+        message: { role: 'assistant', content, reasoning_content: 'thinking...' },
+      }],
+      usage: {
+        prompt_tokens: 12,
+        completion_tokens: 40,
+        total_tokens: 52,
+        completion_tokens_details: { reasoning_tokens: 38 },
+        prompt_tokens_details: { cached_tokens: 0 },
+      },
+    };
+  }
+
+  const usage = {
+    inputTokens: 12,
+    outputTokens: 40,
+    cacheHitInputTokens: 0,
+    cacheMissInputTokens: 12,
+    estimated: false,
+  };
+
+  it.each([true, false])('chat excludes reasoning content and preserves usage with cache details: %s', async (withCacheDetails) => {
+    const response = relayResponse();
+    if (!withCacheDetails) Reflect.deleteProperty(response.usage, 'prompt_tokens_details');
+    mockFetch(response);
+
+    const r = await chat(CFG, { messages: [{ role: 'user', content: 'hi' }] });
+
+    expect(r.content).toBe('OK');
+    expect(r.usage).toEqual(usage);
+  });
+
+  it('toolChat returns plain content and usage when no tool calls are present', async () => {
+    mockFetch(relayResponse());
+
+    const r = await toolChat(CFG, { messages: [{ role: 'user', content: 'hi' }], tools: [] });
+
+    expect(r.content).toBe('OK');
+    expect(r.toolCalls).toEqual([]);
+    expect(r.finishReason).toBe('stop');
+    expect(r.usage).toEqual(usage);
+  });
+
+  it('chat accepts empty content without falling back to reasoning content', async () => {
+    mockFetch(relayResponse(''));
+
+    await expect(chat(CFG, { messages: [{ role: 'user', content: 'hi' }] }))
+      .resolves.toMatchObject({ content: '' });
+  });
+});

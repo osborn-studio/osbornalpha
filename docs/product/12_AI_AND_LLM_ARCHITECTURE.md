@@ -26,6 +26,8 @@ DEEPSEEK_API_KEY=<deployment secret>
 SUPABASE_SERVICE_ROLE_KEY=<deployment secret>
 ```
 
+可选的 `LLM_BASE_URL` 仅在显式设置 `LLM_PROVIDER` 时覆盖平台 env key 的目标地址；用户自带 key 始终走注册表官方地址，设置页的探测与发现路径不受影响。非法覆盖值使平台 AI 失败关闭，不会回落官方地址；旧 facade 的 DeepSeek 路径同样拒绝发送，避免将中转 key 泄露到官方端点。`http://` 仅在 `LLM_BASE_URL_ALLOW_INSECURE=1` 时接受，此时密钥与全部提示词内容以明文传输，推荐使用 HTTPS。仅在 `LLM_BASE_URL` 生效且 `LLM_PROVIDER`、`LLM_MODEL` 匹配时，可用 `LLM_PRICING_MODEL` 显式指定未定价中转模型所采用的已复核价格（如 `deepseek-v4-flash`），精确价格命中优先，审计仍记录真实模型名与 `PRICING_VERSION`，未设置或不匹配则以 `pricing_unavailable` 失败关闭，中转真实价格不由代码校验。
+
 `npm run preflight:release` 验证实际解析结果、精确价格注册表和 service-role 存在性，且不输出 secret。当前平台价格仅复核 `deepseek:deepseek-v4-flash`；不得把旧 facade 的模型/估价当作平台计量价格。
 
 旧 `src/lib/data/sources/llm.ts` 的 `getActiveProvider()` 仅描述 legacy facade：

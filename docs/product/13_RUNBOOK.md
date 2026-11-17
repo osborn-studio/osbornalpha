@@ -35,6 +35,9 @@ vercel --prod --yes                  # 直接发 Production
 | `LLM_PROVIDER` | ✅（推荐显式） | 生产设为 `deepseek`；显式 provider 缺自己的 key 时失败关闭，不自动换 provider |
 | `LLM_MODEL` | ✅（推荐显式） | 生产设为已复核定价的 `deepseek-v4-flash` |
 | `DEEPSEEK_API_KEY` | ✅（平台 AI） | DeepSeek 服务端密钥；值仅存部署平台 secret |
+| `LLM_BASE_URL` | 可选 | 平台 key 的自建中转地址；仅在 `LLM_PROVIDER` 显式设置时生效；用户自带 key 永远走官方地址；非法值时平台 AI 失败关闭，不回落官方地址；旧 facade 的 DeepSeek 路径同样遵守 |
+| `LLM_BASE_URL_ALLOW_INSECURE` | 可选 | 仅当为 `1` 时接受 `http://`；明文 HTTP 下密钥与全部提示词内容在公网不加密传输，推荐 https 域名 |
+| `LLM_PRICING_MODEL` | 可选 | 仅在 `LLM_BASE_URL` 生效时使用：中转的模型名（`LLM_MODEL`）没有已复核价格时，按此已复核模型（如 `deepseek-v4-flash`）的价格计量与预留；审计行仍记录真实模型名；未设置则未定价模型失败关闭（`pricing_unavailable`）。中转的真实价格不由代码校验。 |
 | `DEEPSEEK_MODEL` / `ANTHROPIC_API_KEY` | 旧 facade 按需 | 仅旧 `data/sources/llm.ts` 路径；不能替代上述平台计量配置 |
 | `LLM_DAILY_COST_LIMIT_MICRORMB` | ✅ | 生产 `8800000`（¥8.80） |
 | `LLM_USD_CNY_MICROS` | ✅ | 经评审的 USD/CNY 微单位值，当前 `7200000` |
