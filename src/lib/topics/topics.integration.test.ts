@@ -3,7 +3,10 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {Pool,type PoolClient} from 'pg';
-import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {afterAll,afterEach,beforeAll,beforeEach,describe,expect,it} from 'vitest';
+
+import {topicsDbContract} from './db-contract';
+import {pgTopicsDb} from './pg-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const TABLES=['topic_settings','topics','topic_versions','topic_version_evidence','topic_drafts','topic_source_licences',
@@ -255,4 +258,25 @@ it('grants every non-trigger function only to service_role, excluding the intern
   await expect(c.query(`select public.topic_audit(null,$1,'preview','{}'::jsonb)`,[ACTOR])).rejects.toThrow(/permission denied/);
  }finally{await c.query('rollback');c.release();}
 });
+});
+
+// Storage contract (spec §4.9): hold the settings lock through each case and restore on failure.
+describe.skipIf(!enabled)('topics storage',()=>{
+ let pool:Pool,lock:PoolClient;
+ let previous:boolean;
+ beforeAll(()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
+ afterAll(async()=>{await pool.end();});
+ beforeEach(async()=>{
+  lock=await pool.connect();
+  await lock.query("select pg_advisory_lock(hashtext('topic_settings'))");
+  previous=(await lock.query('select public_enabled from public.topic_settings where id=1')).rows[0].public_enabled;
+ });
+ afterEach(async()=>{
+  if(!lock)return;
+  try{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[previous]);}
+  finally{try{await lock.query("select pg_advisory_unlock(hashtext('topic_settings'))");}finally{lock.release();}}
+ });
+ topicsDbContract('pg',async()=>({db:pgTopicsDb(pool),newId:randomUUID,
+  setPublic:async on=>{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[on]);},
+  asPublic:()=>pgTopicsDb(pool,{role:'authenticated'})}));
 });
