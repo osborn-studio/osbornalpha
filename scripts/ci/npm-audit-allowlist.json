@@ -3,7 +3,8 @@
     "id": "GHSA-fc5q-39xc-vjpf",
     "package": "picomatch",
     "installed": "4.0.7",
-    "reason": "no patched version published (range <= 4.0.7); only reachable via next-intl → @parcel/watcher, an optional native dev watcher not executed in the Vercel runtime",
-    "expires": "2026-12-31"
+    "reason": "owner-approved 14-day exception: no patched version (range <= 4.0.7); only path is next-intl → @parcel/watcher (optional native dev watcher); present in 0 of 328 .nft.json traces and no server bundle; receives three constant patterns",
+    "expires": "2026-12-01",
+    "path": "node_modules/@parcel/watcher/node_modules/picomatch"
   }
 ]
