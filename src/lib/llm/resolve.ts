@@ -7,10 +7,15 @@
 //      provider-specific *_API_KEY).
 //   3. null — caller must handle "no LLM configured" gracefully.
 //
+// LLM_BASE_URL overrides only the platform endpoint when LLM_PROVIDER is pinned.
+// Invalid overrides disable the platform LLM without falling back to the official endpoint.
+// Saved user keys always use the registry endpoint and never consult this override.
+//
 // Provider ids: `provider` on the result is the registry id (doubao, kimi_cn, ...). Rows saved
 // under the legacy Alpha ids (ark, kimi, minimax) and LLM_PROVIDER values using them resolve
 // through the catalog aliases; the stored id is also what selects a legacy chat path (MiniMax).
 
+import { platformBaseUrl, platformBaseUrlErrorMessage } from './platform-base-url';
 import { getProvider, llmConfigFor, resolveProviderId } from './providers';
 import { decrypt } from './crypto';
 import { getUserLlm } from './settings-store';
@@ -24,6 +29,7 @@ export interface ResolvedLlm extends LlmConfig {
   // or count these calls against the platform's free/pro limits.
   // 'env' = the platform's shared key — subject to quota.
   source: 'user' | 'env';
+  baseUrlOverride?: { host: string; insecure: boolean };
 }
 
 // Environment variable per registry id. Names are unchanged from before the registry.
@@ -82,6 +88,11 @@ export async function resolveLlm(): Promise<ResolvedLlm | null> {
 }
 
 export function resolvePlatformLlm(): ResolvedLlm | null {
+  const override = platformBaseUrl();
+  if (override.kind === 'invalid') {
+    console.error(`[llm] LLM_BASE_URL rejected (${override.reason}): ${platformBaseUrlErrorMessage(override.reason)}. Platform LLM is disabled until it is fixed.`);
+    return null;
+  }
   const explicitProvider = process.env.LLM_PROVIDER?.trim().toLowerCase();
   const explicitId = explicitProvider ? resolveProviderId(explicitProvider) : null;
   if (explicitProvider && !explicitId) return null;
@@ -104,6 +115,10 @@ export function resolvePlatformLlm(): ResolvedLlm | null {
       ...llmConfigFor(def, { model, apiKey: key, storedProviderId: explicitProvider || def.legacyId || def.id }),
       protocol: def.protocol,
       source: 'env',
+      ...(override.kind === 'ok' ? {
+        baseUrl: override.baseUrl,
+        baseUrlOverride: { host: override.host, insecure: override.insecure },
+      } : {}),
     };
   }
 

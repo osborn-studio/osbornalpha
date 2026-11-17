@@ -11,10 +11,13 @@ vi.mock('./crypto', () => ({
 import { resolveLlm, resolvePlatformLlm, resolveUserLlm } from './resolve';
 import { getUserLlm } from './settings-store';
 import { decrypt } from './crypto';
+import { chat } from './openai-compat';
 
 const ENV_KEYS = [
   'LLM_PROVIDER',
   'LLM_MODEL',
+  'LLM_BASE_URL',
+  'LLM_BASE_URL_ALLOW_INSECURE',
   'ARK_API_KEY',
   'DEEPSEEK_API_KEY',
   'OPENAI_API_KEY',
@@ -34,6 +37,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const k of ENV_KEYS) {
     if (ORIGINAL_ENV[k] === undefined) {
       delete process.env[k];
@@ -277,5 +282,77 @@ describe('resolveUserLlm', () => {
       apiKey: 'sk-user',
       source: 'user',
     }));
+  });
+});
+
+describe('LLM_BASE_URL override', () => {
+  beforeEach(() => {
+    process.env.LLM_PROVIDER = 'deepseek';
+    process.env.DEEPSEEK_API_KEY = 'platform-test-key';
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('keeps the official endpoint without override metadata when unset', () => {
+    const result = resolvePlatformLlm();
+    expect(result?.baseUrl).toBe('https://api.deepseek.com');
+    expect(result).not.toHaveProperty('baseUrlOverride');
+  });
+  it('overrides only the endpoint and adds safe metadata', () => {
+    const original = resolvePlatformLlm();
+    process.env.LLM_BASE_URL = 'https://relay.example.com/v1/';
+    expect(resolvePlatformLlm()).toEqual({ ...original, baseUrl: 'https://relay.example.com/v1', baseUrlOverride: { host: 'relay.example.com', insecure: false } });
+    expect(resolvePlatformLlm()).toMatchObject({ chatPath: '/chat/completions', provider: 'deepseek', source: 'env' });
+  });
+  it('fails closed on HTTP without logging the URL or key', () => {
+    process.env.LLM_BASE_URL = 'http://47.84.11.10/v1';
+    expect(resolvePlatformLlm()).toBeNull();
+    expect(console.error).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(console.error).mock.calls[0][0] as string;
+    expect(message).toContain('insecure_http_not_allowed');
+    expect(message.includes(process.env.DEEPSEEK_API_KEY!)).toBe(false);
+    expect(message.includes(process.env.LLM_BASE_URL)).toBe(false);
+  });
+  it('permits explicitly enabled HTTP and uses the exact request URL', async () => {
+    process.env.LLM_BASE_URL = 'http://47.84.11.10/v1';
+    process.env.LLM_BASE_URL_ALLOW_INSECURE = '1';
+    const result = resolvePlatformLlm();
+    expect(result).toMatchObject({ baseUrl: 'http://47.84.11.10/v1', baseUrlOverride: { host: '47.84.11.10', insecure: true } });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }], usage: {} }) });
+    vi.stubGlobal('fetch', fetchMock);
+    await chat(result!, { messages: [{ role: 'user', content: 'hello' }] });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('http://47.84.11.10/v1/chat/completions', expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer platform-test-key' }) }));
+  });
+  it.each(['deepseek', 'unknown'])('rejects invalid overrides even with provider %s', (provider) => {
+    process.env.LLM_PROVIDER = provider;
+    process.env.LLM_BASE_URL = 'garbage';
+    expect(resolvePlatformLlm()).toBeNull();
+    expect(console.error).toHaveBeenCalledTimes(1);
+  });
+  it('ignores the override when the provider is unpinned', () => {
+    delete process.env.LLM_PROVIDER;
+    process.env.LLM_BASE_URL = 'https://relay.example.com/v1';
+    const result = resolvePlatformLlm();
+    expect(result?.baseUrl).toBe('https://api.deepseek.com');
+    expect(result).not.toHaveProperty('baseUrlOverride');
+  });
+  it.each([
+    ['minimax', 'MINIMAX_API_KEY', '/text/chatcompletion_v2', 'openai'],
+    ['doubao', 'ARK_API_KEY', '/v1/messages', 'anthropic'],
+  ])('preserves the path and protocol for %s', (provider, keyName, chatPath, protocol) => {
+    process.env.LLM_PROVIDER = provider;
+    process.env[keyName] = 'platform-test-key';
+    process.env.LLM_BASE_URL = 'https://relay.example.com/v1';
+    expect(resolvePlatformLlm()).toMatchObject({ baseUrl: 'https://relay.example.com/v1', chatPath, protocol });
+  });
+  it.each(['https://relay.example.com/v1', 'garbage'])('isolates user keys from override %s', async (baseUrl) => {
+    process.env.LLM_BASE_URL = baseUrl;
+    vi.mocked(getUserLlm).mockResolvedValue({ provider: 'deepseek', model: 'deepseek-chat', apiKeyCipher: 'cipher', updatedAt: null });
+    vi.mocked(decrypt).mockReturnValue('user-test-key');
+    for (const resolve of [resolveUserLlm, resolveLlm]) {
+      const result = await resolve();
+      expect(result).toMatchObject({ baseUrl: 'https://api.deepseek.com', source: 'user', apiKey: 'user-test-key' });
+      expect(result).not.toHaveProperty('baseUrlOverride');
+    }
+    expect(console.error).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,8 @@
  * → 9-persona run ≈ $0.004 (chat) or $0.009 (reasoner) — 8-10x cheaper than Sonnet.
  */
 
+import { platformBaseUrl } from '../../llm/platform-base-url';
+
 export const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/chat/completions';
 
 export function isDeepSeekConfigured(): boolean {
@@ -44,6 +46,14 @@ export interface DeepSeekChatResp {
 }
 
 export async function deepseekChat(opts: DeepSeekChatOpts): Promise<DeepSeekChatResp> {
+  const override = platformBaseUrl();
+  if (override.kind === 'invalid') {
+    throw new Error(`LLM_BASE_URL rejected (${override.reason}); refusing to send the platform key to the official endpoint`);
+  }
+  if (override.kind === 'ok' && process.env.LLM_PROVIDER?.trim().toLowerCase() !== 'deepseek') {
+    throw new Error('LLM_BASE_URL rejected (provider_mismatch); refusing to send the platform key to the official endpoint');
+  }
+  const endpoint = override.kind === 'ok' ? `${override.baseUrl}/chat/completions` : DEEPSEEK_ENDPOINT;
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error('DEEPSEEK_API_KEY not configured');
 
@@ -68,8 +78,9 @@ export async function deepseekChat(opts: DeepSeekChatOpts): Promise<DeepSeekChat
 
   let resp: Response;
   try {
-    resp = await fetch(DEEPSEEK_ENDPOINT, {
+    resp = await fetch(endpoint, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
