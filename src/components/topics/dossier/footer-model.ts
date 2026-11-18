@@ -1,6 +1,8 @@
 // Dossier disclosure and source attribution (spec §7.2, D7–D8).
 import type {DossierDto} from '@/lib/topics/public-dto';
-const datasets:Record<string,string>={'macro.fred':'macro_fred','macro.akshare':'macro_akshare','facts.us':'facts_us','facts.cn':'facts_cn','industry.agg.sic':'industry_agg_sic','industry.agg.sw2021':'industry_agg_sw2021'};
+/** Message-key suffixes with a label in topics.datasets.* (dataset key with dots replaced by underscores). */
+const DATASET_LABELS=new Set(['macro_fred','macro_akshare','facts_us','facts_cn','industry_agg_sic','industry_agg_sw2021']);
+const datasetKey=(dataset:string)=>dataset.replace(/\./g,'_');
 export const COUNT_ORDER=['ok','missing','withheld','not_served','unsupported','retracted'] as const;
 export function footerModel(dto:DossierDto,text:(key:string)=>string){
  return {counts:COUNT_ORDER.map(state=>({state,count:dto.counts[state]})),
@@ -9,5 +11,5 @@ export function footerModel(dto:DossierDto,text:(key:string)=>string){
   attributions:[...new Set(dto.attributions)].sort().map(key=>text(`attribution.${key}`)),
   sources:dto.attributions.map(key=>({publisher:text(`attribution.${key}`)})),
   fredNote:dto.evidence.some(e=>e.kind==='macro_observation'&&e.state==='withheld'&&['licence_unconfirmed','catalog_restricted'].includes(e.reason??'')),
-  freshness:Object.entries(dto.freshness_at_publication).map(([dataset,status])=>({dataset,label:Object.hasOwn(datasets,dataset)?text(`datasets.${datasets[dataset]}`):dataset,status:status==='unknown'?'missing' as const:status})),age_days:dto.age_days};
+  freshness:Object.entries(dto.freshness_at_publication).map(([dataset,status])=>({dataset,label:DATASET_LABELS.has(datasetKey(dataset))?text(`datasets.${datasetKey(dataset)}`):dataset,status:status==='unknown'?'missing' as const:status})),age_days:dto.age_days};
 }
