@@ -60,3 +60,18 @@ it('places a public citation snippet only in the drawer locator',async()=>{
  c.document.permission='private';
  expect(await r.latestIdentity(ref)).toMatchObject({state:'withheld',reason:'private_document',value:null});
 });
+it('supplies bilingual category, lifecycle and calibration slots without numeric claims',async()=>{
+ const {list}=build(),r=list.find(r=>r.kind==='judgment')!;
+ const [out]=await r.resolve([SAMPLES.judgment[0].ref],pub);
+ expect(out.display.fact).toEqual({template:'topic.judgment_ref',slots:{method:'synthetic_fact_metric@v1',lifecycle:'open',calibration:'insufficient',registered_at:'2026-11-01T00:00:00.000Z',claim_zh:'复苏',claim_en:'recovery'}});
+ expect(JSON.stringify(out.display.fact?.slots)).not.toMatch(/%|0\.7/);
+});
+it('keeps probability numbers out of judgment slots even when a card could show them',async()=>{
+ const {s,list}=build(),r=list.find(r=>r.kind==='judgment')!;
+ const item=s.seed.judgments.items[0];item.envelope.judgment.kind='probability';
+ item.envelope.judgment.claim={p:0.7,event:{zh:'营收同比增长',en:'Revenue grows year over year'}};
+ const [out]=await r.resolve([SAMPLES.judgment[0].ref],pub);
+ expect(out.display.fact?.slots).toMatchObject({claim_zh:'营收同比增长',claim_en:'Revenue grows year over year',calibration:'insufficient'});
+ expect(out.display.fact?.slots).not.toHaveProperty('value');
+ expect(JSON.stringify(out.display.fact?.slots)).not.toMatch(/%|0\.7/);
+});
