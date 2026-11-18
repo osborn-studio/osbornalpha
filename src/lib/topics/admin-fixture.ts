@@ -1,3 +1,4 @@
+import {memoryTableClient} from '@/lib/db/memory-table-client';
 // Topic plan PR-5 commander decision 2: isolated, process-wide admin fixtures.
 import {memoryTopicsDb} from './memory-db';
 import {memorySources} from '@/lib/evidence/memory-sources';
@@ -42,6 +43,6 @@ export function adminFixtureDeps():AdminDeps{
  }});
  const sources=memorySources(allFixtures());
  const resolver=createResolver([macroResolver(sources),industryResolver(sources),factResolver(sources),citationResolver(sources),judgmentResolver(sources),brokerResolver()]);
- const deps:AdminDeps={db,resolver,lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'fixture',privateIds:async()=>new Set<string>()};
+ const deps:AdminDeps={tables:memoryTableClient(),db,resolver,lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'fixture',privateIds:async()=>new Set<string>()};
  globals[KEY]=deps;return deps;
 }

@@ -93,7 +93,9 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    Object.assign(settings,{public_enabled:i.publicEnabled,summary_public_enabled:i.summaryPublicEnabled,summary_provider_note:i.summaryProviderNote,updated_by:i.actor,updated_at:now()});
    audit(null,i.actor,'settings_change',{public_enabled:i.publicEnabled,summary_public_enabled:i.summaryPublicEnabled,summary_provider_note:i.summaryProviderNote,licence_confirmations:i.licenceConfirmations});return copy(settings);
   },
+  async versionById(id){return copy(versions.find(v=>v.version_id===id)??null);},
   async versionsOfTopic(id){return copy(versions.filter(v=>v.topic_id===id).sort((a,b)=>a.version_no-b.version_no));},
+  async liveVersionRefs(){return versions.filter(v=>v.unpublished_at===null).map(({topic_id,version_id,version_no})=>({topic_id,version_id,version_no}));},
   async liveEvidence(after,limit){return copy(evidence.filter(e=>versions.some(v=>v.version_id===e.version_id&&v.unpublished_at===null)&&(!after||e.version_id>after.version_id||(e.version_id===after.version_id&&e.ordinal>after.ordinal))).sort((a,b)=>a.version_id.localeCompare(b.version_id)||a.ordinal-b.ordinal).slice(0,limit));},
   async upsertDrift(rows,checkedAt,complete,cursor){
    const checked_at=new Date(checkedAt).toISOString();

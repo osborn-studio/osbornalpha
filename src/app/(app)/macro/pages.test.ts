@@ -26,6 +26,11 @@ describe('macro pages',()=>{
   expect(p).toMatch(/\/\/ MACRO\nimport \{ MacroSummaryCard \} from '@\/components\/macro\/MacroSummaryCard';\n\/\/ \/MACRO/);
   expect(p).toMatch(/\{\/\* MACRO \*\/\}[\s\S]*<MacroSummaryCard \/>[\s\S]*\{\/\* \/MACRO \*\/\}/);
  });
+ it('shows macro indicator rows directly on the hub card',()=>{
+  const card=read('src/components/macro/MacroSummaryCard.tsx');
+  expect(card).toContain('<MacroKeyRows groups={groups}');
+  expect(card).not.toContain('<details');
+ });
  it('TabBar highlights /macro/* with segment-aware matching',()=>{
   const tb=read('src/components/TabBar.tsx');
   expect(read('src/components/nav/nav-items.ts')).toContain("href: '/macro'");

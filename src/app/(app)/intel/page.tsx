@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { MarketLabel } from '@/components/MarketLabel';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -16,52 +16,81 @@ import { IndustryEntryCard } from '@/components/industries/IndustryEntryCard';
 import { MacroSummaryCard } from '@/components/macro/MacroSummaryCard';
 // /MACRO
 
+// TOPICS ↓
+import {TopicEntryCard} from '@/components/topics/TopicEntryCard';
+// TOPICS ↑
+// FOREIGN ↓
+import {ForeignEntryCard} from './foreign-research/components/ForeignEntryCard';
+// FOREIGN ↑
+import {HubCard} from '@/components/intel/hub/HubCard';
+import {HUB_ORDER,hubNumber} from '@/components/intel/hub/hub-model';
+import {PageHeader} from '@/components/research-ui/PageHeader';
+
 interface SearchResult { t: string; n: string; py: string; m: Market }
 interface Artifact { id: string; skill_id: string; ticker: string | null; title: string; content_md: string; created_at: string }
 
 type Tab = 'discover' | 'research';
 
 export default function IntelPage() {
-  const t = useTranslations('intel');
-  // FOREIGN ↓ entry to the foreign research module (plan 2026-11-06 Task D3)
-  const tfr = useTranslations('foreign-research.public.entry');
-  // FOREIGN ↑
+  const hub = useTranslations('intel.hub');
+  const company = useTranslations('company.directory.entry');
   const [tab, setTab] = useState<Tab>('discover');
+  const cards = {
+    macro: <>
+      {/* MACRO */}
+      <MacroSummaryCard />
+      {/* /MACRO */}
+    </>,
+    industry: <>
+      {/* INDUSTRY:BEGIN */}
+      <IndustryEntryCard />
+      {/* INDUSTRY:END */}
+    </>,
+    company: <HubCard id="companies" no={hubNumber('company')} title={hub('company.title')} titleEn={hub('company.titleEn')}
+      state="open" href="/intel/companies" enterLabel={hub('company.enter')} linkTestId="intel-companies-card">
+      <p>{company('desc')}</p>
+    </HubCard>,
+    foreign: <>
+      {/* FOREIGN ↓ */}
+      <ForeignEntryCard />
+      {/* FOREIGN ↑ */}
+    </>,
+    topic: <>
+      {/* TOPICS ↓ */}
+      <TopicEntryCard />
+      {/* TOPICS ↑ */}
+    </>,
+  };
 
   return (
     <>
-      <h1 className="mb-1 text-xl font-bold">{t('page.title')}</h1>
-      <p className="mb-4 text-sm text-text-dim">{t('page.subtitle')}</p>
-      {/* MACRO */}
-      <div className="mb-4"><MacroSummaryCard /></div>
-      {/* /MACRO */}
-
-      <div className="mb-4 flex gap-1 rounded-md border border-border p-1 text-sm">
-        <button
-          type="button"
-          onClick={() => setTab('discover')}
-          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
-        >
-          {t('tabs.discover')}
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('research')}
-          className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
-        >
-          {t('tabs.research')}
-        </button>
-        {/* FOREIGN ↓ */}
-        <Link
-          href="/intel/foreign-research"
-          className="flex-1 rounded px-3 py-1.5 text-center font-semibold text-text-dim hover:text-accent hover:no-underline"
-        >
-          {tfr('tab')}
-        </Link>
-        {/* FOREIGN ↑ */}
+      <PageHeader title={hub('title')} altTitle={hub('titleEn')} scope={hub('scope')} />
+      <div className="my-4 grid min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {HUB_ORDER.map(id => <Fragment key={id}>{cards[id]}</Fragment>)}
       </div>
+      <section>
+        <h2 className="mb-2 text-base font-semibold">{hub('section')}</h2>
+        <div className="mb-4 flex gap-1 rounded-md border border-border p-1 text-sm">
+          <button
+            type="button"
+            aria-pressed={tab === 'discover'}
+            onClick={() => setTab('discover')}
+            className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'discover' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
+          >
+            {hub('discover')}
+          </button>
+          <button
+            type="button"
+            aria-pressed={tab === 'research'}
+            onClick={() => setTab('research')}
+            className={`flex-1 rounded px-3 py-1.5 font-semibold ${tab === 'research' ? 'bg-[color-mix(in_srgb,var(--accent-dim)_20%,transparent)] text-accent' : 'text-text-dim'}`}
+          >
+            {hub('research')}
+          </button>
+        </div>
 
-      {tab === 'discover' ? <DiscoverTab /> : <ResearchTab />}
+        {tab === 'discover' ? <DiscoverTab /> : <ResearchTab />}
+      </section>
 
       <Disclaimer />
     </>
@@ -95,7 +124,6 @@ function DiscoverTab() {
 
 function ResearchTab() {
   const t = useTranslations('intel');
-  const tc = useTranslations('company.directory');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -140,14 +168,6 @@ function ResearchTab() {
 
   return (
     <div className="space-y-3">
-      {/* INDUSTRY:BEGIN */}
-      <IndustryEntryCard />
-      {/* INDUSTRY:END */}
-      <Link href="/intel/companies" className="card-base block hover:bg-bg-elevated" data-testid="intel-companies-card">
-        <div className="text-sm font-semibold">{tc('entry.title')}</div>
-        <div className="mt-0.5 text-xs text-text-dim">{tc('entry.desc')}</div>
-        <div className="mt-1 text-xs text-accent">{tc('entry.open')}</div>
-      </Link>
       <div className="card-base">
         <div className="mb-2 text-sm font-semibold text-text-dim">{t('research.search.title')}</div>
         <input

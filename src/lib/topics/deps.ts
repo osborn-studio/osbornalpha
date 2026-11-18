@@ -1,12 +1,22 @@
 // Topic public dependency wiring and service preview projection (spec §6).
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {getServerSupabase} from '@/lib/supabase/server';
+import {supabaseTableClient} from '@/lib/db/table-client';
+import {productionResolver} from '@/lib/evidence';
 import {getAdminSupabase} from '@/lib/supabase/admin';
 import {fixtureMode} from './e2e-fixture';
 import {supabaseTopicsDb} from './db';
 import type {TopicsDb} from './types';
 import type {PublicTopicRow} from './database-types';
 export interface PublicDeps{db:Pick<TopicsDb,'publicOpen'|'publicTopics'|'publicTopicBySlug'|'publicVersions'|'publicDrift'>;now():Date;preview:boolean}
+export function serviceDeps(){
+ const admin=getAdminSupabase();
+ return {tables:supabaseTableClient(admin),db:supabaseTopicsDb({admin}),resolver:productionResolver(),now:()=>new Date()};
+}
+export async function cronDeps(){
+ if(fixtureMode())return (await import('./admin-fixture')).adminFixtureDeps();
+ return serviceDeps();
+}
 let fixture:PublicDeps|undefined;
 export async function publicDeps():Promise<PublicDeps>{
  if(fixtureMode()){
@@ -47,11 +57,7 @@ export function previewDeps():PublicDeps{
   async publicDrift(id){
    for(const topic of (await db.adminTopics()).filter(t=>t.status!=='draft')){
     if((await db.versionsOfTopic(topic.topic_id)).some(v=>v.version_id===id&&v.unpublished_at===null)){
-     return (await db.driftOf(id)).map(row=>{
-      // All adapters return the base row timestamp, though the port types only DriftRow.
-      if(!('checked_at' in row)||typeof row.checked_at!=='string')throw new Error('drift_checked_at_missing');
-      return {...row,checked_at:row.checked_at};
-     });
+     return db.driftOf(id);
     }
    }
    return [];

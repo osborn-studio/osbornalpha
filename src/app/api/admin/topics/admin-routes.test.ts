@@ -1,3 +1,4 @@
+import {memoryTableClient} from '@/lib/db/memory-table-client';
 // Topic plan T5.2: real route handlers with memory persistence.
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {POST as check} from './[id]/disclosure-check/route';
@@ -30,7 +31,7 @@ const create=()=>POST(req({slug:'rates-and-banks',category:'macro',title}),{});
 beforeEach(()=>{
  vi.stubEnv('TOPICS_ENABLED','1');vi.stubEnv('TOPICS_E2E_FIXTURES','');
  const sources=memorySources(allFixtures());
- vi.mocked(adminDeps).mockResolvedValue({db:memoryTopicsDb(),resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'test',privateIds:async()=>new Set()});
+ vi.mocked(adminDeps).mockResolvedValue({tables:memoryTableClient(),db:memoryTopicsDb(),resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'test',privateIds:async()=>new Set()});
  vi.mocked(requireAdminUser).mockResolvedValue({id:actor} as Awaited<ReturnType<typeof requireAdminUser>>);
 });
 afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
@@ -148,4 +149,19 @@ it('validates publication and withdrawal requests before mutation, and reserves 
  const r=await retire(req({reason:'owner_request'}),context);expect(r.status).toBe(200);expect(await r.json()).toEqual({retired:true});
  const retired=await preview(req({}),context);expect(retired.status).toBe(410);expect((await retired.json()).error.code).toBe('topic_retired');
  const duplicate=await create();expect(duplicate.status).toBe(409);expect((await duplicate.json()).error.code).toBe('slug_taken');
+});
+
+it('gates replay verification and returns the persisted version result',async()=>{
+ const {POST:verify}=await import('./[id]/versions/[n]/verify/route');
+ const {deps,topicId}=await scenario();vi.mocked(adminDeps).mockResolvedValue(deps);
+ const call=(n='1')=>verify(req({}),{params:Promise.resolve({id:topicId,n})});
+ vi.stubEnv('TOPICS_ENABLED','');const closed=await call();expect(closed.status).toBe(404);expect((await closed.json()).error.code).toBe('topics_disabled');
+ vi.stubEnv('TOPICS_ENABLED','1');
+ const {AdminUnauthenticated}=await import('@/lib/admin/auth');vi.mocked(requireAdminUser).mockRejectedValueOnce(new AdminUnauthenticated());
+ expect((await call()).status).toBe(401);
+ expect((await call('1.5')).status).toBe(400);
+ expect((await call()).status).toBe(404);
+ await check(req({}),ctx(topicId));await publish(req({expected_draft_hash:(await deps.db.draftOf(topicId))!.draft_hash}),ctx(topicId));
+ const result=await call();expect(result.status).toBe(200);expect(await result.json()).toEqual({version_no:1,matched:3,skipped:1,mismatched:[]});
+ expect((await (await versions(req({}),ctx(topicId))).json()).versions[0].verification).toEqual({time:deps.now().toISOString(),mismatches:0});
 });

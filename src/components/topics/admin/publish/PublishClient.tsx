@@ -74,6 +74,11 @@ export function PublishClient({initial}:{initial:Initial}){
   if(result.ok)setVersions(result.data.versions);
   else{failed(result.code);setReload(true);}
  }
+ async function verify(n:number){
+  const result=await adminJson('POST',base+'/versions/'+n+'/verify',{});
+  if(!result.ok){failed(result.code);return;}
+  await refreshVersions();
+ }
  async function publish(){
   const result=await adminJson<{version_no:number}>('POST',base+'/publish',{expected_draft_hash:initial.draft_hash});
   if(!result.ok){failed(result.code);return;}
@@ -104,7 +109,7 @@ export function PublishClient({initial}:{initial:Initial}){
     <p className="text-sm text-text-dim">{t('publish.withdrawHint')}</p><button className={`${BUTTON} text-danger`} disabled={disabled||!current} onClick={e=>openFrom('unpublish',e.currentTarget)}>{t('publish.unpublish')}</button></section>
    <section className={`${PANEL} border-danger`}><h2 className="font-semibold">{t('publish.retire')}</h2>
     <p className={`text-sm text-text-dim ${MONO}`}>{t('publish.retireHint',{slug:initial.slug})}</p><button className={`${BUTTON} text-danger`} disabled={disabled} onClick={e=>openFrom('retire',e.currentTarget)}>{t('publish.retire')}</button></section>
-   <VersionsTable versions={versions} disabled={disabled} onUnpublish={button=>openFrom('unpublish',button)}/>
+   <VersionsTable onVerify={n=>void run('verify',()=>verify(n))} versions={versions} disabled={disabled} onUnpublish={button=>openFrom('unpublish',button)}/>
   </div>
   <FlowBar editorHref={editorHref} publishHref={editorHref+'/publish'}/>
   {dialog==='publish'&&model.dialog&&<PublishDialog {...modalProps} title={title} n={model.nextVersion} summary={model.dialog} onConfirm={()=>void run('publish',publish)}/>}

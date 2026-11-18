@@ -27,7 +27,8 @@ export function pgTopicsDb(pool:Pool,opts?:{role:'authenticated'}):TopicsDb{
    for(const [key,value] of Object.entries(r.match??{}))clauses.push(value===null?`r.${ident(key)} is null`:`r.${ident(key)}=${bind(value)}`);
    if(r.live)clauses.push('v.unpublished_at is null');
    if(r.after)clauses.push(`(r.version_id,r.ordinal)>(${bind(r.after.version_id)},${bind(r.after.ordinal)})`);
-   const text=`select r.* from public.${ident(r.table)} r${r.live?' join public.topic_versions v on v.version_id=r.version_id':''}${clauses.length?` where ${clauses.join(' and ')}`:''}${r.order.length?` order by ${r.order.map(k=>`r.${ident(k)} ${r.desc?'desc':'asc'}`).join(',')}`:''}${r.limit!==undefined?` limit ${bind(r.limit)}`:''}`;
+   const columns=r.columns?.map(key=>'r.'+ident(key)).join(',')??'r.*';
+   const text=`select ${columns} from public.${ident(r.table)} r${r.live?' join public.topic_versions v on v.version_id=r.version_id':''}${clauses.length?` where ${clauses.join(' and ')}`:''}${r.order.length?` order by ${r.order.map(k=>`r.${ident(k)} ${r.desc?'desc':'asc'}`).join(',')}`:''}${r.limit!==undefined?` limit ${bind(r.limit)}`:''}`;
    return (await query(text,values,r.public)).map(row=>topicRow<T>(row));
   },
  });

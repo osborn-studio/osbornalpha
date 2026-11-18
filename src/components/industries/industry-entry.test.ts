@@ -6,6 +6,9 @@ import zh from '../../../messages/zh/industries.json';
 import researchEn from '../../../messages/en/research.json';
 import researchZh from '../../../messages/zh/research.json';
 
+import intelEn from '../../../messages/en/intel.json';
+import intelZh from '../../../messages/zh/intel.json';
+
 const h=vi.hoisted(()=>({locale:'en' as 'en'|'zh',state:undefined as unknown,effect:undefined as undefined|(()=>void|(()=>void))}));
 vi.mock('react',async importOriginal=>({
  ...await importOriginal<typeof import('react')>(),
@@ -13,7 +16,7 @@ vi.mock('react',async importOriginal=>({
  useEffect:(effect:()=>void|(()=>void))=>{h.effect=effect;},
 }));
 vi.mock('next-intl',()=>({useTranslations:(namespace:string)=>(key:string,values?:Record<string,string>)=>{
- const messages=namespace.startsWith('research')?(h.locale==='en'?researchEn:researchZh):(h.locale==='en'?en:zh);
+ const messages=namespace.startsWith('intel')?(h.locale==='en'?intelEn:intelZh):namespace.startsWith('research')?(h.locale==='en'?researchEn:researchZh):(h.locale==='en'?en:zh);
  const template=[...namespace.split('.').slice(1),...key.split('.')].reduce<unknown>((v,k)=>(v as Record<string,unknown>)[k],messages) as string;
  return template.replace(/\{(\w+)\}/g,(_,k:string)=>values?.[k]??'');
 }}));
@@ -28,7 +31,8 @@ describe('industry research entry',()=>{
  it.each(['en','zh'] as const)('offers labelled explicit market/scheme destinations in %s',locale=>{
   h.locale=locale;
   const links=anchors(render());
-  expect(links).toHaveLength(2);
+  expect(links).toHaveLength(3);
+  expect(links[2].url.href).toBe(links[0].url.href);
   for(const scheme of ['sic','sw2021']){
    const link=links.find(l=>l.url.searchParams.get('scheme')===scheme);
    expect(link,`${scheme} destination`).toBeDefined();

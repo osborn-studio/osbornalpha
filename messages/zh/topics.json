@@ -1,4 +1,14 @@
 {
+  "entry": {
+    "title": "专题研究",
+    "titleEn": "Topics",
+    "enter": "进入专题目录 →",
+    "published": "已发布专题",
+    "latest": "最近发布",
+    "revised": "发布后有修订",
+    "topicCount": "{n} 个专题",
+    "empty": "尚无已发布专题"
+  },
   "meta": {
     "title": "专题研究",
     "titleEn": "Topic research",

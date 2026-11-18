@@ -5,6 +5,9 @@ import { ResearchChain } from '@/components/research-ui/ResearchChain';
 import {DEFAULT_CHAIN_AVAILABILITY} from '@/components/research-ui/chain';
 import {readForeignPublicEnabled} from '@/lib/broker-research/public-flag';
 // FOREIGN ↑
+// TOPICS ↓ chain step 05 follows the cached public switch
+import {readTopicsPublicEnabled} from '@/lib/topics/public-flag';
+// TOPICS ↑
 import { TabBar } from '@/components/TabBar';
 import { CopilotFab } from '@/components/CopilotFab';
 import { TimezoneProvider } from '@/components/TimezoneProvider';
@@ -21,9 +24,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const { data: { user } } = await sb.auth.getUser();
     if (!user) redirect('/login');
   }
-  // FOREIGN ↓
-  const availability = {...DEFAULT_CHAIN_AVAILABILITY, foreign: await readForeignPublicEnabled()};
-  // FOREIGN ↑
+  // TOPICS ↓
+  const availability = {...DEFAULT_CHAIN_AVAILABILITY, foreign: await readForeignPublicEnabled(), topic: await readTopicsPublicEnabled()};
+  // TOPICS ↑
   return (
     <TimezoneProvider>
       <FirstLoginTracker />

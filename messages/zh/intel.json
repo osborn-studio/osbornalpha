@@ -1,4 +1,37 @@
 {
+  "hub": {
+    "title": "研究",
+    "titleEn": "Research",
+    "scope": "五个板块按研究链排列。每张入口卡只显示该板块的事实摘要与数据状态，不显示判断。",
+    "section": "发现与私有研究",
+    "discover": "发现",
+    "research": "我的研究",
+    "loading": "加载中…",
+    "macro": {
+      "title": "宏观策略",
+      "titleEn": "Macro",
+      "enter": "进入宏观策略 →"
+    },
+    "industry": {
+      "title": "行业研究",
+      "titleEn": "Industries",
+      "enter": "进入行业研究 →"
+    },
+    "company": {
+      "title": "公司研究与跟踪",
+      "titleEn": "Companies",
+      "enter": "进入公司目录 →"
+    },
+    "foreign": {
+      "title": "外资研报",
+      "titleEn": "Foreign research",
+      "enter": "进入外资研报 →",
+      "publicContent": "公开内容",
+      "metadata": "元数据与经审核要点",
+      "pdf": "PDF 原文",
+      "private": "不公开"
+    }
+  },
   "page": {
     "title": "研究",
     "subtitle": "发现新方向的向导 + 直达个股的研究入口。"

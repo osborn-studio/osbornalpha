@@ -25,6 +25,7 @@ describe('D3 shared-file edits',()=>{
  });
  it('intel page links to the module',()=>{
   const src=read('src/app/(app)/intel/page.tsx');
-  expect(src).toContain('href="/intel/foreign-research"');expect(src).toMatch(/FOREIGN ↓[\s\S]*foreign-research[\s\S]*FOREIGN ↑/);
+  expect(src).toMatch(/\{\/\* FOREIGN ↓ \*\/\}\s*<ForeignEntryCard \/>\s*\{\/\* FOREIGN ↑ \*\/\}/);
+  expect(read('src/app/(app)/intel/foreign-research/components/ForeignEntryCard.tsx')).toContain('href="/intel/foreign-research"');
  });
 });

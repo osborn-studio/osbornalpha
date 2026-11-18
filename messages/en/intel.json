@@ -1,4 +1,37 @@
 {
+  "hub": {
+    "title": "Research",
+    "titleEn": "研究",
+    "scope": "Five sections in research-chain order. Each entry card shows only that section's fact summary and data state, never judgments.",
+    "section": "Discover & private research",
+    "discover": "Discover",
+    "research": "My research",
+    "loading": "Loading…",
+    "macro": {
+      "title": "Macro",
+      "titleEn": "宏观策略",
+      "enter": "Enter macro strategy →"
+    },
+    "industry": {
+      "title": "Industries",
+      "titleEn": "行业研究",
+      "enter": "Enter industry research →"
+    },
+    "company": {
+      "title": "Companies",
+      "titleEn": "公司研究与跟踪",
+      "enter": "Enter company directory →"
+    },
+    "foreign": {
+      "title": "Foreign research",
+      "titleEn": "外资研报",
+      "enter": "Enter foreign research →",
+      "publicContent": "Public content",
+      "metadata": "Metadata and reviewed key points",
+      "pdf": "Original PDF",
+      "private": "Not public"
+    }
+  },
   "page": {
     "title": "Research",
     "subtitle": "Discovery wizards for new ideas, plus a fast lane to per-stock research."

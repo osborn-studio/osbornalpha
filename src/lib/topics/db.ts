@@ -5,7 +5,7 @@ import {canonicalJson} from '@/lib/evidence/hash';
 import {TopicsDbError,type TopicsDb} from './types';
 import type {TopicDraftRow,TopicEvidenceDriftRow,TopicPromotionRow,TopicRow,TopicVersionRow} from './database-types';
 type Row=Record<string,unknown>;
-export interface TopicRead{table:string;public?:boolean;match?:Row;order:string[];desc?:boolean;limit?:number;live?:boolean;after?:{version_id:string;ordinal:number}|null}
+export interface TopicRead{table:string;columns?:string[];public?:boolean;match?:Row;order:string[];desc?:boolean;limit?:number;live?:boolean;after?:{version_id:string;ordinal:number}|null}
 export interface TopicsTransport{read<T>(q:TopicRead):Promise<T[]>;rpc<T>(name:string,args:Row):Promise<T>}
 export function topicDbError(e:unknown):TopicsDbError{
  if(e instanceof TopicsDbError)return e;
@@ -46,7 +46,9 @@ export function topicsAdapter(t:TopicsTransport):TopicsDb{
   async retire(i){await t.rpc('topic_retire',{p_topic_id:i.topicId,p_reason:i.reason,p_note:i.note,p_actor:i.actor});},
   async settings(){const row=await one<Awaited<ReturnType<TopicsDb['settings']>>>('topic_settings',{id:1},['id']);if(!row)throw new TopicsDbError('not_found');return row;},
   setPublicEnabled:i=>t.rpc('topic_set_public_enabled',{p_public_enabled:i.publicEnabled,p_summary_public_enabled:i.summaryPublicEnabled,p_summary_provider_note:i.summaryProviderNote,p_licence_confirmations:i.licenceConfirmations,p_actor:i.actor}),
+  versionById:id=>one('topic_versions',{version_id:id},['version_id']),
   versionsOfTopic:id=>read('topic_versions',{topic_id:id},['version_no']),
+  liveVersionRefs:()=>read('topic_versions',{unpublished_at:null},['version_id'],{columns:['topic_id','version_id','version_no']}),
   liveEvidence:(after,limit)=>read('topic_version_evidence',{},['version_id','ordinal'],{live:true,after,limit}),
   async upsertDrift(rows,checkedAt,complete,cursor){return Number(await t.rpc('topic_upsert_drift',{p_rows:rows,p_checked_at:checkedAt,p_complete:complete,p_cursor:cursor}));},
   async recordEvent(i){await t.rpc('topic_record_event',{p_topic_id:i.topicId,p_actor:i.actor,p_action:i.action,p_detail:i.detail});},
@@ -71,7 +73,7 @@ export function supabaseTopicsDb({admin,session}:{admin?:SupabaseClient;session?
    const out:T[]=[];
    // Continue until an empty page: a hosted row cap may be below the requested range.
    while(r.limit===undefined||out.length<r.limit){
-    let q=client.from(r.table).select(r.live?'*,topic_versions!inner(unpublished_at)':'*');
+    let q=client.from(r.table).select(r.live?'*,topic_versions!inner(unpublished_at)':r.columns?.join(',')??'*');
     for(const [key,value] of Object.entries(r.match??{}))q=value===null?q.is(key,null):q.eq(key,value);
     if(r.live)q=q.is('topic_versions.unpublished_at',null);
     if(r.after){

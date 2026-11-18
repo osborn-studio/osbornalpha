@@ -32,7 +32,7 @@ export type Drift=typeof DRIFTS[number];
 export interface DriftRow{version_id:string;ordinal:number;drift:Drift;current_identity:{value_text:string|null;unit:string|null;period:string|null;available_at:string|null}|null}
 export interface EvidenceRowInput{ordinal:number;kind:EvidenceKind;ref:EvidenceRef;ref_hash:string;as_of:string;state:ResolveState;digest:string|null;section_key:string}
 export interface DisclosureCheck{id:number;key:string;result:'pass'|'warn'|'block';codes:string[];detail:Record<string,unknown>}
-import type {PublicDriftRow,PublicTopicRow,PublicVersionRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicRow,TopicSettingsRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
+import type {PublicDriftRow,PublicTopicRow,PublicVersionRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
 export class TopicsDbError extends Error{constructor(readonly code:string){super(code);this.name='TopicsDbError';}}
 export interface TopicsDb{
  // service role (admin routes, crons)
@@ -49,11 +49,13 @@ export interface TopicsDb{
  retire(i:{topicId:string;reason:UnpublishReason;note:string|null;actor:string}):Promise<void>;
  settings():Promise<TopicSettingsRow>;
  setPublicEnabled(i:{publicEnabled:boolean;summaryPublicEnabled:boolean;summaryProviderNote:string|null;licenceConfirmations:Record<string,{terms_url:string;confirmed_on:string}>;actor:string}):Promise<TopicSettingsRow>;
+ versionById(versionId:string):Promise<TopicVersionRow|null>;
  versionsOfTopic(topicId:string):Promise<TopicVersionRow[]>;
+ liveVersionRefs():Promise<Pick<TopicVersionRow,'topic_id'|'version_id'|'version_no'>[]>;
  liveEvidence(after:{version_id:string;ordinal:number}|null,limit:number):Promise<TopicVersionEvidenceRow[]>;
  upsertDrift(rows:DriftRow[],checkedAt:string,complete:boolean,cursor:{version_id:string;ordinal:number}|null):Promise<number>;
  recordEvent(i:{topicId:string;actor:string;action:'preview'|'replay_verify';detail:Record<string,unknown>}):Promise<void>;
- driftOf(versionId:string):Promise<DriftRow[]>;
+ driftOf(versionId:string):Promise<TopicEvidenceDriftRow[]>;
  auditOf(topicId:string):Promise<TopicAuditRow[]>;
  // session client (public views)
  publicOpen():Promise<boolean>;                    // true only when topic_settings.public_enabled
