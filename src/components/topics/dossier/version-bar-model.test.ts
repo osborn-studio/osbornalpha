@@ -9,7 +9,7 @@ describe('version bar',()=>{
   const dto=await readTopic(deps,'rates-and-banks',{}),versions=await readVersions(deps,'rates-and-banks');
   versions[1].unpublished_at='2026-11-14';versions[1].unpublish_reason='error';
   const m=versionBarModel(dto,{isAdmin:true,today:'2026-11-15',versions:versions.reverse()});
-  expect(m.chips).toEqual(['v2 · 当前','发布 2026-11-08','证据截至 2026-11-01 00:00 UTC']);
+  expect(m.chips).toEqual(['v2 · 当前','发布 2026-11-08 09:00 UTC','证据截至 2026-11-01']);
   expect(m.options).toEqual([{value:2,label:'v2 · 当前',disabled:false,href:'/intel/topics/rates-and-banks'},{value:1,label:'v1 · 已取消发布',disabled:true,href:'/intel/topics/rates-and-banks/v/1'}]);
   expect(m.adminHref).toBe('/admin/topics');expect(m.maxDate).toBe('2026-11-15');
   expect(m.totalText).toBe('共 2 版');

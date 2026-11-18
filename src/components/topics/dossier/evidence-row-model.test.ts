@@ -5,10 +5,10 @@ import {evidenceRowModel} from './evidence-row-model';
 const row=(o:Partial<PublicEvidence>={}):PublicEvidence=>({ordinal:1,section_key:'s',kind:'macro_observation',state:'ok',reason:null,basis:'point_in_time',label:{zh:'失业率',en:'Unemployment'},fact:{template:'topic.macro_level',slots:{value:{value_text:'4.3',unit:'pct'}}},period:'2026-08-31',available_at:'2026-09-05T12:30:00Z',drift:null,masked:false,current:{value_text:'4.4',unit:'pct',period:'2026-09-30',available_at:'2026-10-05T12:30:00Z'},...o});
 describe('evidence rows',()=>{
  const cases:[string,Partial<PublicEvidence>,Record<string,unknown>][]=[
-  ['ok',{}, {factText:'失业率（2026-08-31）为 4.3%。',valueButton:true,stateBadge:{kind:'ok',reasonKey:null},driftBadge:null,sourceButton:true,dim:false}],
-  ['revised',{drift:'revised'},{factText:'失业率（2026-08-31）为 4.3%。',valueButton:true,stateBadge:{kind:'ok'},driftBadge:{kind:'shared',state:'revised'},driftDetail:'现行 4.4%',sourceButton:true,dim:false}],
-  ['newer_period',{drift:'newer_period'},{factText:'失业率（2026-08-31）为 4.3%。',valueButton:true,stateBadge:{kind:'ok'},driftBadge:{kind:'local',key:'drift.newer_period'},driftDetail:'2026-09-30 已发布',sourceButton:true,dim:false}],
-  ['reconstruction',{basis:'reconstruction',drift:'unverifiable'},{factText:'失业率（2026-08-31）为 4.3%。',valueButton:true,stateBadge:{kind:'ok'},basisBadge:{kind:'shared',state:'reconstructed'},driftBadge:{kind:'local',key:'drift.unverifiable'},sourceButton:true,dim:false}],
+  ['ok',{}, {factText:'2026-08-31 为 4.3%',valueButton:true,stateBadge:{kind:'ok',reasonKey:null},driftBadge:null,sourceButton:true,dim:false}],
+  ['revised',{drift:'revised'},{factText:'2026-08-31 为 4.3%',valueButton:true,stateBadge:{kind:'ok'},driftBadge:{kind:'shared',state:'revised'},driftDetail:'现行 4.4%',sourceButton:true,dim:false}],
+  ['newer_period',{drift:'newer_period'},{factText:'2026-08-31 为 4.3%',valueButton:true,stateBadge:{kind:'ok'},driftBadge:{kind:'local',key:'drift.newer_period'},driftDetail:'2026-09-30 已发布',sourceButton:true,dim:false}],
+  ['reconstruction',{basis:'reconstruction',drift:'unverifiable'},{factText:'2026-08-31 为 4.3%',valueButton:true,stateBadge:{kind:'ok'},basisBadge:{kind:'shared',state:'reconstructed'},driftBadge:{kind:'local',key:'drift.unverifiable'},sourceButton:true,dim:false}],
   ['withheld',{state:'withheld',reason:'citation_pending'},{factText:'—',valueButton:false,stateBadge:{kind:'shared',state:'withheld',reasonKey:'reasons.citation_pending'},driftBadge:null,sourceButton:true,dim:true}],
   ['missing',{state:'missing',reason:'not_found'},{factText:'—',valueButton:false,stateBadge:{kind:'shared',state:'missing'},driftBadge:null,sourceButton:true,dim:true}],
   ['not_served',{state:'not_served',reason:'hk_not_served'},{factText:'—',valueButton:false,stateBadge:{kind:'shared',state:'notServed'},driftBadge:null,sourceButton:false,dim:true}],
@@ -24,13 +24,13 @@ describe('evidence rows',()=>{
   expect(evidenceRowModel(row({masked:true,state:'retracted',drift:'retracted'}),'en')).toMatchObject({factText:'At publication: [masked]',stateBadge:{kind:'ok',atPublication:true},driftBadge:{kind:'shared',state:'retracted'},driftDetail:null});
  });
  it('formats English facts and citation slots without inventing a numeric value',()=>{
-  expect(evidenceRowModel(row(),'en').factText).toBe('Unemployment (2026-08-31) was 4.3%.');
+  expect(evidenceRowModel(row(),'en').factText).toBe('4.3% in 2026-08-31');
   expect(evidenceRowModel(row({kind:'document_citation',fact:{template:'topic.citation',slots:{title:'Filing',page:'12'}}}),'en')).toMatchObject({factText:'Filing · page 12',valueButton:false,sourceButton:true});
  });
 });
-it('keeps the financial concept and duration in the fact sentence',()=>{
+it('keeps the fact cell compact',()=>{
  const e=row({kind:'financial_fact',label:{zh:'公司',en:'Company'},fact:{template:'topic.fact_value',slots:{concept:'revenue',duration:'FY',value:{value_text:'1000',unit:'USD'}}}});
- expect(evidenceRowModel(e,'en').factText).toBe('Company · revenue · FY (2026-08-31) was 1,000.');
+ expect(evidenceRowModel(e,'en').factText).toBe('1,000 in 2026-08-31');
 });
 
 import {vi} from 'vitest';
@@ -48,4 +48,11 @@ it('both value and source buttons forward the original ordinal; unserved rows ha
   visit(node.props.children);
  };
  visit(table);expect(buttons).toHaveLength(4);buttons.forEach(click=>click());expect(onOpenSource.mock.calls).toEqual([[7],[7],[7],[7]]);
+});
+
+it('formats industry labels, ratios, coverage and available dates',()=>{
+ const e=row({kind:'industry_metric',label:{zh:'3571',en:'3571'},fact:{template:'topic.industry_value',slots:{metric:'gross_margin',value:{value_text:'0.201',unit:'ratio'},n_with_data:'41',n_members:'52'}}});
+ expect(evidenceRowModel(e,'zh')).toMatchObject({label:'3571 · 毛利率',valueText:'20.1%',coverage:'41/52 有数据',available:'2026-09-05 12:30 UTC'});
+ expect(evidenceRowModel({...e,masked:true},'zh').coverage).toBeNull();
+ e.fact!.slots.metric='future_metric';expect(evidenceRowModel(e,'en').label).toBe('3571 · future_metric');
 });

@@ -3,7 +3,7 @@ import {seriesModel} from './series-model';
 import type {DossierDto} from '@/lib/topics/public-dto';
 import type {UnpublishReason} from '@/lib/topics/types';
 import {renderSlots} from '@/lib/topics/slots';
-import {formatSlot} from '@/lib/macro/strategy/explain-render';
+import {formatTopicSlot} from '../format';
 import zh from '../../../../messages/zh/topics.json';
 import en from '../../../../messages/en/topics.json';
 export type DossierBannerModel=null|{kind:'superseded';current:number}|{kind:'unpublished';reason:UnpublishReason|null}|{kind:'replay';asOf:string};
@@ -15,7 +15,7 @@ export function dossierModel(dto:DossierDto,locale:string){
  const lookup=(ordinal:number)=>{
   const e=dto.evidence.find(e=>e.ordinal===ordinal);if(!e)return null;
   const slot=e.fact?.slots.value,visible=e.state==='ok'&&!e.masked;
-  return {state:e.state,text:visible&&slot&&typeof slot!=='string'?formatSlot(slot,lang):null,period:visible?e.period:null};
+  return {state:e.state,text:visible&&slot&&typeof slot!=='string'?formatTopicSlot(slot,lang):null,period:visible?e.period:null};
  };
  return {breadcrumb:[messages.meta.title,messages.directory.categories[dto.topic.category]],title:dto.topic.title[lang],dek:dto.topic.dek[lang],banner,
   sections:banner?.kind==='unpublished'?[]:dto.sections.map(s=>{
@@ -26,3 +26,10 @@ export function dossierModel(dto:DossierDto,locale:string){
   }),entries:banner?.kind==='unpublished'?[]:dto.entries,footer:{counts:dto.counts,stale:dto.stale,freshness:dto.freshness_at_publication}};
 }
 export type DossierSection=ReturnType<typeof dossierModel>['sections'][number];
+
+// UTC display shared by evidence availability, version metadata and judgments.
+export function formatDossierDate(value:string):string{
+ const date=new Date(value);if(!Number.isFinite(date.getTime()))return value;
+ const iso=date.toISOString();
+ return iso.slice(11)==='00:00:00.000Z'?iso.slice(0,10):`${iso.slice(0,16).replace('T',' ')} UTC`;
+}

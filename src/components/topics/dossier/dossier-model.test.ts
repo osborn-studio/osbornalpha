@@ -112,3 +112,11 @@ describe('dossier page gates and frame',()=>{
   expect(out).not.toContain('Manage versions');expect(out).toContain('Record changes in public evidence.');expect(out).toContain('data-testid="topic-series"');expect(out).toContain('data-research-footer');expect(out).toContain('data-testid="topic-summary"');
  });
 });
+
+it('formats dossier dates in UTC without raw timestamps',async()=>{
+ const {formatDossierDate}=await import('./dossier-model');
+ expect(formatDossierDate('2026-09-05')).toBe('2026-09-05');
+ expect(formatDossierDate('2026-09-05T00:00:00.000Z')).toBe('2026-09-05');
+ expect(formatDossierDate('2026-09-05T12:30:00.000Z')).toBe('2026-09-05 12:30 UTC');
+ expect(formatDossierDate('2026-09-05T14:30:00+02:00')).toBe('2026-09-05 12:30 UTC');
+});

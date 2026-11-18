@@ -132,7 +132,8 @@
     "maskedSlot": "[已遮蔽]",
     "unavailableSlot": "—",
     "judgmentClaim": "登记于 {registered_at} 的判定类别：{claim}",
-    "judgmentIncomplete": "判定详情尚未提供"
+    "judgmentIncomplete": "判定详情尚未提供",
+    "coverage": "{n}/{total} 有数据"
   },
   "kinds": {
     "macro_observation": "宏观观测",
@@ -202,5 +203,23 @@
     "hidden": "{count} 条假设因所依据的证据已撤回或受限而隐藏",
     "incomparable": "证据 [{a}] 与 [{b}] 期别不同，不生成变化句。",
     "source": "来源 [{ordinal}]"
+  },
+  "metrics": {
+    "revenue_sum": "营业收入合计",
+    "net_income_parent_sum": "归母净利润合计",
+    "gross_margin": "毛利率",
+    "net_margin": "净利率",
+    "roe": "净资产收益率",
+    "revenue_yoy": "营业收入同比",
+    "net_income_yoy": "净利润同比",
+    "member_count": "成员数"
+  },
+  "datasets": {
+    "macro_fred": "FRED 宏观数据",
+    "macro_akshare": "AKShare 宏观数据",
+    "facts_us": "美国财务数据",
+    "facts_cn": "中国财务数据",
+    "industry_agg_sic": "SIC 行业汇总",
+    "industry_agg_sw2021": "申万 2021 行业汇总"
   }
 }

@@ -132,7 +132,8 @@
     "maskedSlot": "[masked]",
     "unavailableSlot": "—",
     "judgmentClaim": "Judgment registered at {registered_at}: {claim}",
-    "judgmentIncomplete": "Judgment details are not yet available"
+    "judgmentIncomplete": "Judgment details are not yet available",
+    "coverage": "{n}/{total} with data"
   },
   "kinds": {
     "macro_observation": "Macro observation",
@@ -202,5 +203,23 @@
     "hidden": "{count} hypotheses hidden because underlying evidence was retracted or restricted",
     "incomparable": "Evidence [{a}] and [{b}] have different periods; no change sentence is generated.",
     "source": "Source [{ordinal}]"
+  },
+  "metrics": {
+    "revenue_sum": "Total revenue",
+    "net_income_parent_sum": "Total net income attributable to parent",
+    "gross_margin": "Gross margin",
+    "net_margin": "Net margin",
+    "roe": "Return on equity",
+    "revenue_yoy": "Revenue growth",
+    "net_income_yoy": "Net income growth",
+    "member_count": "Member count"
+  },
+  "datasets": {
+    "macro_fred": "FRED macro data",
+    "macro_akshare": "AKShare macro data",
+    "facts_us": "US financial facts",
+    "facts_cn": "China financial facts",
+    "industry_agg_sic": "SIC industry aggregates",
+    "industry_agg_sw2021": "SW2021 industry aggregates"
   }
 }
