@@ -1,5 +1,13 @@
 // Topic plan T5.2: real route handlers with memory persistence.
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {POST as check} from './[id]/disclosure-check/route';
+import {GET as preview} from './[id]/preview/route';
+import {POST as publish} from './[id]/publish/route';
+import {POST as unpublish} from './[id]/unpublish/route';
+import {GET as versions} from './[id]/versions/route';
+import {POST as retire} from './[id]/retire/route';
+import {GET as getSettings,POST as updateSettings} from './settings/route';
+import {scenario,settingsBody,confirmations} from '@/lib/topics/fixtures/scenario';
 import {POST,GET} from './route';
 import {POST as lintDraft} from './[id]/lint/route';
 import {GET as getDraft,PUT} from './[id]/draft/route';
@@ -61,7 +69,7 @@ it('validates revision and UUID parameters',async()=>{
 });
 it('closes every route before auth when the flag is unset',async()=>{
  vi.stubEnv('TOPICS_ENABLED',undefined);vi.mocked(requireAdminUser).mockClear();
- const responses=await Promise.all([create(),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx()),lintDraft(req({}),ctx())]);
+ const responses=await Promise.all([create(),versions(req({}),ctx()),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx()),lintDraft(req({}),ctx()),check(req({}),ctx()),preview(req({}),ctx()),publish(req({}),ctx()),unpublish(req({}),ctx()),retire(req({}),ctx()),getSettings(req({}),{}),updateSettings(req({}),{})]);
  for(const r of responses){expect(r.status).toBe(404);expect((await r.json()).error.code).toBe('topics_disabled');expect(r.headers.get('cache-control')).toBe('no-store');}
  expect(requireAdminUser).not.toHaveBeenCalled();
 });
@@ -98,4 +106,46 @@ it('validates lint body, id, existence and authentication',async()=>{
  expect((await lintDraft(req({body:emptyDraft(title)}),ctx())).status).toBe(404);
  const {AdminForbidden}=await import('@/lib/admin/auth');vi.mocked(requireAdminUser).mockRejectedValue(new AdminForbidden());
  expect((await lintDraft(req({body:emptyDraft(title)}),ctx(topic_id))).status).toBe(403);
+});
+
+it('checks disclosure, previews, publishes and opens only with source confirmations',async()=>{
+ const {deps,topicId}=await scenario();vi.mocked(adminDeps).mockResolvedValue(deps);
+ const context=ctx(topicId),draft=(await deps.db.draftOf(topicId))!;
+ const publishDraft=()=>publish(req({expected_draft_hash:draft.draft_hash}),context);
+ let r=await publishDraft();expect(r.status).toBe(409);expect((await r.json()).error.code).toBe('publish_blocked:disclosure_required');
+ r=await check(req({}),context);expect(r.status).toBe(200);
+ const receipt=await r.json();expect(receipt.passed).toBe(true);expect(await deps.db.receiptById(receipt.receipt_id)).toMatchObject({draft_hash:draft.draft_hash});
+ r=await preview(req({}),context);expect(r.status).toBe(200);const data=await r.json();
+ expect(data.difference[2]).toMatchObject({ordinal:3,public:{state:'withheld',text:null}});expect(JSON.stringify(data.dossier)).not.toContain('987654321.12');
+ expect(await deps.db.versionsOfTopic(topicId)).toEqual([]);
+ expect((await publishDraft()).status).toBe(200);
+ const listed=await versions(req({}),context);expect(listed.status).toBe(200);
+ expect(await listed.json()).toMatchObject({versions:[{version_no:1,status:'current',counts:data.counts,drift:{revised:0,newer_period:0,retracted:0,now_withheld:0,unverifiable:0}}]});
+ const settings=()=>getSettings(req({}),{});r=await settings();expect(r.status).toBe(200);
+ const required=['documents:source','facts:sec','macro:attribution'];
+ expect(await r.json()).toMatchObject({required_attributions:required,problems:[],settings:{public_enabled:false}});
+ r=await updateSettings(req(settingsBody),{});expect(r.status).toBe(409);expect(await r.json()).toMatchObject({error:{code:'licence_confirmation_missing'},meta:{missing:required}});
+ r=await updateSettings(req({...settingsBody,licence_confirmations:confirmations(required)}),{});expect(r.status).toBe(200);expect(await r.json()).toMatchObject({settings:{public_enabled:true}});
+ expect(await (await settings()).json()).toMatchObject({settings:{public_enabled:true}});
+ r=await unpublish(req({reason:'privacy'}),context);expect(r.status).toBe(200);expect(await r.json()).toEqual({current_version_no:null});
+ expect(await (await versions(req({}),context)).json()).toMatchObject({versions:[{version_no:1,status:'unpublished',unpublish_reason:'privacy'}]});
+});
+it('returns a blocked receipt for a dangling slot',async()=>{
+ const {deps,topicId}=await scenario();vi.mocked(adminDeps).mockResolvedValue(deps);
+ const draft=(await deps.db.draftOf(topicId))!;draft.body.dek.zh='{{ev:9}}';
+ await deps.db.saveDraft({topicId,actor,body:draft.body,expectedRevision:draft.revision});
+ const r=await check(req({}),ctx(topicId));expect(r.status).toBe(200);expect(await r.json()).toMatchObject({passed:false,blocked:['dangling_slot']});
+});
+it('validates publication and withdrawal requests before mutation, and reserves retired slugs',async()=>{
+ const {topic_id}=await (await create()).json(),context=ctx(topic_id);
+ for(const [result,status,code] of [
+  [await publish(req({expected_draft_hash:'bad'}),context),400,'invalid_body:expected_draft_hash'],
+  [await unpublish(req({reason:'other'}),context),400,'invalid_body:reason'],
+  [await unpublish(req({reason:'error',note:actor}),context),400,'invalid_body:note'],
+  [await retire(req({reason:'error',note:'A'.repeat(64)}),context),400,'invalid_body:note'],
+  [await unpublish(req({reason:'error'}),context),409,'publish_blocked:not_published'],
+ ] as const){expect(result.status).toBe(status);expect((await result.json()).error.code).toBe(code);}
+ const r=await retire(req({reason:'owner_request'}),context);expect(r.status).toBe(200);expect(await r.json()).toEqual({retired:true});
+ const retired=await preview(req({}),context);expect(retired.status).toBe(410);expect((await retired.json()).error.code).toBe('topic_retired');
+ const duplicate=await create();expect(duplicate.status).toBe(409);expect((await duplicate.json()).error.code).toBe('slug_taken');
 });
