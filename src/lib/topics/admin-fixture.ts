@@ -1,6 +1,14 @@
 // Topic plan PR-5 commander decision 2: isolated, process-wide admin fixtures.
 import {memoryTopicsDb} from './memory-db';
-import {memoryResolver} from '@/lib/evidence';
+import {memorySources} from '@/lib/evidence/memory-sources';
+import {createResolver} from '@/lib/evidence/resolve';
+import {macroResolver} from '@/lib/evidence/resolvers/macro';
+import {industryResolver} from '@/lib/evidence/resolvers/industry';
+import {factResolver} from '@/lib/evidence/resolvers/fact';
+import {citationResolver} from '@/lib/evidence/resolvers/citation';
+import {judgmentResolver} from '@/lib/evidence/resolvers/judgment';
+import {brokerResolver} from '@/lib/evidence/resolvers/broker';
+import {memoryCandidateLookup} from './evidence-search';
 import {allFixtures} from '@/lib/evidence/fixtures';
 import {OBS} from '@/lib/evidence/fixtures/macro';
 import {FACT} from '@/lib/evidence/fixtures/facts';
@@ -32,6 +40,8 @@ export function adminFixtureDeps():AdminDeps{
   const method=Reflect.get(target,key,receiver);
   return typeof method==='function'?async(...args:unknown[])=>{await ready;return Reflect.apply(method,target,args);}:method;
  }});
- const deps:AdminDeps={db,resolver:memoryResolver(allFixtures()),now:()=>new Date(),codeVersion:'fixture',privateIds:async()=>new Set<string>()};
+ const sources=memorySources(allFixtures());
+ const resolver=createResolver([macroResolver(sources),industryResolver(sources),factResolver(sources),citationResolver(sources),judgmentResolver(sources),brokerResolver()]);
+ const deps:AdminDeps={db,resolver,lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'fixture',privateIds:async()=>new Set<string>()};
  globals[KEY]=deps;return deps;
 }

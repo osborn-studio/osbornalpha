@@ -4,6 +4,10 @@ import {POST,GET} from './route';
 import {GET as getDraft,PUT} from './[id]/draft/route';
 import {memoryTopicsDb} from '@/lib/topics/memory-db';
 import {emptyDraft} from '@/lib/topics/drafts';
+import {POST as evidenceSearch} from './[id]/evidence-search/route';
+import {memorySources} from '@/lib/evidence/memory-sources';
+import {memoryCandidateLookup} from '@/lib/topics/evidence-search';
+import {FACT} from '@/lib/evidence/fixtures/facts';
 import {memoryResolver} from '@/lib/evidence';
 import {allFixtures} from '@/lib/evidence/fixtures';
 import {adminDeps} from '@/lib/topics/admin-deps';
@@ -16,7 +20,8 @@ const req=(body:unknown,method='POST')=>new Request('http://localhost/api/admin/
 const create=()=>POST(req({slug:'rates-and-banks',category:'macro',title}),{});
 beforeEach(()=>{
  vi.stubEnv('TOPICS_ENABLED','1');vi.stubEnv('TOPICS_E2E_FIXTURES','');
- vi.mocked(adminDeps).mockReturnValue({db:memoryTopicsDb(),resolver:memoryResolver(allFixtures()),now:()=>new Date(),codeVersion:'test',privateIds:async()=>new Set()});
+ const sources=memorySources(allFixtures());
+ vi.mocked(adminDeps).mockReturnValue({db:memoryTopicsDb(),resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'test',privateIds:async()=>new Set()});
  vi.mocked(requireAdminUser).mockResolvedValue({id:actor} as Awaited<ReturnType<typeof requireAdminUser>>);
 });
 afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
@@ -27,7 +32,7 @@ it('creates, lists and reads a draft while the public switch remains off',async(
  expect(data.topics).toHaveLength(1);expect(data.topics[0]).toMatchObject({topic_id:created.topic_id,topic_slug:'rates-and-banks'});
  expect(data.settings.public_enabled).toBe(false);
  const read=await getDraft(new Request('http://localhost'),ctx(created.topic_id));
- expect(await read.json()).toEqual({topic:{topic_id:created.topic_id,topic_slug:'rates-and-banks',category:'macro',status:'draft',current_version_id:null},draft:{revision:1,draft_hash:created.draft_hash,body:emptyDraft(title),updated_at:expect.any(String)},lint:[]});
+ expect(await read.json()).toEqual({topic:{topic_id:created.topic_id,topic_slug:'rates-and-banks',category:'macro',status:'draft',current_version_id:null},draft:{revision:1,draft_hash:created.draft_hash,body:emptyDraft(title),updated_at:expect.any(String)},lint:[],evidence:[]});
 });
 it('rejects a repeated slug',async()=>{
  await create();const r=await create();expect(r.status).toBe(409);expect((await r.json()).error.code).toBe('slug_taken');
@@ -55,7 +60,23 @@ it('validates revision and UUID parameters',async()=>{
 });
 it('closes every route before auth when the flag is unset',async()=>{
  vi.stubEnv('TOPICS_ENABLED',undefined);vi.mocked(requireAdminUser).mockClear();
- const responses=await Promise.all([create(),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx())]);
+ const responses=await Promise.all([create(),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx())]);
  for(const r of responses){expect(r.status).toBe(404);expect((await r.json()).error.code).toBe('topics_disabled');expect(r.headers.get('cache-control')).toBe('no-store');}
  expect(requireAdminUser).not.toHaveBeenCalled();
+});
+
+it('searches evidence only for existing topics',async()=>{
+ const {topic_id}=await (await create()).json();
+ const body={kind:'macro_observation',series_id:'US_UNRATE',period_end:'2026-08-31'};
+ const r=await evidenceSearch(req(body),ctx(topic_id));expect(r.status).toBe(200);
+ expect((await r.json()).candidates).toMatchObject([{label:{zh:'US_UNRATE · 失业率 · v1'},public:{state:'ok',text:'4.3%'}}]);
+ const missing=await evidenceSearch(req(body),ctx());expect(missing.status).toBe(404);expect((await missing.json()).error.code).toBe('not_found');
+});
+it('includes public evidence previews in both draft responses',async()=>{
+ const {topic_id}=await (await create()).json(),body=emptyDraft(title);
+ body.sections=[{key:'s1',title,note:null,items:[{ordinal:1}]}];
+ body.evidence=[{ordinal:1,section_key:'s1',ref:{v:1,kind:'financial_fact',id:FACT.cnPending}}];
+ const saved=await PUT(req({expected_revision:1,body},'PUT'),ctx(topic_id));expect(saved.status).toBe(200);
+ const read=await getDraft(new Request('http://localhost'),ctx(topic_id));expect(read.status).toBe(200);
+ for(const response of [saved,read])expect((await response.json()).evidence).toMatchObject([{ordinal:1,state:'withheld',reason:'citation_pending',text:null}]);
 });
