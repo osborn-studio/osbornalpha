@@ -4,6 +4,7 @@ import {POST as check} from './[id]/disclosure-check/route';
 import {GET as preview} from './[id]/preview/route';
 import {POST as publish} from './[id]/publish/route';
 import {POST as unpublish} from './[id]/unpublish/route';
+import {GET as versions} from './[id]/versions/route';
 import {POST as retire} from './[id]/retire/route';
 import {GET as getSettings,POST as updateSettings} from './settings/route';
 import {scenario,settingsBody,confirmations} from '@/lib/topics/fixtures/scenario';
@@ -68,7 +69,7 @@ it('validates revision and UUID parameters',async()=>{
 });
 it('closes every route before auth when the flag is unset',async()=>{
  vi.stubEnv('TOPICS_ENABLED',undefined);vi.mocked(requireAdminUser).mockClear();
- const responses=await Promise.all([create(),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx()),lintDraft(req({}),ctx()),check(req({}),ctx()),preview(req({}),ctx()),publish(req({}),ctx()),unpublish(req({}),ctx()),retire(req({}),ctx()),getSettings(req({}),{}),updateSettings(req({}),{})]);
+ const responses=await Promise.all([create(),versions(req({}),ctx()),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx()),lintDraft(req({}),ctx()),check(req({}),ctx()),preview(req({}),ctx()),publish(req({}),ctx()),unpublish(req({}),ctx()),retire(req({}),ctx()),getSettings(req({}),{}),updateSettings(req({}),{})]);
  for(const r of responses){expect(r.status).toBe(404);expect((await r.json()).error.code).toBe('topics_disabled');expect(r.headers.get('cache-control')).toBe('no-store');}
  expect(requireAdminUser).not.toHaveBeenCalled();
 });
@@ -118,6 +119,8 @@ it('checks disclosure, previews, publishes and opens only with source confirmati
  expect(data.difference[2]).toMatchObject({ordinal:3,public:{state:'withheld',text:null}});expect(JSON.stringify(data.dossier)).not.toContain('987654321.12');
  expect(await deps.db.versionsOfTopic(topicId)).toEqual([]);
  expect((await publishDraft()).status).toBe(200);
+ const listed=await versions(req({}),context);expect(listed.status).toBe(200);
+ expect(await listed.json()).toMatchObject({versions:[{version_no:1,status:'current',counts:data.counts,drift:{revised:0,newer_period:0,retracted:0,now_withheld:0,unverifiable:0}}]});
  const settings=()=>getSettings(req({}),{});r=await settings();expect(r.status).toBe(200);
  const required=['documents:source','facts:sec','macro:attribution'];
  expect(await r.json()).toMatchObject({required_attributions:required,problems:[],settings:{public_enabled:false}});
@@ -125,6 +128,7 @@ it('checks disclosure, previews, publishes and opens only with source confirmati
  r=await updateSettings(req({...settingsBody,licence_confirmations:confirmations(required)}),{});expect(r.status).toBe(200);expect(await r.json()).toMatchObject({settings:{public_enabled:true}});
  expect(await (await settings()).json()).toMatchObject({settings:{public_enabled:true}});
  r=await unpublish(req({reason:'privacy'}),context);expect(r.status).toBe(200);expect(await r.json()).toEqual({current_version_no:null});
+ expect(await (await versions(req({}),context)).json()).toMatchObject({versions:[{version_no:1,status:'unpublished',unpublish_reason:'privacy'}]});
 });
 it('returns a blocked receipt for a dangling slot',async()=>{
  const {deps,topicId}=await scenario();vi.mocked(adminDeps).mockResolvedValue(deps);

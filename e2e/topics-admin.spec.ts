@@ -57,3 +57,41 @@ test('1280 by 800 editor has no horizontal overflow',async({page})=>{
  await page.setViewportSize({width:1280,height:800});await openEditor(page);
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth)).toBe(true);
 });
+
+test.describe.serial('publication',()=>{
+ test('publish flow',async({page})=>{
+  await page.goto('/admin/topics/new');
+  await page.getByLabel('slug',{exact:true}).fill(`publish-walk-${Date.now()}`);
+  await page.getByLabel('中文标题').fill('发布测试');
+  await page.getByLabel('英文标题').fill('Publication walk');
+  await page.getByRole('button',{name:'创建专题'}).click();
+  await page.getByRole('button',{name:'新增分节'}).click();
+  const picker=page.getByRole('region',{name:'证据选择器'});
+  await picker.getByLabel('序列 id').fill('US_UNRATE');
+  await picker.getByLabel('数据期').fill('2026-08-31');
+  await picker.getByRole('button',{name:'查找',exact:true}).click();
+  await picker.getByRole('button',{name:'加入',exact:true}).first().click();
+  await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+  await expect(page.getByRole('button',{name:'1 保存 ✓',exact:true})).toBeEnabled();
+  await page.getByRole('link',{name:'2 披露检查'}).click();
+  await page.getByRole('button',{name:'运行披露检查'}).click();
+  const checks=page.getByRole('region',{name:'披露检查',exact:true});
+  await expect(checks.locator('tbody tr')).toHaveCount(10);
+  await expect(checks).toContainText('阻断 0');
+  await page.getByRole('button',{name:'生成预览'}).click();
+  await expect(page.getByText('公开视图被遮蔽的值：0 个')).toBeVisible();
+  await expect(page.getByRole('row').filter({hasText:'ev:1'})).toContainText('4.3%');
+  await page.getByRole('button',{name:'发布',exact:true}).click();
+  const dialog=page.getByRole('dialog');
+  await expect(dialog).toHaveAccessibleName('发布 发布测试 为 v1？');
+  await dialog.getByRole('button',{name:'发布 v1'}).click();
+  await expect(page.getByRole('status')).toHaveText('已发布 v1');
+  const row=page.getByRole('region',{name:'版本管理'}).getByRole('row').filter({hasText:'v1'});
+  await expect(row).toContainText('当前');
+  await row.getByRole('button',{name:'取消发布'}).click();
+  await dialog.getByLabel('原因类别（读者可见）').selectOption('privacy');
+  await dialog.getByRole('button',{name:'取消发布 v1'}).click();
+  await expect(row).toContainText('已取消发布');
+  await expect(row).toContainText('隐私');
+ });
+});

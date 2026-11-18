@@ -5,8 +5,8 @@ import {expect,it} from 'vitest';
 import {transpileModule,ModuleKind,JsxEmit} from 'typescript';
 const ROOT=join(process.cwd(),'src/app/(app)/admin/topics');
 const pages=(d:string):string[]=>readdirSync(d).flatMap(f=>{const p=join(d,f);return statSync(p).isDirectory()?pages(p):f==='page.tsx'?[p]:[];});
-it('provides list and creation pages',()=>{
- expect(pages(ROOT).map(p=>relative(ROOT,p))).toEqual(expect.arrayContaining(['page.tsx','new/page.tsx','[id]/page.tsx']));
+it('provides list, creation, editor and publication pages',()=>{
+ expect(pages(ROOT).map(p=>relative(ROOT,p))).toEqual(expect.arrayContaining(['page.tsx','new/page.tsx','[id]/page.tsx','[id]/publish/page.tsx']));
 });
 it('gates every page before admin access and uses token colors',()=>{
  for(const p of pages(ROOT)){

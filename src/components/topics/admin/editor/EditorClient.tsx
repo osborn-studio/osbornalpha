@@ -15,7 +15,7 @@ import {PickerColumn} from './PickerColumn';
 import {BUTTON,FlowBar} from './FlowBar';
 export interface EditorInitial{id:string;slug:string;revision:number;body:DraftBody;updated_at:string;public_enabled:boolean;retired:boolean;lint:LintFinding[];evidence:EvidenceView[]}
 type Inspection={lint:LintFinding[];evidence:EvidenceView[]};
-export function EditorClient({initial,publishHref}:{initial:EditorInitial;publishHref?:string}){
+export function EditorClient({initial,publishHref=`/admin/topics/${initial.id}/publish`}:{initial:EditorInitial;publishHref?:string}){
  const t=useTranslations('topicsAdmin'),userLocale=useLocale(),timezone=useDisplayTimezone();
  const [body,dispatch]=useReducer(reduce,initial.body),[saved,setSaved]=useState({revision:initial.revision,body:initial.body,time:initial.updated_at});
  const [evidence,setEvidence]=useState(initial.evidence),[lint,setLint]=useState(initial.lint),[locale,setLocale]=useState<'zh'|'en'>(userLocale.startsWith('zh')?'zh':'en');
