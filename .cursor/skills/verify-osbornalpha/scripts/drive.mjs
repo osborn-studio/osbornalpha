@@ -54,14 +54,14 @@ async function newCtx(locale = 'zh-CN') {
   return browser.newContext({ locale, viewport: { width: 1440, height: 900 } });
 }
 
-// Shared research chain (#254, `src/components/research-ui/{chain.ts,ResearchChain.tsx}`), rendered by the (app) layout
+// Shared research chain (#254; 02 href is `/intel/industries?scheme=sic` since #266, `src/components/research-ui/{chain.ts,ResearchChain.tsx}`), rendered by the (app) layout
 // under the top bar on /macro, /intel/* and /stock/*. Guest has no service-role Supabase, so the foreign-research public
 // flag reads false (#252/#260): steps 01-03 are links, 04 外资研报 and 05 专题研究 are "not served" spans with no link.
 const CHAIN = {
   zh: { label: '研究链', notServed: '未服务', steps: { macro: '宏观策略', industry: '行业研究', company: '公司研究', foreign: '外资研报', topic: '专题研究' } },
   en: { label: 'Research chain', notServed: 'Not served', steps: { macro: 'Macro strategy', industry: 'Industry research', company: 'Company research', foreign: 'Foreign research', topic: 'Topic research' } },
 };
-const CHAIN_LINKS = { macro: '/macro', industry: '/intel/industries?scheme=sic&metric=member_count', company: '/intel/companies' };
+const CHAIN_LINKS = { macro: '/macro', industry: '/intel/industries?scheme=sic', company: '/intel/companies' };
 const squash = (t) => t.replace(/\s+/g, '');  // innerText of the badge spans has no separators
 async function checkResearchChain(page, tag, lang, currentId) {
   const L = CHAIN[lang];
