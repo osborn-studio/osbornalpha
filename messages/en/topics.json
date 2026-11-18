@@ -37,5 +37,108 @@
       "retry": "Retry"
     },
     "loadMore": "Load more"
+  },
+  "states": {
+    "ok": "Available",
+    "atPublication": "Available at publication",
+    "unsupported": "Not supported"
+  },
+  "drift": {
+    "newer_period": "Newer period available",
+    "now_withheld": "Now withheld · masked on read",
+    "unverifiable": "Cannot be verified"
+  },
+  "reasons": {
+    "not_found": "Evidence not found",
+    "locator_mismatch": "Locator mismatch",
+    "catalog_missing": "Catalog data missing",
+    "quarantined": "Quarantined for data quality",
+    "rejected": "Data rejected",
+    "not_yet_available": "Not yet available at that time",
+    "catalog_restricted": "Catalog access restricted",
+    "licence_unconfirmed": "Licence not confirmed",
+    "run_not_active": "Calculation run not active",
+    "unlicensed": "Not licensed for public use",
+    "zero_denominator": "Zero denominator",
+    "hk_not_served": "Hong Kong shares",
+    "citation_pending": "Citation check not complete",
+    "evidence_incomplete": "Evidence incomplete",
+    "private_document": "Document is not public",
+    "not_yet_registered": "Not yet registered at that time",
+    "method_not_publishable": "Method is not publishable",
+    "withdrawn": "Judgment withdrawn",
+    "foreign_research_not_wired": "Foreign research not connected yet",
+    "industry_not_published": "Industry data not published",
+    "cn_values_withheld": "China company values withheld",
+    "source_pending": "Source pending verification",
+    "empty_set": "No available samples",
+    "no_members": "No members",
+    "financial_excluded": "Financial sector excluded",
+    "unresolved_over_limit": "Unresolved members exceed limit",
+    "manifest_mismatch": "Manifest mismatch",
+    "no_resolver": "Resolver not connected",
+    "resolver_error": "Evidence resolution failed",
+    "now_withheld": "Now withheld",
+    "retracted": "Retracted",
+    "unknown": "Reason not provided"
+  },
+  "version": {
+    "caption": "Version",
+    "current": "Current",
+    "superseded": "Superseded",
+    "unpublished": "Unpublished",
+    "published": "Published",
+    "cutoff": "Evidence cutoff",
+    "total": "{total} versions",
+    "replay": "Replay as of",
+    "manage": "Manage versions",
+    "unchecked": "Evidence status could not be checked",
+    "checked": "Drift checked through {date}",
+    "neverChecked": "Not yet checked"
+  },
+  "banners": {
+    "superseded": "You are viewing v{version}, superseded by v{current}",
+    "seeCurrent": "View current version",
+    "unpublished": "v{version} has been unpublished",
+    "unpublishedBody": "Reason category: {reason}. Content is no longer served; only the version number and reason remain.",
+    "replay": "Replay view · as of {date}",
+    "replayBody": "Showing the version published by that date and the evidence available then.",
+    "returnNow": "Return to now",
+    "noVersion": "No published version existed on this date",
+    "retired": "Topic retired",
+    "retiredBody": "Reason category: {reason}. Content is no longer served."
+  },
+  "unpublishReasons": {
+    "error": "Error",
+    "licence": "Licence",
+    "owner_request": "Owner request",
+    "privacy": "Privacy",
+    "unknown": "Not provided"
+  },
+  "dossier": {
+    "masked": "At publication: [masked]",
+    "currentValue": "Current",
+    "periodPublished": "{period} published",
+    "evidence": "Evidence",
+    "fact": "Fact",
+    "period": "Period",
+    "available": "Available at",
+    "state": "State",
+    "drift": "Drift",
+    "source": "Source",
+    "reconstruction": "Reconstructed basis, not point-in-time",
+    "expectedSlot": "Expected evidence slot",
+    "maskedSlot": "[masked]",
+    "unavailableSlot": "—",
+    "judgmentClaim": "Judgment registered at {registered_at}: {claim}",
+    "judgmentIncomplete": "Judgment details are not yet available"
+  },
+  "kinds": {
+    "macro_observation": "Macro observation",
+    "industry_metric": "Industry metric",
+    "financial_fact": "Financial fact",
+    "document_citation": "Document citation",
+    "judgment": "Judgment",
+    "broker_report_meta": "Foreign research"
   }
 }
