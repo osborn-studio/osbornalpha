@@ -41,7 +41,8 @@ export function DirectorySyncCell({ row }: { row: Pick<DirectoryRow, 'scopeLastS
 
 export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   const t = useTranslations('company.directory');
-  const tf = useTranslations('company.header.freshness');
+  const tf = useTranslations('research.freshness.status');
+  const thf = useTranslations('company.header.freshness');
   const locale = useLocale() === 'en' ? 'en' : 'zh';
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -107,7 +108,7 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
             const k = freshnessKey(f.status);
             return (
               <Tag key={f.dataset} tone={k === 'fresh' || k === 'unknown' ? 'neutral' : 'accent'}>
-                {t('freshness', { dataset: f.dataset, status: tf(k), at: fmtAt(f.lastOkAt) ?? t('never') })}
+                {t('freshness', { dataset: f.dataset, status: k === 'unknown' ? thf('unknown') : tf(k), at: fmtAt(f.lastOkAt) ?? t('never') })}
               </Tag>
             );
           })}

@@ -1,4 +1,4 @@
-import {test as base,expect,type Page} from '@playwright/test';
+import {test as base,expect,type Locator,type Page} from '@playwright/test';
 import * as f from './fixtures/company';
 
 // Commander starts the isolated dev server with COMPANY_E2E_FIXTURES=1,
@@ -243,6 +243,103 @@ test.describe('公司夹具 · 中文',()=>{
         }
       });
     }
+  });
+});
+
+async function boxOf(locator:Locator){
+  await expect(locator).toBeVisible();
+  const box=await locator.boundingBox();
+  if(!box)throw new Error(`No bounding box for ${locator}`);
+  return {left:box.x,top:box.y,right:box.x+box.width,bottom:box.y+box.height,height:box.height};
+}
+async function openMoreInsideViewport(page:Page){
+  const more=page.getByTestId('company-more');
+  await more.click();
+  const menu=page.locator(`[id="${await more.getAttribute('aria-controls')}"]`);
+  const box=await boxOf(menu),viewport=page.viewportSize()!;
+  expect(box.left).toBeGreaterThanOrEqual(0);
+  expect(box.top).toBeGreaterThanOrEqual(0);
+  expect(box.right).toBeLessThanOrEqual(viewport.width);
+  expect(box.bottom).toBeLessThanOrEqual(viewport.height);
+  return menu;
+}
+
+for(const [locale,labels] of [
+  ['zh-CN',['正常','过期','读取失败','尚无记录','未知']],
+  ['en-US',['Current','Stale','Read failed','No record yet','Unknown']],
+] as const)test.describe(`directory freshness · ${locale}`,()=>{
+  test.use({locale});
+  test('localizes each dataset status',async({page})=>{
+    const datasets=['fresh','stale','error','missing','unknown'].map((status,i)=>({
+      ...f.freshness.datasets[0],dataset:`fixture.${i}`,status,
+    }));
+    await page.route('**/api/companies/freshness',route=>route.fulfill({json:{datasets}}));
+    await page.goto('/intel/companies');
+    const strip=page.getByTestId('freshness-strip');
+    for(const [i,{dataset,status}] of datasets.entries()){
+      await expect(strip).toContainText(`${dataset} ${labels[i]}`);
+      await expect(strip).not.toContainText(new RegExp(`\\b${status}\\b`));
+    }
+  });
+});
+
+test.describe('390px tab row and action row',()=>{
+  test.use({viewport:{width:390,height:844}});
+  for(const locale of ['zh-CN','en-US'] as const)test.describe(locale,()=>{
+    test.use({locale});
+    test('tabs scroll fully into view and controls have their own lines',async({page})=>{
+      await page.goto('/stock/FIXT');
+      const strip=page.getByTestId('company-tabs-strip'),links=strip.getByRole('link');
+      await expect(links).toHaveCount(6);
+      for(const link of await links.all()){
+        await link.scrollIntoViewIfNeeded();
+        const tab=await boxOf(link),bounds=await boxOf(strip);
+        expect(tab.left).toBeGreaterThanOrEqual(bounds.left-1);
+        expect(tab.right).toBeLessThanOrEqual(bounds.right+1);
+        expect(tab.top).toBeGreaterThanOrEqual(bounds.top-1);
+        expect(tab.bottom).toBeLessThanOrEqual(bounds.bottom+1);
+        expect(await link.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+      }
+      const more=await boxOf(page.getByTestId('company-more'));
+      const replay=await boxOf(page.getByTestId('company-tabs').locator('button:not([data-testid="company-more"])'));
+      const bounds=await boxOf(strip);
+      expect(more.top).toBeGreaterThanOrEqual(bounds.bottom-1);
+      for(const control of [more,replay]){
+        expect(control.top>=bounds.bottom||control.bottom<=bounds.top||
+          control.left>=bounds.right||control.right<=bounds.left).toBe(true);
+      }
+      const menu=await openMoreInsideViewport(page);
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
+
+      const actions=page.getByTestId('company-actions');
+      const caption=await boxOf(actions.getByTestId('company-actions-caption'));
+      for(const control of await actions.locator('button:visible,summary:visible,a:visible').all()){
+        const box=await boxOf(control);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        expect(caption.top).toBeGreaterThanOrEqual(box.bottom);
+      }
+      await actions.locator('summary').click();
+      const menuLinks=actions.locator('details[open]').getByRole('link');
+      await expect(menuLinks.first()).toBeVisible();
+      for(const link of await menuLinks.all())expect((await boxOf(link)).height).toBeGreaterThanOrEqual(44);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    });
+  });
+});
+
+test.describe('1280px tab row and action row',()=>{
+  test.use({locale:'zh-CN',viewport:{width:1280,height:800}});
+  test('keeps More beside the tabs and the caption beside Watchlist',async({page})=>{
+    await page.goto('/stock/FIXT');
+    const tab=await boxOf(page.getByTestId('company-tabs-strip').getByRole('link').first());
+    const more=await boxOf(page.getByTestId('company-more'));
+    expect(Math.min(tab.bottom,more.bottom)).toBeGreaterThan(Math.max(tab.top,more.top));
+    await openMoreInsideViewport(page);
+    const actions=page.getByTestId('company-actions');
+    const watchlist=await boxOf(actions.getByRole('button',{name:'加入自选',exact:true}));
+    const caption=await boxOf(actions.getByTestId('company-actions-caption'));
+    expect(Math.min(watchlist.bottom,caption.bottom)).toBeGreaterThan(Math.max(watchlist.top,caption.top));
   });
 });
 

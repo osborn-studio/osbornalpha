@@ -386,7 +386,8 @@
     "label": "所属行业",
     "since": "自 {date}",
     "unlicensed": "申万 2021：数据授权待确认（不显示分类）",
-    "currentOnly": "current_only"
+    "currentOnly": "仅当前值",
+    "currentOnlyHint": "SEC 只提供当前 SIC，没有纳入/剔除历史"
   },
   "formulas": {
     "revenue_sum": "Σ revenue（单季用 q_single_revenue）",

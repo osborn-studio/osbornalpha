@@ -57,7 +57,7 @@ export function toIndicatorView(row:IndicatorRowJson,locale:Locale,t:MacroT):Ind
  const status=STATUS[row.status];const period=seriesById(row.series_id)?.period??'month';const has=row.value_text!==null&&row.period_end!==null;
  return {seriesId:row.series_id,observationId:row.observation_id,name:pick(row.name,locale),status,reason:row.reason?pick(row.reason,locale):null,muted:status!=='active'||!has,
   value:row.value_text!==null?formatValueText(row.value_text):MISSING,valueText:row.value_text,unit:row.value_text!==null?unitSuffix(row.unit,t):'',unitKey:row.unit,
-  change:row.change?formatChange(row.change):null,
+  change:row.change?formatChange(row.change,t):null,
   period:row.period_end?formatPeriod(row.period_end,period):MISSING,periodEnd:row.period_end,available:row.available_at?formatInstant(row.available_at):MISSING,
   timeliness:row.timeliness,spark:row.sparkline,hasEvidence:has,source:status==='active'?sourceOf(row.series_id):null};
 }

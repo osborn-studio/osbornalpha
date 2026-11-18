@@ -1,6 +1,9 @@
 // Overview/series/versions JSON → view models (spec §3.2, §3.5): missing stays missing, counts not percentages,
 // drawer keeps field names with 缺失 values, glance never invents rows.
 import {describe,expect,it} from 'vitest';
+import {createTranslator} from 'next-intl';
+import zh from '../../../messages/zh/macro.json';
+import en from '../../../messages/en/macro.json';
 import type {MacroT} from './use-macro-t';
 import {MISSING} from './macro-format';
 import {DISPLAY_CATALOG} from '@/lib/macro/display-catalog';
@@ -8,7 +11,8 @@ import {MACRO_CATALOG} from '@/lib/macro/catalog';
 import {formatPeriod} from './macro-format';
 import {COMPACT_KEYS} from '@/lib/macro/views';
 import {KEY_INDICATORS,keyIndicatorRows,GLANCE_IDS,changeCounts,changeLines,collectionOf,coverageOf,glanceRows,proofRows,revisionRows,selectVersion,sourceLabels,sourceOf,sourceRows,statusKey,toIndicatorView,type IndicatorRowJson,type OverviewEnvelopeJson,type VersionJson} from './view-model';
-const t:MacroT=(k,v)=>v?`${k}${JSON.stringify(v)}`:k;
+const tEn=createTranslator({locale:'en',namespace:'macro',messages:{macro:en}}) as MacroT;
+const t:MacroT=(k,v)=>k.startsWith('changeText.')?tEn(k,v):v?`${k}${JSON.stringify(v)}`:k;
 const src={publisher:{zh:'美国劳工统计局',en:'BLS'},via:{zh:'FRED（圣路易斯联储）',en:'FRED'},fetch_host:'fred.stlouisfed.org',adapter:'fred_csv' as const,rights:'public_domain' as const,attribution:{zh:'来源：BLS via FRED',en:'Source: BLS via FRED'}};
 // Rows in Task 13's IndicatorRow shape (views.ts): flat value fields, status letter, precomputed exact change.
 const row=(o:Partial<IndicatorRowJson>):IndicatorRowJson=>({observation_id:'o-row',series_id:'US_UNRATE',name:{zh:'失业率',en:'Unemployment rate'},value_text:'4.2',unit:'pct',change:{kind:'pp',value_text:'-0.1'},
@@ -16,6 +20,11 @@ const row=(o:Partial<IndicatorRowJson>):IndicatorRowJson=>({observation_id:'o-ro
 const env=(o:Partial<OverviewEnvelopeJson>={}):OverviewEnvelopeJson=>({snapshotId:'s1',asOf:'2026-11-03',catalogVersion:'macro-catalog/x',methodologyVersion:'v1.0',
  collection:[{dataset:'macro.fred',status:'fresh',lastOkAt:'2026-11-03T05:31:00Z'}],indicators:[row({})],changes:{counts:{new_release:0,revised:0,late:0,missing:0},items:[]},catalogCounts:{verified:6,missing:1,restricted:1},...o});
 describe('toIndicatorView',()=>{
+ it('localizes point changes on Chinese indicator rows',()=>{
+  const tZh=createTranslator({locale:'zh',namespace:'macro',messages:{macro:zh}}) as MacroT;
+  const v=toIndicatorView(row({change:{kind:'points',value_text:'-0.8'}}),'zh',tZh);
+  expect(v.change?.text).toBe('−0.8 点');
+ });
  it('active row: formatted value, formatted change, period from the catalog, available, catalog source',()=>{
   const v=toIndicatorView(row({}),'zh',t);
   expect(v).toMatchObject({seriesId:'US_UNRATE',name:'失业率',value:'4.2',unit:'%',change:{text:'−0.1 pp',arrow:'↓'},period:'2026-09',available:'2026-10-15 12:30 UTC',muted:false,hasEvidence:true,spark:['4.3','4.2']});

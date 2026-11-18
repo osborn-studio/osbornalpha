@@ -87,7 +87,7 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
   const obs = d?.observations ?? [];
   const cur = obs.at(-1) ?? null;
   const prev = obs.at(-2) ?? null;
-  const change = cur && prev ? typedChange(cur.value_text, prev.value_text, readDef.changeKind) : null;
+  const change = cur && prev ? typedChange(cur.value_text, prev.value_text, readDef.changeKind, t) : null;
   const source = sourceJsonOf(readDef);
   const open = (observationId: string | null, periodEnd: string, valueText: string) => setDrawer({ seriesId: readDef.id, observationId, name, periodEnd, display: `${formatValueText(valueText)}${unit}`, unit: readDef.unit, source });
   const method = def.derive ? t(`detail.derive.${def.derive.kind}`, { from: def.derive.from }) : def.aliasOf ? t('detail.alias', { from: def.aliasOf }) : t('detail.native');
@@ -211,7 +211,7 @@ export function IndicatorDetail({ seriesId, compact = false, asOf, snapshotObser
 
           <Section title={t('detail.method')}>
             <p className="text-xs">{method}</p>
-            <p className="text-xs text-text-dim">{t('detail.changeKind', { kind: def.changeKind })} · {d.eventsVersion} · {d.cyclesVersion}</p>
+            <p className="text-xs text-text-dim">{t('detail.changeKind', { kind: t(`changeKindNames.${def.changeKind}`) })} · {d.eventsVersion} · {d.cyclesVersion}</p>
           </Section>
 
           <Section title={t('detail.sourceTitle')}>

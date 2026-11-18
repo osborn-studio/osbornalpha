@@ -386,7 +386,8 @@
     "label": "Industry",
     "since": "since {date}",
     "unlicensed": "SW 2021: data licence pending (classification hidden)",
-    "currentOnly": "current_only"
+    "currentOnly": "Current only",
+    "currentOnlyHint": "SEC provides only the current SIC code; no membership history"
   },
   "formulas": {
     "revenue_sum": "Σ revenue (quarterly: q_single_revenue)",

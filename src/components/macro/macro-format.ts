@@ -2,6 +2,7 @@
 // Display formatting for macro numbers (spec §3.2, §10). Works on value_text (decimal strings) with exact string
 // rounding, so a printed number never carries float drift. Arrows are neutral (macro indicators get no red/green).
 // A missing value renders as '—'; the caller adds the 缺失/Missing label.
+import type {MacroT} from './use-macro-t';
 import {canonicalDecimal} from '@/lib/facts/json-numbers';
 import {subtract,yoyPct} from '@/lib/macro/decimal';
 import type {ChangeKind,PeriodKind} from '@/lib/macro/types';
@@ -28,18 +29,19 @@ export interface TypedChange{text:string;arrow:'↑'|'↓'|'→';kind:ChangeKind
 const isPositive=(text:string)=>{const c=canonicalDecimal(text);return c!=='0'&&!c.startsWith('-');};
 /** Formats an exact change text in its kind: bp ≤ 1 decimal, pct 2 decimals, pp / points ≤ 2 decimals. Used directly for
  *  the overview's precomputed `change` (Task 13 views.ts changeOf) and by typedChange below. */
-export function formatChange(c:{kind:ChangeKind;value_text:string}):TypedChange{
+export function formatChange(c:{kind:ChangeKind;value_text:string},t?:MacroT):TypedChange{
  const raw=canonicalDecimal(c.value_text);
  const places=c.kind==='bp'?Math.min(fractionDigits(raw),1):c.kind==='pct'?2:Math.min(fractionDigits(raw),MAX_DISPLAY_DECIMALS);
  const r=roundDecimalText(raw,places);const neg=r.startsWith('-');const abs=neg?r.slice(1):r;const zero=/^0(\.0+)?$/.test(abs);
- return {text:`${zero?'':neg?'−':'+'}${abs} ${c.kind}`,arrow:zero?'→':neg?'↓':'↑',kind:c.kind};
+ const value=`${zero?'':neg?'−':'+'}${abs}`;
+ return {text:t?t(`changeText.${c.kind}`,{value}):`${value} ${c.kind}`,arrow:zero?'→':neg?'↓':'↑',kind:c.kind};
 }
 /** Change vs the previous comparable value in the series' change unit (spec §4.2 changeKind), exact. */
-export function typedChange(cur:string|null,prev:string|null,kind:ChangeKind):TypedChange|null{
+export function typedChange(cur:string|null,prev:string|null,kind:ChangeKind,t?:MacroT):TypedChange|null{
  if(cur===null||prev===null)return null;
- if(kind==='bp')return formatChange({kind,value_text:canonicalDecimal(`${subtract(cur,prev)}e2`)});
- if(kind==='pct')return isPositive(prev)?formatChange({kind,value_text:yoyPct(cur,prev)}):null;
- return formatChange({kind,value_text:subtract(cur,prev)});
+ if(kind==='bp')return formatChange({kind,value_text:canonicalDecimal(`${subtract(cur,prev)}e2`)},t);
+ if(kind==='pct')return isPositive(prev)?formatChange({kind,value_text:yoyPct(cur,prev)},t):null;
+ return formatChange({kind,value_text:subtract(cur,prev)},t);
 }
 export function formatPeriod(periodEnd:string,period:PeriodKind):string{
  if(period==='month')return periodEnd.slice(0,7);

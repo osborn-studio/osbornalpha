@@ -17,11 +17,13 @@ function ViewTabsContent({ ticker, view, asOf, right }: ViewTabsProps) {
   const t = useTranslations('company.tabs');
   const [open, setOpen] = useState(false);
   const menu = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const menuId = useId();
   const secondary = SECONDARY_VIEWS.some(id => id === view);
   useEffect(() => {
     if (!open) return;
+    list.current?.scrollIntoView?.({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
     function outside(event: PointerEvent) {
       if (!menu.current?.contains(event.target as Node)) setOpen(false);
     }
@@ -34,19 +36,21 @@ function ViewTabsContent({ ticker, view, asOf, right }: ViewTabsProps) {
   }, [open]);
   const tabClass = (active: boolean) => `inline-flex min-h-11 items-center border-b-2 px-3 py-2.5 text-sm no-underline hover:no-underline ${active ? 'border-accent text-accent' : 'border-transparent text-text-dim hover:text-text'}`;
   return (
-    <div className="flex min-w-0 flex-wrap items-end gap-x-2 border-b border-border">
-      <nav aria-label={t('ariaLabel')} className="flex min-w-0 flex-1 gap-1 overflow-x-auto whitespace-nowrap">
+    <div data-testid="company-tabs" className="flex min-w-0 flex-wrap items-end gap-x-2 border-border lg:border-b">
+      <nav data-testid="company-tabs-strip" aria-label={t('ariaLabel')} className="flex min-w-0 basis-full gap-1 overflow-x-auto whitespace-nowrap border-b border-border lg:flex-1 lg:border-b-0">
         {PRIMARY_VIEWS.map(id => <Link key={id} href={companyHref(ticker, { view: id, asOf }) as never} aria-current={id === view ? 'page' : undefined} className={tabClass(id === view)}>{t(id)}</Link>)}
       </nav>
-      <div ref={menu} className="relative min-w-0 max-w-[65%] shrink-0">
-        <button ref={button} data-testid="company-more" type="button" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen(!open)} className={tabClass(secondary)}>
-          <span className="min-w-0 break-words">{t('more')}{secondary && ` · ${t(view)}`}</span>
-        </button>
-        <ul id={menuId} hidden={!open} className="absolute right-0 z-20 mt-1 w-60 max-w-[calc(100vw-2rem)] rounded-md border border-border bg-bg-elevated p-1 shadow-sm">
-          {SECONDARY_VIEWS.map(id => <li key={id}><Link href={companyHref(ticker, { view: id, asOf }) as never} aria-current={id === view ? 'page' : undefined} onClick={() => setOpen(false)} className={`flex min-h-11 items-center rounded px-3 py-2 text-sm ${id === view ? 'text-accent' : 'text-text-dim'}`}>{t(id)}</Link></li>)}
-        </ul>
+      <div data-testid="company-tabs-trailing" className="flex basis-full items-end gap-x-2 lg:contents">
+        <div ref={menu} className="relative min-w-0 max-w-[65%] shrink-0">
+          <button ref={button} data-testid="company-more" type="button" aria-expanded={open} aria-controls={menuId} onClick={() => setOpen(!open)} className={tabClass(secondary)}>
+            <span className="min-w-0 break-words">{t('more')}{secondary && ` · ${t(view)}`}</span>
+          </button>
+          <ul ref={list} id={menuId} hidden={!open} className="absolute left-0 lg:left-auto lg:right-0 z-20 mt-1 w-60 max-w-[calc(100vw-2rem)] rounded-md border border-border bg-bg-elevated p-1 shadow-sm">
+            {SECONDARY_VIEWS.map(id => <li key={id}><Link href={companyHref(ticker, { view: id, asOf }) as never} aria-current={id === view ? 'page' : undefined} onClick={() => setOpen(false)} className={`flex min-h-11 items-center rounded px-3 py-2 text-sm ${id === view ? 'text-accent' : 'text-text-dim'}`}>{t(id)}</Link></li>)}
+          </ul>
+        </div>
+        {right && <div className="ml-auto shrink-0 pb-1.5">{right}</div>}
       </div>
-      {right && <div className="ml-auto shrink-0 pb-1.5">{right}</div>}
     </div>
   );
 }

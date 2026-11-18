@@ -36,7 +36,7 @@ function WatchlistButton({ ticker }: { ticker: string }) {
     setGroups(groups.map((g) => (g.id === targetId ? { ...g, tickers: Array.from(new Set([...g.tickers, ticker])) } : g)));
     setInList(true); show(ts('addedToast', { group: groups.find((g) => g.id === targetId)?.name || ts('notFound.watchlist') }));
   }
-  return <Button variant="secondary" size="sm" onClick={toggle} disabled={!hydrated}>{inList ? t('inWatchlist') : t('addWatchlist')}</Button>;
+  return <Button variant="secondary" size="sm" className="min-h-11 sm:min-h-0" onClick={toggle} disabled={!hydrated}>{inList ? t('inWatchlist') : t('addWatchlist')}</Button>;
 }
 
 function AnalyzeMenu({ ticker }: { ticker: string }) {
@@ -44,12 +44,12 @@ function AnalyzeMenu({ ticker }: { ticker: string }) {
   const ts = useTranslations('market.stock');
   const q = encodeURIComponent(ticker);
   return (
-    <details className="relative">
-      <summary className="inline-flex cursor-pointer list-none items-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1 text-xs">{t('analyze')}</summary>
-      <div className="absolute z-20 mt-1 flex min-w-[200px] flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-2 text-xs">
-        <Link href={`/copilot?ticker=${q}` as never}>{ts('analyzeWithJohn')}</Link>
-        <Link href={`/copilot?method=hiphon-pm-deepdive&ticker=${q}` as never}>{ts('deepDive')}</Link>
-        <Link href={`/copilot?method=company-diligence&ticker=${q}` as never}>{ts('companyDiligence')}</Link>
+    <details className="sm:relative">
+      <summary className="inline-flex min-h-11 sm:min-h-0 cursor-pointer list-none items-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1 text-xs">{t('analyze')}</summary>
+      <div className="absolute left-0 sm:left-auto z-20 mt-1 flex min-w-[200px] flex-col gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] p-2 text-xs">
+        <Link className="flex min-h-11 items-center sm:min-h-0" href={`/copilot?ticker=${q}` as never}>{ts('analyzeWithJohn')}</Link>
+        <Link className="flex min-h-11 items-center sm:min-h-0" href={`/copilot?method=hiphon-pm-deepdive&ticker=${q}` as never}>{ts('deepDive')}</Link>
+        <Link className="flex min-h-11 items-center sm:min-h-0" href={`/copilot?method=company-diligence&ticker=${q}` as never}>{ts('companyDiligence')}</Link>
       </div>
     </details>
   );
@@ -72,7 +72,7 @@ const dot: Record<string, string> = { fresh: 'bg-[var(--bearish)]', stale: 'bg-[
 
 export function CompanyHeader({ data, view, asOf, locale, foreignPublic }: { data: CompanyPageData; view: ViewId; asOf: string | null; locale: 'zh' | 'en'; foreignPublic: boolean }) {
   const t = useTranslations('company.header');
-  const tf = useTranslations('company.header.freshness');
+  const tf = useTranslations('research.freshness.status');
   const issuer = data.issuer;
   const ticker = data.publicTicker ?? data.ticker;
   const { state: freshness, retry: freshnessRetry } = useCompanyFetch<FreshnessResponse>(data.market ? '/api/companies/freshness' : null);
@@ -162,7 +162,7 @@ export function CompanyHeader({ data, view, asOf, locale, foreignPublic }: { dat
                 ) : (
                   <>
                     <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot[fkey] ?? dot.missing}`} />
-                    <span>{tf(fkey)}</span>
+                    <span>{fkey === 'unknown' ? t('freshness.unknown') : tf(fkey)}</span>
                   </>
                 )}
               </span>
@@ -171,12 +171,12 @@ export function CompanyHeader({ data, view, asOf, locale, foreignPublic }: { dat
         )}
       </div>
 
-      <div className="flex basis-full flex-wrap items-center gap-2">
+      <div data-testid="company-actions" className="relative flex basis-full flex-wrap items-center gap-x-2 gap-y-3 sm:gap-y-2">
         <WatchlistButton ticker={ticker} />
         {/* Live membership probes read the materialized inbox; replay stays on the snapshot path. */}
         {issuer && !asOf && <TrackButton issuerId={issuer.issuer_id} />}
         <AnalyzeMenu ticker={ticker} />
-        <span className="ml-auto text-[11px] text-[var(--text-dim)]">{t('quoteRemoved')}</span>
+        <span data-testid="company-actions-caption" className="basis-full sm:basis-auto sm:ml-auto text-[11px] text-[var(--text-dim)]">{t('quoteRemoved')}</span>
       </div>
     </section>
   );
