@@ -3,5 +3,39 @@
     "title": "专题研究",
     "titleEn": "Topic research",
     "scope": "由本站证据组装的版本化专题档案。"
+  },
+  "directory": {
+    "searchLabel": "搜索专题标题",
+    "searchPlaceholder": "搜索标题",
+    "manage": "管理专题",
+    "categoryLabel": "专题分类",
+    "categories": {
+      "all": "全部",
+      "macro": "宏观",
+      "industry": "行业",
+      "company": "公司",
+      "cross_market": "跨市场",
+      "method": "方法"
+    },
+    "evidence": "证据",
+    "ok": "正常",
+    "unsupported": "不支持",
+    "revisedBadge": "{n} 条证据发布后已修订",
+    "staleBadge": "过期 · 超过 90 天未更新",
+    "mostlyWithheld": "大部分数值受限",
+    "previewBanner": {
+      "title": "目录未对外 · 预览",
+      "body": "仅管理员可见。目录尚未对外开放。"
+    },
+    "states": {
+      "emptyTitle": "尚无已发布专题",
+      "emptyUser": "专题发布后会出现在这里。",
+      "emptyAdmin": "尚无已发布专题，可以先创建一个专题。",
+      "create": "去创建",
+      "errorTitle": "读取失败（{code}）",
+      "errorBody": "本页不缓存，没有可退回的旧结果。",
+      "retry": "重试"
+    },
+    "loadMore": "加载更多"
   }
 }
