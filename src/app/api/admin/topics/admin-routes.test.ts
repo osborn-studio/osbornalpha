@@ -1,6 +1,7 @@
 // Topic plan T5.2: real route handlers with memory persistence.
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {POST,GET} from './route';
+import {POST as lintDraft} from './[id]/lint/route';
 import {GET as getDraft,PUT} from './[id]/draft/route';
 import {memoryTopicsDb} from '@/lib/topics/memory-db';
 import {emptyDraft} from '@/lib/topics/drafts';
@@ -60,7 +61,7 @@ it('validates revision and UUID parameters',async()=>{
 });
 it('closes every route before auth when the flag is unset',async()=>{
  vi.stubEnv('TOPICS_ENABLED',undefined);vi.mocked(requireAdminUser).mockClear();
- const responses=await Promise.all([create(),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx())]);
+ const responses=await Promise.all([create(),GET(new Request('http://localhost'),{}),getDraft(new Request('http://localhost'),ctx()),PUT(req({}),ctx()),evidenceSearch(req({}),ctx()),lintDraft(req({}),ctx())]);
  for(const r of responses){expect(r.status).toBe(404);expect((await r.json()).error.code).toBe('topics_disabled');expect(r.headers.get('cache-control')).toBe('no-store');}
  expect(requireAdminUser).not.toHaveBeenCalled();
 });
@@ -79,4 +80,22 @@ it('includes public evidence previews in both draft responses',async()=>{
  const saved=await PUT(req({expected_revision:1,body},'PUT'),ctx(topic_id));expect(saved.status).toBe(200);
  const read=await getDraft(new Request('http://localhost'),ctx(topic_id));expect(read.status).toBe(200);
  for(const response of [saved,read])expect((await response.json()).evidence).toMatchObject([{ordinal:1,state:'withheld',reason:'citation_pending',text:null}]);
+});
+
+it('lints and resolves without writing a draft',async()=>{
+ const {topic_id}=await (await create()).json(),body=emptyDraft(title),db=adminDeps().db;
+ body.sections=[{key:'s1',title,note:{zh:'失业率为 4.3%',en:''},items:[{ordinal:1}]}];
+ body.evidence=[{ordinal:1,section_key:'s1',ref:{v:1,kind:'financial_fact',id:FACT.cnPending}}];
+ const before=await db.draftOf(topic_id),save=vi.spyOn(db,'saveDraft');
+ const r=await lintDraft(req({body}),ctx(topic_id));expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toBe('no-store');
+ const data=await r.json();expect(data.lint).toContainEqual({field:'sections.s1.note.zh',code:'numeral_in_owner_text',match:'4.3%'});
+ expect(data.evidence).toMatchObject([{ordinal:1,state:'withheld',text:null}]);expect(save).not.toHaveBeenCalled();expect(await db.draftOf(topic_id)).toEqual(before);
+});
+it('validates lint body, id, existence and authentication',async()=>{
+ const {topic_id}=await (await create()).json();
+ expect((await lintDraft(req({body:{}}),ctx(topic_id))).status).toBe(400);
+ expect((await lintDraft(req({body:emptyDraft(title)}),ctx('bad'))).status).toBe(400);
+ expect((await lintDraft(req({body:emptyDraft(title)}),ctx())).status).toBe(404);
+ const {AdminForbidden}=await import('@/lib/admin/auth');vi.mocked(requireAdminUser).mockRejectedValue(new AdminForbidden());
+ expect((await lintDraft(req({body:emptyDraft(title)}),ctx(topic_id))).status).toBe(403);
 });
