@@ -16,6 +16,8 @@ type Initial={id:string;slug:string;revision:number;draft_hash:string;title:Bili
  receipt:(Pick<Receipt,'passed'|'checks'>&{created_at:string;receipt_id:string})|null};
 type Dialog='publish'|'unpublish'|'retire';
 export function PublishClient({initial}:{initial:Initial}){
+ const [hydrated,setHydrated]=useState(false);
+ useEffect(()=>{setHydrated(true);},[]);
  const t=useTranslations('topicsAdmin'),title=initial.title[useLocale().startsWith('zh')?'zh':'en'];
  const base='/'+initial.id,editorHref='/admin/topics'+base;
  const [receipt,setReceipt]=useState<Receipt|null>(initial.receipt&&{...initial.receipt,draft_hash:initial.draft_hash});
@@ -87,7 +89,7 @@ export function PublishClient({initial}:{initial:Initial}){
  const errorNode=error&&<div role="alert" className="text-sm text-danger">{error.replace(/^publish_blocked:/,'').split(',').map(code=><p key={code}><code className={MONO}>{code}</code> {t.has('publish.code.'+code)?t('publish.code.'+code):t('errors.generic')}</p>)}</div>;
  const modalProps={onClose:close,busy,error:errorNode};
  const openFrom=(kind:Dialog,button:HTMLButtonElement)=>void run('open',()=>open(kind,button));
- return <div className="space-y-4" ref={workspace} tabIndex={-1}>
+ return <div data-hydrated={hydrated||undefined} className="space-y-4" ref={workspace} tabIndex={-1}>
   {status&&<p role="status" className={MONO}>{status}</p>}{retired&&!status&&<p role="status">{t('status.retired')}</p>}
   {!dialog&&errorNode}{reload&&<button className={BUTTON} onClick={()=>window.location.reload()}>{t('editor.reload')}</button>}
   <div className="grid items-start gap-4 lg:grid-cols-2">

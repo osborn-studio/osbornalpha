@@ -16,6 +16,8 @@ import {BUTTON,FlowBar} from './FlowBar';
 export interface EditorInitial{id:string;slug:string;revision:number;body:DraftBody;updated_at:string;public_enabled:boolean;retired:boolean;lint:LintFinding[];evidence:EvidenceView[]}
 type Inspection={lint:LintFinding[];evidence:EvidenceView[]};
 export function EditorClient({initial,publishHref=`/admin/topics/${initial.id}/publish`}:{initial:EditorInitial;publishHref?:string}){
+ const [hydrated,setHydrated]=useState(false);
+ useEffect(()=>{setHydrated(true);},[]);
  const t=useTranslations('topicsAdmin'),userLocale=useLocale(),timezone=useDisplayTimezone();
  const [body,dispatch]=useReducer(reduce,initial.body),[saved,setSaved]=useState({revision:initial.revision,body:initial.body,time:initial.updated_at});
  const [evidence,setEvidence]=useState(initial.evidence),[lint,setLint]=useState(initial.lint),[locale,setLocale]=useState<'zh'|'en'>(userLocale.startsWith('zh')?'zh':'en');
@@ -58,7 +60,7 @@ export function EditorClient({initial,publishHref=`/admin/topics/${initial.id}/p
   setEvidence(old=>[...old.filter(e=>e.ordinal!==ordinal),{ordinal,kind:candidate.ref.kind,label:candidate.label,...candidate.public,period:null}]);
  }
  const chips=<><span suppressHydrationWarning data-testid="draft-revision" className="rounded border border-border px-2 py-1 font-mono tabular-nums">{t('editor.revision',{n:saved.revision,time:new Date(saved.time).toLocaleString(userLocale,{timeZone:timezone})})}</span><span className="break-all rounded border border-border px-2 py-1 font-mono tabular-nums">{t('editor.slug',{slug:initial.slug})}</span><span className="rounded border border-border px-2 py-1">{t(initial.public_enabled?'frame.publicOpen':'frame.publicClosed')}</span></>;
- return <TopicAdminFrame wide crumb={body.title[locale]} title={t('editor.title')} headerChips={chips}>
+ return <div data-hydrated={hydrated||undefined}><TopicAdminFrame wide crumb={body.title[locale]} title={t('editor.title')} headerChips={chips}>
   {readOnly&&<p className="text-sm text-text-dim">{t('editor.retired')}</p>}
   {error&&<div role="alert" className="text-sm text-danger">{t(baseCode(error)==='revision_conflict'?'editor.conflict':'errors.generic')} {baseCode(error)==='revision_conflict'?<button className={BUTTON} type="button" onClick={()=>window.location.reload()}>{t('editor.reload')}</button>:<span className="font-mono tabular-nums">{error}</span>}</div>}
   {lintError&&<p role="alert" className="text-xs text-danger">{t('errors.generic')} <span className="font-mono tabular-nums">{lintError}</span></p>}
@@ -68,5 +70,5 @@ export function EditorClient({initial,publishHref=`/admin/topics/${initial.id}/p
    <PickerColumn id={initial.id} body={body} locale={locale} onAdd={add} readOnly={readOnly}/>
   </div>
   <FlowBar dirty={dirty} pending={pending} readOnly={readOnly} onSave={save} publishHref={publishHref}/>
- </TopicAdminFrame>;
+ </TopicAdminFrame></div>;
 }

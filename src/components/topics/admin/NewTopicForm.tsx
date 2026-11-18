@@ -1,6 +1,6 @@
 // Topic plan T5.4: bilingual creation form and inline API errors.
 'use client';
-import {useRef,useState,type FormEvent} from 'react';
+import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {useRouter} from 'next/navigation';
 import {useTranslations} from 'next-intl';
 import {CATEGORIES} from '@/lib/topics/types';
@@ -9,6 +9,8 @@ import {adminJson,baseCode} from '@/app/(app)/admin/topics/_shared/admin-fetch';
 import {newTopicErrors} from './list-model';
 const INPUT='block min-h-9 w-full rounded-md border border-border bg-bg-card px-3 text-sm text-text focus:border-accent';
 export function NewTopicForm(){
+ const [hydrated,setHydrated]=useState(false);
+ useEffect(()=>{setHydrated(true);},[]);
  const t=useTranslations('topicsAdmin'),router=useRouter(),sending=useRef(false);
  const [input,setInput]=useState({slug:'',category:'macro',title:{zh:'',en:''}});
  const [errors,setErrors]=useState<Record<string,string>>({}),[code,setCode]=useState<string|null>(null),[pending,setPending]=useState(false);
@@ -28,7 +30,7 @@ export function NewTopicForm(){
   }finally{sending.current=false;setPending(false);}
  }
  const error=(field:string)=>errors[field]?<p id={`error-${field}`} role="alert" className="mt-1 text-xs text-danger">{t(errors[field])}</p>:null;
- return <TopicAdminFrame crumb={t('newTopic.title')} title={t('newTopic.title')}>
+ return <div data-hydrated={hydrated||undefined}><TopicAdminFrame crumb={t('newTopic.title')} title={t('newTopic.title')}>
   <form onSubmit={submit} noValidate className="max-w-2xl space-y-4 rounded-lg border border-border bg-bg-card p-4">
    <fieldset disabled={pending} className="space-y-4">
     <div><label htmlFor="topic-slug" className="mb-1 block text-xs text-text-dim">{t('newTopic.slug')}</label>
@@ -45,5 +47,5 @@ export function NewTopicForm(){
    </fieldset>
    {code&&<p role="alert" className="text-sm text-danger">{t('errors.generic')} <span className="font-mono tabular-nums">{code}</span></p>}
   </form>
- </TopicAdminFrame>;
+ </TopicAdminFrame></div>;
 }
