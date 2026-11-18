@@ -2,7 +2,7 @@
 import {getTranslations} from 'next-intl/server';
 import {redirect} from 'next/navigation';
 import {AdminForbidden,AdminUnauthenticated,requireAdminUser} from '@/lib/admin/auth';
-import {adminFixtureMode,FIXTURE_ADMIN_ID} from '@/lib/topics/admin-fixture';
+import {adminFixtureMode,FIXTURE_ADMIN_ID} from '@/lib/topics/admin-fixture-mode';
 export async function adminGate(next:string):Promise<{id:string}|null>{
  if(adminFixtureMode())return {id:FIXTURE_ADMIN_ID};
  try{return await requireAdminUser();}

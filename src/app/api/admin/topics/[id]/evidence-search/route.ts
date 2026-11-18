@@ -5,7 +5,7 @@ import {parseEvidenceQuery,searchEvidence} from '@/lib/topics/evidence-search';
 import {TopicError} from '@/lib/topics/errors';
 type Context={params:Promise<{id:string}>};
 export const POST=adminPost<Context>('[admin/topics] evidence search',async({ctx,body})=>{
- const id=uuidParam((await ctx.params).id),deps=adminDeps();
+ const id=uuidParam((await ctx.params).id),deps=await adminDeps();
  if(!await deps.db.topicById(id))throw new TopicError('not_found');
  const {query,asOf}=parseEvidenceQuery(body);
  return jsonNoStore({candidates:await searchEvidence(deps,query,asOf)});

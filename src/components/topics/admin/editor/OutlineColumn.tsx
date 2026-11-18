@@ -11,8 +11,8 @@ import {BUTTON,INPUT,PANEL} from './FlowBar';
 export const KINDS=['macro_observation','industry_metric','financial_fact','document_citation','judgment','broker_report_meta'] as const;
 export function EvidenceState({state}:{state:ResolveState}){
  const t=useTranslations('topicsAdmin');
- if(state==='ok'||state==='unsupported')return <span className={`rounded border border-border px-1 text-xs ${state==='unsupported'?'border-dashed':''}`}>{t(`state.${state}`)}</span>;
- return <span className="inline-flex flex-wrap items-center gap-1"><StateBadge state={state==='not_served'?'notServed':state}/>{state==='withheld'&&<span className="text-xs text-text-dim">{t('state.withheld')}</span>}</span>;
+ if(state==='ok'||state==='unsupported')return <span className={`shrink-0 whitespace-nowrap rounded border border-border px-1 text-xs ${state==='unsupported'?'border-dashed':''}`}>{t(`state.${state}`)}</span>;
+ return <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap">{state==='withheld'&&<span className="text-xs text-text-dim">{t('picker.public')}</span>}<StateBadge state={state==='not_served'?'notServed':state}/></span>;
 }
 export function OutlineColumn({body,evidence,locale,dispatch,readOnly}:{body:DraftBody;evidence:EvidenceView[];locale:'zh'|'en';dispatch:Dispatch<EditorAction>;readOnly:boolean}){
  const t=useTranslations('topicsAdmin'),[announcement,setAnnouncement]=useState(''),[dragged,setDragged]=useState<string|null>(null),[form,setForm]=useState(false);
@@ -33,10 +33,10 @@ export function OutlineColumn({body,evidence,locale,dispatch,readOnly}:{body:Dra
     const ev='ordinal' in item?evidence.find(e=>e.ordinal===item.ordinal):null,slot='expected_slot' in item?body.expected_slots.find(v=>v.key===item.expected_slot):null;
     const itemLabel='ordinal' in item?`ev:${item.ordinal}`:item.expected_slot;
     const onKey=(e:KeyboardEvent)=>keyMove(e,dir=>{dispatch({type:'moveItem',section:s.key,index:i,dir});setAnnouncement(t('editor.itemMoved',{item:itemLabel,m:Math.max(0,Math.min(s.items.length-1,i+dir))+1}));});
-    return <li key={itemLabel} tabIndex={0} onKeyDown={onKey} className={`flex min-h-8 flex-wrap items-center gap-1 break-words text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${slot?'rounded border border-dashed border-border p-1':''}`}>
-     <button type="button" className={BUTTON} aria-label={t('editor.move',{item:itemLabel})} disabled={readOnly}>⠿</button>
-     {'ordinal' in item?<><span className="font-mono tabular-nums">ev:{item.ordinal}</span><span className="min-w-0 break-all">{ev?.label[locale]}</span>{ev&&<EvidenceState state={ev.state}/>}</>:slot&&<span>{t('editor.slot',{reason:t(`slotReason.${slot.reason_code}`)})} · {slot.label[locale]}</span>}
-     <button type="button" className={BUTTON} disabled={readOnly} onClick={()=>dispatch('ordinal' in item?{type:'removeEvidence',ordinal:item.ordinal}:{type:'removeSlot',key:item.expected_slot})}>{t('editor.remove')}</button>
+    return <li key={itemLabel} tabIndex={0} onKeyDown={onKey} className={`flex min-h-8 min-w-0 items-center gap-1 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${slot?'flex-wrap break-words rounded border border-dashed border-border p-1':''}`}>
+     <button type="button" className={`${BUTTON} shrink-0 px-1 text-xs`} aria-label={t('editor.move',{item:itemLabel})} disabled={readOnly}>⠿</button>
+     {'ordinal' in item?<><span className="shrink-0 font-mono tabular-nums">ev:{item.ordinal}</span><span className="min-w-0 flex-1 truncate" title={`${ev?.label[locale]??''}${ev?.period?` · ${ev.period}`:''}`}>· {ev?.label[locale]}{ev?.period&&<> · <span className="font-mono tabular-nums">{ev.period}</span></>}</span>{ev&&<EvidenceState state={ev.state}/>}</>:slot&&<span>{t('editor.slot',{reason:t(`slotReason.${slot.reason_code}`)})} · {slot.label[locale]}</span>}
+     <button type="button" className={`${BUTTON} ml-auto shrink-0 whitespace-nowrap px-1 text-xs`} disabled={readOnly} onClick={()=>dispatch('ordinal' in item?{type:'removeEvidence',ordinal:item.ordinal}:{type:'removeSlot',key:item.expected_slot})}>{t('editor.remove')}</button>
     </li>;
    })}</ul>
    <button type="button" className={`${BUTTON} mt-2 text-text-dim`} disabled={readOnly} onClick={()=>{if(window.confirm(t('editor.confirmDelete')))dispatch({type:'removeSection',key:s.key});}}>{t('editor.deleteSection')}</button>

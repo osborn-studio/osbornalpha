@@ -5,7 +5,7 @@ import {EvidenceRefError} from '@/lib/evidence/ref';
 import {TopicError,TOPIC_ERROR_STATUS} from './errors';
 import {TopicsDbError} from './types';
 import {topicsEnabled} from './flags';
-import {adminFixtureMode,FIXTURE_ADMIN_ID} from './admin-fixture';
+import {adminFixtureMode,FIXTURE_ADMIN_ID} from './admin-fixture-mode';
 export const UUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const NO_STORE={'Cache-Control':'no-store'} as const;
 export const jsonNoStore=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:NO_STORE});

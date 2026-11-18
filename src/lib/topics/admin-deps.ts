@@ -6,10 +6,11 @@ import {resolveCodeVersion} from '@/lib/judgments/deps';
 import {productionCandidateLookup,type CandidateLookup} from './evidence-search';
 import {supabaseTopicsDb} from './db';
 import type {TopicsDb} from './types';
-import {adminFixtureDeps,adminFixtureMode} from './admin-fixture';
+import {adminFixtureMode} from './admin-fixture-mode';
+export {adminFixtureMode,FIXTURE_ADMIN_ID} from './admin-fixture-mode';
 export interface AdminDeps{db:TopicsDb;resolver:Resolver;lookup:CandidateLookup;now():Date;codeVersion:string|null;privateIds(userId:string):Promise<ReadonlySet<string>>}
-export function adminDeps():AdminDeps{
- if(adminFixtureMode())return adminFixtureDeps();
+export async function adminDeps():Promise<AdminDeps>{
+ if(adminFixtureMode())return (await import('./admin-fixture')).adminFixtureDeps();
  let codeVersion:string|null=null;
  try{codeVersion=resolveCodeVersion({allowGit:false})||null;}catch{/* Unavailable until deployment supplies a version. */}
  return {db:supabaseTopicsDb({admin:getAdminSupabase()}),resolver:productionResolver(),lookup:productionCandidateLookup({admin:getAdminSupabase()}),now:()=>new Date(),codeVersion,privateIds:async()=>new Set<string>()};

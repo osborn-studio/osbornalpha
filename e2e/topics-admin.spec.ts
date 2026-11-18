@@ -18,7 +18,7 @@ test('editor lints, searches, adds evidence and saves explicitly',async({page})=
  for(const name of ['分节与证据','文字','证据选择器'])await expect(page.getByRole('heading',{name,exact:true})).toBeVisible();
  const outline=page.getByRole('region',{name:'分节与证据'}),picker=page.getByRole('region',{name:'证据选择器'});
  for(const n of [1,2,3])await expect(outline.getByText(`ev:${n}`,{exact:true})).toBeVisible();
- await expect(outline.getByRole('listitem').filter({has:page.getByText('ev:3',{exact:true})}).last()).toContainText('公开视图受限');
+ await expect(outline.getByRole('listitem').filter({has:page.getByText('ev:3',{exact:true})}).last()).toContainText(/公开视图\s*受限/);
  await expect(outline.getByText(/预期槽 · 行业数据尚未发布/)).toBeVisible();
  await page.getByLabel('第 1 节 · 编者说明',{exact:true}).fill('失业率为 4.3%');
  await expect(page.getByRole('status').filter({hasText:'裸数字'})).toBeVisible({timeout:5000});

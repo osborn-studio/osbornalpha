@@ -22,7 +22,7 @@ const create=()=>POST(req({slug:'rates-and-banks',category:'macro',title}),{});
 beforeEach(()=>{
  vi.stubEnv('TOPICS_ENABLED','1');vi.stubEnv('TOPICS_E2E_FIXTURES','');
  const sources=memorySources(allFixtures());
- vi.mocked(adminDeps).mockReturnValue({db:memoryTopicsDb(),resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'test',privateIds:async()=>new Set()});
+ vi.mocked(adminDeps).mockResolvedValue({db:memoryTopicsDb(),resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'test',privateIds:async()=>new Set()});
  vi.mocked(requireAdminUser).mockResolvedValue({id:actor} as Awaited<ReturnType<typeof requireAdminUser>>);
 });
 afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
@@ -48,7 +48,7 @@ it('saves advisory lint and rejects stale revisions',async()=>{
 });
 it('returns not_found for unknown topics and missing drafts',async()=>{
  let r=await getDraft(new Request('http://localhost'),ctx());expect(r.status).toBe(404);expect((await r.json()).error.code).toBe('not_found');
- const {topic_id}=await (await create()).json();vi.spyOn(adminDeps().db,'draftOf').mockResolvedValue(null);
+ const {topic_id}=await (await create()).json();vi.spyOn((await adminDeps()).db,'draftOf').mockResolvedValue(null);
  r=await getDraft(new Request('http://localhost'),ctx(topic_id));expect(r.status).toBe(404);
 });
 it.each([['ab','macro',title,'slug'],['Bad-slug','macro',title,'slug'],['a'.repeat(65),'macro',title,'slug'],['valid','other',title,'category'],['valid','macro',{zh:'',en:'Title'},'title.zh']])('validates create fields',async(slug,category,title,field)=>{
@@ -83,7 +83,7 @@ it('includes public evidence previews in both draft responses',async()=>{
 });
 
 it('lints and resolves without writing a draft',async()=>{
- const {topic_id}=await (await create()).json(),body=emptyDraft(title),db=adminDeps().db;
+ const {topic_id}=await (await create()).json(),body=emptyDraft(title),db=(await adminDeps()).db;
  body.sections=[{key:'s1',title,note:{zh:'失业率为 4.3%',en:''},items:[{ordinal:1}]}];
  body.evidence=[{ordinal:1,section_key:'s1',ref:{v:1,kind:'financial_fact',id:FACT.cnPending}}];
  const before=await db.draftOf(topic_id),save=vi.spyOn(db,'saveDraft');

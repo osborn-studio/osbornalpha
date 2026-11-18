@@ -6,7 +6,7 @@ import {draftEvidenceView} from '@/lib/topics/evidence-search';
 import {TopicError} from '@/lib/topics/errors';
 type Context={params:Promise<{id:string}>};
 export const GET=adminGet<Context>('[admin/topics] draft',async({ctx})=>{
- const id=uuidParam((await ctx.params).id),deps=adminDeps(),{db}=deps;
+ const id=uuidParam((await ctx.params).id),deps=await adminDeps(),{db}=deps;
  const topic=await db.topicById(id),draft=await db.draftOf(id);
  if(!topic||!draft)throw new TopicError('not_found');
  return jsonNoStore({
@@ -16,7 +16,7 @@ export const GET=adminGet<Context>('[admin/topics] draft',async({ctx})=>{
 });
 export const PUT=adminPost<Context>('[admin/topics] save draft',async({ctx,body,userId})=>{
  const topicId=uuidParam((await ctx.params).id),expectedRevision=intField(body,'expected_revision',1,Number.MAX_SAFE_INTEGER),draft=parseDraftBody(body.body);
- const deps=adminDeps();
+ const deps=await adminDeps();
  const saved=await deps.db.saveDraft({topicId,expectedRevision,body:draft,actor:userId});
  return jsonNoStore({...saved,lint:draftLint(draft),evidence:await draftEvidenceView(deps,draft)});
 });

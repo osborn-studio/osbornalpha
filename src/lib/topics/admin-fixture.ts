@@ -15,8 +15,8 @@ import {FACT} from '@/lib/evidence/fixtures/facts';
 import {emptyDraft,parseDraftBody} from './drafts';
 import type {AdminDeps} from './admin-deps';
 import type {TopicsDb} from './types';
-export const adminFixtureMode=(env:Record<string,string|undefined>=process.env)=>env.TOPICS_E2E_FIXTURES==='1'&&env.NODE_ENV!=='production'&&!env.VERCEL&&!env.NEXT_PUBLIC_SUPABASE_URL&&!env.SUPABASE_SERVICE_ROLE_KEY;
-export const FIXTURE_ADMIN_ID='00000000-0000-4000-8000-0000000000e2';
+import {adminFixtureMode,FIXTURE_ADMIN_ID} from './admin-fixture-mode';
+export {adminFixtureMode,FIXTURE_ADMIN_ID};
 const KEY=Symbol.for('osborn.topics.admin-fixture');
 const globals=globalThis as typeof globalThis&{[KEY]?:AdminDeps};
 export function adminFixtureDeps():AdminDeps{
