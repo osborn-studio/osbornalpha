@@ -9,6 +9,8 @@
  "timeliness": {"current": "On time", "late": "Late", "missing": "Missing", "na": "N/A"},
  "changes": {"title": "Since last snapshot", "new_release": "New", "revised": "Revised", "late": "Late", "missing": "Missing", "latest": "Latest", "empty": "No changes since the previous snapshot", "revisedFrom": "{from} → {to}"},
  "coverage": {"title": "Catalog coverage", "verified": "Verified", "catalog": "Catalog", "notVerified": "Not verified", "collectionTitle": "Collection", "dataset": "Dataset", "state": "Status", "lastOk": "Last success", "none": "Every catalog item is verified", "methodLink": "Catalog & method →"},
+ "changeText": {"bp": "{value} bp", "pp": "{value} pp", "pct": "{value} pct", "points": "{value} points"},
+ "changeKindNames": {"bp": "bp", "pp": "pp", "pct": "pct", "points": "points"},
  "table": {"title": "Indicators", "hint": "Click a value to open its evidence", "name": "Name", "value": "Value", "change": "Change", "period": "Period", "available": "Available", "status": "Status", "spark": "Last 24", "changeKinds": "Change units: bp rates · pp ratios · pct index growth · points index points", "neutralNote": "Moves use neutral arrows and words, never red/green. The sparkline data table is in the indicator page table view.", "sparkLabel": "{name}, last 24 periods", "empty": "No indicators for this region", "preview": "Preview", "detail": "Details →"},
  "units": {"pct": "%", "index": "index", "index_1982_84_100": "index (1982-84 = 100)", "index_2009_11_100": "index (2009-11 = 100)", "index_prev_year_100": "index (same period last year = 100)", "cny_per_100usd": "CNY per 100 USD", "usd_per_bbl": "USD per barrel", "usd_mn": "USD mn", "usd_bn": "USD bn"},
  "sources": {"title": "Sources", "open": "Open evidence ▸"},

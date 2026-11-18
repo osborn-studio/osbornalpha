@@ -1,3 +1,4 @@
+import {createRequire} from 'node:module';
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {NextIntlClientProvider} from 'next-intl';
@@ -84,13 +85,17 @@ for(const locale of ['zh','en'] as const){
  });
 }
 
-afterEach(()=>vi.restoreAllMocks());
-for(const locale of ['zh','en'] as const){
- it.each(['fresh','stale','error','missing','unknown','loading','request-error'])('header freshness %s ('+locale+')',status=>{
+function mockFreshness(status:string){
   const original=fetchHook.useCompanyFetch;
   vi.spyOn(fetchHook,'useCompanyFetch').mockImplementation((url)=>url==='/api/companies/freshness'?{
    state:status==='loading'?{status:'loading'}:status==='request-error'?{status:'error',code:'internal'}:{status:'ok',data:{datasets:[{dataset:'facts.us',status}]}},retry:()=>{},
   } as ReturnType<typeof original>:original(url));
+}
+
+afterEach(()=>vi.restoreAllMocks());
+for(const locale of ['zh','en'] as const){
+ it.each(['fresh','stale','error','missing','unknown','loading','request-error'])('header freshness %s ('+locale+')',status=>{
+  mockFreshness(status);
   const html=render(locale,coverage());
   expect(html).toContain(`data-freshness="${status==='request-error'?'error':status==='unknown'||status==='loading'?'missing':status}"`);
   if(status==='request-error') expect(html).toContain((locale==='zh'?zh:en).states.retry);
@@ -107,4 +112,28 @@ for(const status of ['loading','error'] as const) it(`replay ${status} never lea
  const original=fetchHook.useCompanyFetch;
  vi.spyOn(fetchHook,'useCompanyFetch').mockImplementation(url=>url?.includes('/filings')?{state:status==='loading'?{status}:{status,code:'internal',httpStatus:500},retry:()=>{}} as ReturnType<typeof original>:original(url));
  expect(render('en',coverage(),false,'2024-12-01')).not.toContain('2025-10-31');
+});
+
+const {parse}=createRequire(import.meta.url)('next/dist/compiled/node-html-parser');
+
+for(const locale of ['zh','en'] as const) it(`shows localized dataset statuses (${locale})`,()=>{
+ const labels=(locale==='zh'?zhResearch:enResearch).freshness.status;
+ for(const status of ['fresh','stale','error','missing','unknown'] as const){
+  mockFreshness(status);
+  const text=parse(render(locale,coverage())).querySelector('[data-testid="data-status"]').innerHTML.replace(/<[^>]+>/g,' ');
+  const label=status==='unknown'?(locale==='zh'?'未知':'Unknown'):labels[status];
+  expect.soft(text).toContain(label);
+  expect.soft(text).not.toMatch(new RegExp(`\\b${status}\\b`));
+  vi.restoreAllMocks();
+ }
+});
+
+it('gives the action controls touch targets and the caption its own mobile row',()=>{
+ const row=parse(render('zh',coverage())).querySelector('[data-testid="company-actions"]');
+ expect(row,'company-actions row').toBeTruthy();
+ expect(row.classList.value).toContain('gap-y-3');
+ const caption=row.querySelector('[data-testid="company-actions-caption"]');
+ expect(caption.classList.value).toEqual(expect.arrayContaining(['basis-full','sm:ml-auto']));
+ expect(caption.classList.value).not.toContain('ml-auto');
+ for(const control of row.querySelectorAll('button,summary'))expect(control.classList.value).toContain('min-h-11');
 });

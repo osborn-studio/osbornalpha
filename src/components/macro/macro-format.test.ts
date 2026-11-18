@@ -1,4 +1,8 @@
 // Display formatting from value_text (spec §3.2): string rounding (no float drift), typed changes, neutral arrows.
+import {createTranslator} from 'next-intl';
+import zh from '../../../messages/zh/macro.json';
+import en from '../../../messages/en/macro.json';
+import type {MacroT} from './use-macro-t';
 import {describe,expect,it} from 'vitest';
 import {MISSING,formatChange,formatInstant,formatPeriod,formatValueText,roundDecimalText,typedChange,unitLabel,unitSuffix} from './macro-format';
 describe('roundDecimalText',()=>{
@@ -52,5 +56,26 @@ describe('period / instant / unit',()=>{
   expect(unitSuffix('pct',tt)).toBe('%');expect(unitSuffix('cny_per_100usd',tt)).toBe(' <units.cny_per_100usd>');expect(unitSuffix('usd_per_bbl',tt)).toBe(' <units.usd_per_bbl>');
   expect(unitSuffix('index',tt)).toBe(' <units.index>');expect(unitSuffix('mystery',tt)).toBe('');
   expect(unitLabel('pct',tt)).toBe('<units.pct>');expect(unitLabel('mystery',tt)).toBe('');
+ });
+});
+
+describe('localized change units',()=>{
+ const translate=(locale:'en'|'zh')=>createTranslator({locale,namespace:'macro',messages:{macro:locale==='zh'?zh:en}}) as MacroT;
+ const format:(change:Parameters<typeof formatChange>[0],t:MacroT)=>ReturnType<typeof formatChange>=formatChange;
+ const typed:(cur:string,prev:string,kind:'points',t:MacroT)=>ReturnType<typeof typedChange>=typedChange;
+ it('formats signed and zero changes in both locales',()=>{
+  for(const [kind,value_text,expectedZh,expectedEn] of [
+   ['points','-0.8','−0.8 点','−0.8 points'],['bp','10','+10 基点','+10 bp'],
+   ['pp','0.3','+0.3 个百分点','+0.3 pp'],['pct','1.2','+1.20%','+1.20 pct'],['pp','0','0 个百分点','0 pp'],
+  ] as const){
+   expect.soft(format({kind,value_text},translate('zh')).text).toBe(expectedZh);
+   expect.soft(format({kind,value_text},translate('en')).text).toBe(expectedEn);
+  }
+ });
+ it('localizes computed point changes',()=>{
+  expect(typed('121.37','121.06','points',translate('zh'))?.text).toBe('+0.31 点');
+ });
+ it('uses Chinese units in the change legend',()=>{
+  expect(translate('zh')('table.changeKinds')).not.toMatch(/\b(bp|pp|pct|points)\b/);
  });
 });

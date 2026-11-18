@@ -34,10 +34,6 @@
     "dataset": "数据集",
     "noFacts": "尚无披露事实",
     "freshness": {
-      "fresh": "fresh",
-      "stale": "stale",
-      "error": "error",
-      "missing": "missing",
       "unknown": "未知"
     },
     "streamLabel": "披露流",

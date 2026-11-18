@@ -50,7 +50,7 @@ export function IndustryRowView({ticker,data}:{ticker:string;data:Ok}){
             {ts(i.scheme)} · {i.scheme==='sic'?`${i.path[0]?.code??''} · `:''}{i.path.map(n=>nodeName(n,locale)).join(' › ')}
           </Link>
           {i.currentOnly
-            ?<span className="rounded-[4px] border border-warn px-1.5 text-xs text-warn">{t('currentOnly')}</span>
+            ?<span title={t('currentOnlyHint')} className="rounded-[4px] border border-warn px-1.5 text-xs text-warn">{t('currentOnly')}</span>
             :<span className="ml-auto font-mono text-xs tabular-nums text-text-dim">{t('since',{date:i.since})}</span>}
         </div>
       ))}

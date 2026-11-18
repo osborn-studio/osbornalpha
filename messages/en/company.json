@@ -34,11 +34,7 @@
     "dataset": "Dataset",
     "noFacts": "No disclosure facts yet",
     "freshness": {
-      "fresh": "fresh",
-      "stale": "stale",
-      "error": "error",
-      "missing": "missing",
-      "unknown": "unknown"
+      "unknown": "Unknown"
     },
     "streamLabel": "Disclosure stream",
     "streamUS": "US 10-K / 10-Q",
