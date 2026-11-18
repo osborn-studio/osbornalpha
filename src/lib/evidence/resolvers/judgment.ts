@@ -1,5 +1,5 @@
 // Topic spec §4.1 / §5.4 judgment references.
-import {lifecycleOf} from '@/lib/judgments/display';
+import {lifecycleOf,toCard,classLabel} from '@/lib/judgments/display';
 import {digestOf,missing,type EvidenceResolver,type Resolved} from '../resolve';
 import type {EvidenceSources} from '../sources';
 export function judgmentResolver(sources:EvidenceSources):EvidenceResolver<'judgment'>{
@@ -11,7 +11,11 @@ export function judgmentResolver(sources:EvidenceSources):EvidenceResolver<'judg
    if(!method?.publishable)return {...missing(ref,'method_not_publishable'),state:'withheld'};
    if(lifecycleOf(envelope)==='withdrawn')return {...missing(ref,'withdrawn'),state:'retracted'};
    const label={zh:method.title_zh,en:method.title_en},identity={id:ref.id,label:label[ctx.locale]};
-   const fact={template:'topic.judgment_ref',slots:{method:`${j.methodology_id}@${j.methodology_version}`}};
+   const card=toCard(envelope,{title:label,now:ref.as_of});
+   // Only the category/event label enters these slots; never the headline's numeric claim.
+   const claim=j.kind==='categorical'&&typeof card.display.value==='string'?classLabel(card.display.value):
+    j.kind==='probability'&&j.claim&&'event' in j.claim?j.claim.event:{zh:j.abstain_reason??j.kind,en:j.abstain_reason??j.kind};
+   const fact={template:'topic.judgment_ref',slots:{method:`${card.methodology.id}@${card.methodology.version}`,lifecycle:card.lifecycle,calibration:card.calibration,registered_at:card.registered_at,claim_zh:claim.zh,claim_en:claim.en}};
    return {...missing(ref,''),state:'ok',reason:null,display:{label,fact,period:j.as_of,available_at:j.registered_at},
     drawer:{kind:'judgment',identity,source:{publisher:'OsbornAlpha',adapter:j.producer_kind,url:null,locator:`${j.methodology_id}@${j.methodology_version}`,evidence_sha256:method.formula_hash},
      times:{period:j.as_of,available_at:j.registered_at,ingested_at:j.created_at},transform:{code_version:j.code_version,mapping_version:null,method_version:j.methodology_version},

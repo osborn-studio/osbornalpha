@@ -100,3 +100,16 @@ it('applies stored drift to the directory, dossier, replay and drawer',async()=>
  expect(out.drawer).toEqual({kind:'financial_fact',identity:expect.any(Object),reason:'now_withheld'});
  expect(JSON.stringify(out)).not.toContain('1000');
 });
+
+it('returns distinct sorted attributions only for visible ok evidence',async()=>{
+ const f=publishedFixture(),d=deps(f),topic=await f.db.publicTopicBySlug('rates-and-banks');
+ expect((await readTopic(d,'rates-and-banks',{})).attributions).toEqual(['facts:sec','industry:sic','judgments:method','macro:attribution']);
+ await f.db.upsertDrift([{version_id:topic!.current_version_id!,ordinal:3,drift:'now_withheld',current_identity:null}], '2026-11-14T00:00:00.000Z',true,null);
+ expect((await readTopic(d,'rates-and-banks',{})).attributions).toEqual(['industry:sic','judgments:method','macro:attribution']);
+});
+it('publishes a single-locale fixture summary with period-specific facts',async()=>{
+ const s=(await readTopic(deps(publishedFixture()),'rates-and-banks',{})).summary!;
+ expect(s.provider).toBe('fixture-provider');expect(s.model).toBe('fixture-model');
+ expect(s.facts[0].text).toBe('2026-08 失业率为 3.75%。');
+ expect(JSON.stringify([...s.facts,...s.points,...s.counterpoints])).not.toContain(' / ');
+});

@@ -8,7 +8,7 @@ export interface PublicEvidence{ordinal:number;section_key:string;kind:EvidenceK
  label:Bilingual;fact:Resolved['display']['fact'];period:string|null;available_at:string|null;
  drift:Exclude<Drift,'unchanged'>|null;masked:boolean;current:{value_text:string;unit:string;period:string;available_at:string}|null}
 export interface VersionMeta{version_no:number;published_at:string;cutoff:string;is_current:boolean;superseded:boolean;unpublished_at:string|null;unpublish_reason:UnpublishReason|null}
-export interface DossierDto{topic:{slug:string;category:Category;title:Bilingual;dek:Bilingual};
+export interface DossierDto{attributions:string[];topic:{slug:string;category:Category;title:Bilingual;dek:Bilingual};
  version:VersionMeta;total_versions:number;current_version_no:number|null;view:'current'|'version'|'replay';replay_as_of:string|null;
  sections:DraftSection[];evidence:PublicEvidence[];expected_slots:ExpectedSlot[];entries:DraftEntry[];
  summary:(RenderedSummary&{hidden_points:number})|null;counts:EvidenceCounts;freshness_at_publication:Record<string,'fresh'|'stale'|'unknown'>;

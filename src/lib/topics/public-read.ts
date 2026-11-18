@@ -63,7 +63,11 @@ export async function readTopic(d:PublicDeps,slug:string,o:{asOf?:string;version
  await open(d);
  const {t,v,versions,now,view,snapshot:s,masked}=await selected(d,slug,o);
  const age_days=ageDays(v.published_at,now);
- return {topic:structuredClone(s.topic),version:meta(v,t),total_versions:versions.length,current_version_no:t.version_no,view,replay_as_of:o.asOf??null,
+ const attributions=[...new Set(masked.evidence.flatMap(e=>{
+  const drawer=masked.drawers.get(e.ordinal);
+  return e.state==='ok'&&!e.masked&&drawer&&'attribution_key' in drawer?[drawer.attribution_key]:[];
+ }))].sort();
+ return {attributions,topic:structuredClone(s.topic),version:meta(v,t),total_versions:versions.length,current_version_no:t.version_no,view,replay_as_of:o.asOf??null,
   sections:structuredClone(s.sections),evidence:masked.evidence,expected_slots:structuredClone(s.expected_slots),entries:structuredClone(s.entries),summary:masked.summary,
   counts:structuredClone(s.counts),freshness_at_publication:structuredClone(s.freshness_at_publication),stale:age_days>90,age_days,
   drift_checked_at:t.drift_checked_at,drift_unchecked:driftUnchecked(t.drift_checked_at,now)};
