@@ -41,7 +41,8 @@
   "states": {
     "ok": "正常",
     "atPublication": "正常（发布时）",
-    "unsupported": "不支持"
+    "unsupported": "不支持",
+    "missing": "缺失"
   },
   "drift": {
     "newer_period": "有更新期",
@@ -140,5 +141,66 @@
     "document_citation": "文档引用",
     "judgment": "判定",
     "broker_report_meta": "外资研报"
+  },
+  "footer": {
+    "ownerNote": "编者笔记",
+    "counts": "证据状态汇总",
+    "freshness": "发布时新鲜度",
+    "age": "距发布 {days} 天",
+    "markets": "受限市场说明",
+    "cn": "中国公司数值受限。",
+    "hk": "港股未服务。",
+    "industry": "行业数据尚未发布。",
+    "attribution": "来源署名",
+    "provenancePending": "来源署名暂不可用。",
+    "fred": "FRED 序列仅展示宏观模块已提供的公开数据。",
+    "missing": "缺失",
+    "withheld": "受限",
+    "notServed": "未服务",
+    "retracted": "已撤回"
+  },
+  "attribution": {
+    "macro:attribution": "宏观数据来自所标注的原始发布者，经宏观数据适配器提供。",
+    "facts:sec": "来源：美国证券交易委员会公开披露。",
+    "facts:cninfo": "来源：巨潮资讯公开披露。",
+    "industry:sic": "OsbornAlpha 按 SIC 分类计算行业汇总。",
+    "industry:sw2021": "OsbornAlpha 按申万行业分类计算行业汇总。",
+    "judgments:method": "OsbornAlpha 方法登记与判定记录。",
+    "documents:public": "公开披露文档。",
+    "documents:source": "来源为所标注的公开披露文档。",
+    "macro:rights:public_domain": "公共领域数据；请保留来源署名。",
+    "macro:rights:third_party": "第三方条款适用。",
+    "industry:dataset:sic": "SIC 行业数据集已公开。",
+    "industry:dataset:sw2021": "申万行业数据集已公开。",
+    "macro:rights:official_open": "官方开放数据；请保留来源署名。"
+  },
+  "judgment": {
+    "lifecycle": {
+      "open": "开放",
+      "abstained": "弃权",
+      "settled": "已结算",
+      "void": "无效",
+      "withdrawn": "已撤回",
+      "pending_fill": "等待成交"
+    },
+    "calibration": {
+      "insufficient": "样本不足",
+      "failed": "校准未通过",
+      "calibrated": "已校准",
+      "evaluated": "已评估",
+      "self_assessed": "自行评估"
+    }
+  },
+  "summary": {
+    "title": "摘要",
+    "approved": "已批准 · {provider} / {model}",
+    "explanation": "事实句由系统从冻结证据生成；机制假设由模型生成，未经核实。",
+    "facts": "事实",
+    "hypotheses": "假设与反方 · 未经核实",
+    "counterpoint": "反方",
+    "masked": "所依据的证据已撤回/受限",
+    "hidden": "{count} 条假设因所依据的证据已撤回或受限而隐藏",
+    "incomparable": "证据 [{a}] 与 [{b}] 期别不同，不生成变化句。",
+    "source": "来源 [{ordinal}]"
   }
 }

@@ -41,7 +41,8 @@
   "states": {
     "ok": "Available",
     "atPublication": "Available at publication",
-    "unsupported": "Not supported"
+    "unsupported": "Not supported",
+    "missing": "Missing"
   },
   "drift": {
     "newer_period": "Newer period available",
@@ -140,5 +141,66 @@
     "document_citation": "Document citation",
     "judgment": "Judgment",
     "broker_report_meta": "Foreign research"
+  },
+  "footer": {
+    "ownerNote": "Editor note",
+    "counts": "Evidence state totals",
+    "freshness": "Freshness at publication",
+    "age": "{days} days since publication",
+    "markets": "Restricted markets",
+    "cn": "China company values are withheld.",
+    "hk": "Hong Kong shares are not served.",
+    "industry": "Industry data has not been published.",
+    "attribution": "Source attribution",
+    "provenancePending": "Source attribution is currently unavailable.",
+    "fred": "FRED series show only public data already served by the macro module.",
+    "missing": "Missing",
+    "withheld": "Withheld",
+    "notServed": "Not served",
+    "retracted": "Retracted"
+  },
+  "attribution": {
+    "macro:attribution": "Macro data originates with the named publisher and is provided through the macro adapter.",
+    "facts:sec": "Source: US Securities and Exchange Commission public disclosures.",
+    "facts:cninfo": "Source: CNInfo public disclosures.",
+    "industry:sic": "Industry aggregates calculated by OsbornAlpha using SIC.",
+    "industry:sw2021": "Industry aggregates calculated by OsbornAlpha using SW2021.",
+    "judgments:method": "OsbornAlpha methodology registrations and judgment records.",
+    "documents:public": "Public disclosure document.",
+    "documents:source": "Source: the named public disclosure document.",
+    "macro:rights:public_domain": "Public-domain data; retain source attribution.",
+    "macro:rights:third_party": "Third-party terms apply.",
+    "industry:dataset:sic": "The SIC industry dataset is public.",
+    "industry:dataset:sw2021": "The SW2021 industry dataset is public.",
+    "macro:rights:official_open": "Official open data; retain source attribution."
+  },
+  "judgment": {
+    "lifecycle": {
+      "open": "Open",
+      "abstained": "Abstained",
+      "settled": "Settled",
+      "void": "Void",
+      "withdrawn": "Withdrawn",
+      "pending_fill": "Pending fill"
+    },
+    "calibration": {
+      "insufficient": "Insufficient",
+      "failed": "Calibration failed",
+      "calibrated": "Calibrated",
+      "evaluated": "Evaluated",
+      "self_assessed": "Self-assessed"
+    }
+  },
+  "summary": {
+    "title": "Summary",
+    "approved": "Approved · {provider} / {model}",
+    "explanation": "Fact sentences are generated from frozen evidence; mechanism hypotheses are model-generated and unverified.",
+    "facts": "Facts",
+    "hypotheses": "Hypotheses and counterpoints · Unverified",
+    "counterpoint": "Counterpoint",
+    "masked": "Underlying evidence has been retracted or restricted",
+    "hidden": "{count} hypotheses hidden because underlying evidence was retracted or restricted",
+    "incomparable": "Evidence [{a}] and [{b}] have different periods; no change sentence is generated.",
+    "source": "Source [{ordinal}]"
   }
 }

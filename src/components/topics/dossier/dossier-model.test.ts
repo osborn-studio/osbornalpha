@@ -22,7 +22,7 @@ describe('dossier model',()=>{
   const m=dossierModel(dto,'en');
   expect(m).toMatchObject({breadcrumb:['Topic research','Macro'],title:'Rates and banks',dek:'Public evidence and research notes',entries:dto.entries});
   expect(m.footer).toMatchObject({counts:dto.counts,stale:dto.stale});
-  expect(m.sections[0]).toMatchObject({key:'s1',title:'Evidence',chart:null});
+  expect(m.sections[0]).toMatchObject({key:'s1',title:'Evidence',chart:{series:'US_UNRATE'}});
   expect(m.sections[0].rows.map(e=>e.ordinal)).toEqual([1,2,3,4]);
   expect(m.sections[0].rows.every(e=>e.kind!=='judgment')).toBe(true);
   expect(m.sections[0].judgments.map(e=>e.ordinal)).toEqual([5]);
@@ -104,11 +104,11 @@ describe('dossier page gates and frame',()=>{
   await expect(TopicDossierPage({...request(),params:Promise.resolve({slug:'absent'})})).rejects.toThrow('NEXT_NOT_FOUND');
   await expect(TopicVersionPage({params:Promise.resolve({slug:'rates-and-banks',n:'1x'}),searchParams:Promise.resolve({})})).rejects.toThrow('NEXT_NOT_FOUND');
  });
- it('renders facts separately from judgment cards and leaves later mount points empty',async()=>{
+ it('renders facts separately from judgment cards and mounts the chart, entries, footer and summary',async()=>{
   const dto=await readTopic(deps,'rates-and-banks',{});
   const out=html(createElement(DossierView,{dto,versions:[dto.version],slug:dto.topic.slug,isAdmin:false,today:'2026-11-15'}));
   expect(out).toContain('data-evidence-ordinal="5"');expect(out.indexOf('data-evidence-ordinal="5"')).toBeGreaterThan(out.indexOf('</table>'));
   expect(out).toContain('data-expected-slot="industry"');expect(out).toContain('data-research-state="reconstructed"');
-  expect(out).not.toContain('Manage versions');expect(out).not.toContain('Record changes in public evidence.');
+  expect(out).not.toContain('Manage versions');expect(out).toContain('Record changes in public evidence.');expect(out).toContain('data-testid="topic-series"');expect(out).toContain('data-research-footer');expect(out).toContain('data-testid="topic-summary"');
  });
 });

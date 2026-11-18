@@ -9,6 +9,13 @@ import {versionBarModel} from './version-bar-model';
 export function VersionBar({dto,versions,isAdmin,today}:{dto:DossierDto;versions:VersionMeta[];isAdmin:boolean;today:string}){
  const t=useTranslations('topics.version'),router=useRouter(),m=versionBarModel(dto,{isAdmin,today,versions,locale:useLocale()});
  return <div className="flex flex-wrap items-center gap-2 border-y border-border py-3 text-xs text-text-dim" data-version-bar>
+  <div className="flex w-full min-w-0 items-center gap-1 whitespace-nowrap md:hidden">
+   <span className="min-w-0 flex-1 text-[10px] font-mono tabular-nums">{m.chips[0]} · {m.chips[1]}</span>
+   <select aria-label={m.totalText} value={dto.version.version_no} className="min-w-0 max-w-[100px] rounded border border-border bg-bg-elevated py-1 font-mono tabular-nums" onChange={event=>{
+    const option=m.options.find(o=>o.value===Number(event.target.value));if(option&&!option.disabled)router.push(option.href as Route);
+   }}>{m.options.map(option=><option key={option.value} value={option.value} disabled={option.disabled}>{option.value===dto.version.version_no?m.totalText:option.label}</option>)}</select>
+  </div>
+  <div className="hidden md:flex w-full flex-wrap items-center gap-2">
   <span className="uppercase tracking-wider">{t('caption')}</span>
   {m.chips.map((chip,i)=><span key={i} className={`${i===2?'hidden sm:inline-flex ':''}rounded border border-border px-2 py-1 font-mono tabular-nums`}>{chip}</span>)}
   <label className="flex items-center gap-2"><span>{m.totalText}</span><select aria-label={m.totalText} value={dto.version.version_no} className="max-w-full rounded border border-border bg-bg-elevated p-1 font-mono tabular-nums" onChange={event=>{
@@ -18,6 +25,7 @@ export function VersionBar({dto,versions,isAdmin,today}:{dto:DossierDto;versions
    const date=event.target.value;if(!date)router.push(m.baseHref as Route);else if(event.target.validity.valid&&date<=today)router.push(`${m.baseHref}?asOf=${encodeURIComponent(date)}` as Route);
   }}/></label>
   {m.adminHref&&<Link href={m.adminHref as Route} className="text-accent">{t('manage')}</Link>}
+  </div>
   {m.driftChip&&<div className="flex w-full flex-wrap items-center gap-2"><span data-freshness="stale" className="inline-flex items-center gap-1.5 min-h-[22px] px-2 rounded-[4px] border border-[color-mix(in_srgb,var(--warn)_35%,transparent)] text-warn"><span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-warn"/>{m.driftChip.text}</span><span className="font-mono tabular-nums">{m.driftChip.checkedText}</span></div>}
  </div>;
 }

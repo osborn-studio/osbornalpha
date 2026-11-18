@@ -1,4 +1,5 @@
 // Dossier frame and ordered section model (spec §7.2, X22).
+import {seriesModel} from './series-model';
 import type {DossierDto} from '@/lib/topics/public-dto';
 import type {UnpublishReason} from '@/lib/topics/types';
 import {renderSlots} from '@/lib/topics/slots';
@@ -21,7 +22,7 @@ export function dossierModel(dto:DossierDto,locale:string){
    const ordinals=new Set(s.items.flatMap(i=>'ordinal' in i?[i.ordinal]:[]));
    const evidence=dto.evidence.filter(e=>ordinals.has(e.ordinal)&&e.section_key===s.key).sort((a,b)=>a.ordinal-b.ordinal);
    return {key:s.key,title:s.title[lang],noteParts:renderSlots(s.note?.[lang]??'',lookup),rows:evidence.filter(e=>e.kind!=='judgment'),judgments:evidence.filter(e=>e.kind==='judgment'),
-    slots:s.items.flatMap(i=>'expected_slot' in i?dto.expected_slots.filter(slot=>slot.key===i.expected_slot):[]),chart:null};
+    slots:s.items.flatMap(i=>'expected_slot' in i?dto.expected_slots.filter(slot=>slot.key===i.expected_slot):[]),chart:seriesModel(evidence.filter(e=>e.kind!=='judgment'))};
   }),entries:banner?.kind==='unpublished'?[]:dto.entries,footer:{counts:dto.counts,stale:dto.stale,freshness:dto.freshness_at_publication}};
 }
 export type DossierSection=ReturnType<typeof dossierModel>['sections'][number];

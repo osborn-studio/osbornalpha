@@ -47,5 +47,5 @@ it('both value and source buttons forward the original ordinal; unserved rows ha
   if(node.type==='button'&&node.props.onClick)buttons.push(node.props.onClick);
   visit(node.props.children);
  };
- visit(table);expect(buttons).toHaveLength(2);buttons.forEach(click=>click());expect(onOpenSource.mock.calls).toEqual([[7],[7]]);
+ visit(table);expect(buttons).toHaveLength(4);buttons.forEach(click=>click());expect(onOpenSource.mock.calls).toEqual([[7],[7],[7],[7]]);
 });

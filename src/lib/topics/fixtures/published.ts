@@ -81,6 +81,9 @@ export function publishedFixture(){
  const rates=snapshot('rates-and-banks',resolved.resolved.slice(0,5));
  const company=snapshot('cn-company',[...resolved.resolved.slice(0,3),...resolved.resolved.slice(5)]);
  const snapshots:Record<string,Record<number,TopicSnapshot>>={'rates-and-banks':{1:structuredClone(rates),2:structuredClone(rates)},'cn-company':{1:company}};
+ snapshots['rates-and-banks'][2].summary={facts:[{fact_id:'ev:1',text:'失业率为 3.75%。 / Unemployment was 3.75%.',refs:[1]},{fact_id:'ev:2',text:'失业率为 4.3%。 / Unemployment was 4.3%.',refs:[2]}],
+  points:[{text:'就业变化可能影响银行经营。 / Employment changes may affect banks.',fact_ids:['ev:1','ev:2'],refs:[1,2]}],
+  counterpoints:[{text:'其他因素也可能影响经营。 / Other factors may also affect operations.',fact_ids:['ev:2'],refs:[2]}],incomparable:[],prompt_version:'fixture/1',validator_version:'fixture/1',provider:'fixture',model:'fixture'};
  const ids=new Map<string,string>();
  const ready=(async()=>{
   for(const slug of ['cn-company','rates-and-banks']){
