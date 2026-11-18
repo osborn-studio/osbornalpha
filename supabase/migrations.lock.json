@@ -320,6 +320,14 @@
     {
       "file": "20261203090000_facts_read_batch_slice.sql",
       "sha256": "2c1823b2d6f17575aed58c4e0eee496654c6060afbbdd0e7580b9a591e6fa338"
+    },
+    {
+      "file": "20261210090000_topics.sql",
+      "sha256": "1e124b790f8cbb27134ae0a0ef012fbd84e20767320855762b578010fe6cdc00"
+    },
+    {
+      "file": "20261210091000_topics_functions.sql",
+      "sha256": "04d413ab146f836537abc81c359554bf7056ba1225839aa19ff9de1d60596961"
     }
   ]
 }
