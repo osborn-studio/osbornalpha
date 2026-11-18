@@ -1,3 +1,4 @@
+import {memoryTableClient} from '@/lib/db/memory-table-client';
 // Topic plan T6.7: one clock and mutable source seed for publication and replay.
 import {memoryResolver} from '@/lib/evidence';
 import {allFixtures} from '@/lib/evidence/fixtures';
@@ -15,7 +16,7 @@ export const settingsBody={public_enabled:true,summary_public_enabled:false,summ
 export const confirmations=(keys:string[])=>Object.fromEntries(keys.map(k=>[k,{terms_url:'https://example.org/terms',confirmed_on:'2026-11-15'}]));
 export async function scenario(macroOnly=false){
  const db=memoryTopicsDb(),sources=memorySources(allFixtures()),now=()=>new Date('2026-11-15T00:00:00Z');db.now(now());
- const deps:AdminDeps={db,now,resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),codeVersion:'fixture',privateIds:async()=>new Set()};
+ const deps:AdminDeps={tables:memoryTableClient(),db,now,resolver:memoryResolver(sources.seed),lookup:memoryCandidateLookup(sources),codeVersion:'fixture',privateIds:async()=>new Set()};
  const slug='unemployment',title={zh:'失业率',en:'Unemployment'},body=emptyDraft(title);
  const refs=[['macro_observation',OBS.unrateV1],['financial_fact',FACT.usOk],['financial_fact',FACT.cnPending],['document_citation',DOC.ok]] as const;
  body.evidence=refs.slice(0,macroOnly?1:refs.length).map(([kind,id],n)=>({ordinal:n+1,ref:{v:1,kind,id},section_key:'data'}));

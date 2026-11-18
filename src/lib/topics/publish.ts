@@ -1,3 +1,4 @@
+import {driftDetail,lastVerification} from '@/components/topics/admin/publish/publish-model';
 // Topic plan T6.4–T6.6: disclosure receipts, public previews and version transitions.
 import type {AdminDeps} from './admin-deps';
 import type {TopicRow,TopicVersionRow} from './database-types';
@@ -104,5 +105,6 @@ export function versionRows(topic:TopicRow,versions:readonly TopicVersionRow[],d
 export async function loadVersionRows(db:TopicsDb,topic:TopicRow){
  const versions=await db.versionsOfTopic(topic.topic_id);
  const drift=await Promise.all(versions.map(async v=>[v.version_id,await db.driftOf(v.version_id)] as const));
- return versionRows(topic,versions,new Map(drift));
+ const byVersion=new Map(drift),audit=await db.auditOf(topic.topic_id);
+ return versionRows(topic,versions,byVersion).map(v=>({...v,verification:lastVerification(audit,v.version_no),details:(byVersion.get(v.version_id)??[]).map(driftDetail)}));
 }

@@ -1,4 +1,14 @@
 {
+  "entry": {
+    "title": "Topics",
+    "titleEn": "专题研究",
+    "enter": "Enter topic directory →",
+    "published": "Published topics",
+    "latest": "Latest publication",
+    "revised": "Revised after publication",
+    "topicCount": "{n, plural, one {# topic} other {# topics}}",
+    "empty": "No published topics yet"
+  },
   "meta": {
     "title": "Topic research",
     "titleEn": "Topic research",

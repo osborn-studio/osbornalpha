@@ -24,3 +24,21 @@ it('requires the exact slug and maps each version status',()=>{
  for(const input of [' banks','banks ','Banks',''])expect(retireEnabled(input,'banks')).toBe(false);
  expect((['current','superseded','unpublished'] as const).map(versionStatusKey)).toEqual(['versionStatus.current','versionStatus.superseded','versionStatus.unpublished']);
 });
+
+it('only projects current values for revisions and periods for newer periods',async()=>{
+ const {driftDetail}=await import('./publish-model');
+ const identity={period:'2026-10',value_text:'4.2',unit:'pct',available_at:null};
+ for(const drift of ['now_withheld','retracted','unchanged','unverifiable','newer_period','revised'] as const){
+  const row=driftDetail({version_id:'v',ordinal:3,drift,current_identity:identity,checked_at:'time'});
+  expect(row).toMatchObject({ordinal:3,checked_at:'time',period:['revised','newer_period'].includes(drift)?identity.period:null,value:drift==='revised'?identity.value_text:null});
+ }
+});
+
+it('shows the latest replay result for the requested version, including zero mismatches',async()=>{
+ const {lastVerification}=await import('./publish-model');
+ const event={id:1,topic_id:'id',action:'replay_verify' as const,actor:'actor',created_at:'then',detail:{version_no:1,mismatched:[]}};
+ const audit=[event,{...event,id:2,created_at:'now',detail:{version_no:1,mismatched:[{ordinal:1,reason:'digest_changed'}]}},{...event,id:3,detail:{version_no:2,mismatched:[]}}];
+ expect(lastVerification(audit,1)).toEqual({time:'now',mismatches:1});
+ expect(lastVerification(audit,2)).toEqual({time:'then',mismatches:0});
+ expect(lastVerification(audit,3)).toBeNull();
+});

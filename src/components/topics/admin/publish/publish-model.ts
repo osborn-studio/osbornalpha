@@ -1,7 +1,8 @@
 // Topic plan T6.8: client-safe publication workflow and display order.
+import type {TopicAuditRow,TopicEvidenceDriftRow} from '@/lib/topics/database-types';
 import type {DisclosureCheck,EvidenceCounts} from '@/lib/topics/types';
-import type {versionRows,previewDraft} from '@/lib/topics/publish';
-export type VersionRow=ReturnType<typeof versionRows>[number];
+import type {loadVersionRows,previewDraft} from '@/lib/topics/publish';
+export type VersionRow=Awaited<ReturnType<typeof loadVersionRows>>[number];
 export type Preview=Awaited<ReturnType<typeof previewDraft>>;
 export type Receipt={passed:boolean;draft_hash:string;checks:DisclosureCheck[]};
 export const COUNT_ORDER=['ok','withheld','missing','not_served','retracted','unsupported'] as const;
@@ -16,3 +17,15 @@ export function publishModel(i:{receipt:Receipt|null;draftHash:string;versions:{
 }
 export const retireEnabled=(input:string,slug:string):boolean=>input===slug;
 export const versionStatusKey=(status:VersionRow['status']):string=>`versionStatus.${status}`;
+
+export function driftDetail(row:TopicEvidenceDriftRow){
+ const identity=row.current_identity;
+ return {ordinal:row.ordinal,drift:row.drift,checked_at:row.checked_at,
+  period:row.drift==='revised'||row.drift==='newer_period'?identity?.period??null:null,
+  value:row.drift==='revised'?identity?.value_text??null:null,unit:row.drift==='revised'?identity?.unit??null:null};
+}
+
+export function lastVerification(audit:readonly TopicAuditRow[],versionNo:number){
+ const last=audit.findLast(e=>e.action==='replay_verify'&&e.detail.version_no===versionNo);
+ return last&&Array.isArray(last.detail.mismatched)?{time:last.created_at,mismatches:last.detail.mismatched.length}:null;
+}

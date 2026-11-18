@@ -48,6 +48,21 @@ export function topicsDbContract(label:string,setup:()=>Promise<TopicsContractHa
    expect([v.version_no,v.snapshot_text,v.snapshot_hash]).toEqual([1,p.snapshotText,sha256Hex(p.snapshotText)]);
    expect((await h.db.liveEvidence(null,500)).filter(e=>e.version_id===p.version_id).map(e=>e.state)).toEqual(['ok','withheld']);
   });
+  it('reads a complete version by id and returns null for an unknown id',async()=>{
+   const h=await setup();
+   const p=await make(h,`${label}-by-id`);
+   const [row]=await h.db.versionsOfTopic(p.topic_id);
+   expect(await h.db.versionById(p.version_id)).toEqual(row);
+   expect(await h.db.versionById(h.newId())).toBeNull();
+  });
+  it('projects only live versions into job references',async()=>{
+   const h=await setup();
+   const live=await make(h,`${label}-live`);
+   const removed=await make(h,`${label}-withdrawn`);
+   await h.db.unpublish({topicId:removed.topic_id,reason:'privacy',note:null,actor});
+   const refs=(await h.db.liveVersionRefs()).filter(ref=>[live.topic_id,removed.topic_id].includes(ref.topic_id));
+   expect(refs).toEqual([{topic_id:live.topic_id,version_id:live.version_id,version_no:live.version_no}]);
+  });
   it('hides everything from the public client until the switch is on',async()=>{
    const h=await setup();const p=await make(h,`${label}-c5`);
    await h.setPublic(false);expect(await h.asPublic().publicTopicBySlug(`${label}-c5`)).toBeNull();

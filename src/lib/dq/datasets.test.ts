@@ -8,7 +8,9 @@ import {RECONCILE_PAIRS} from './reconcile/pairs';
 import {CYCLE_PAIR_IDS,RECONCILE_PAIR_IDS} from './reconcile/types';
 
 // A dataset literal anywhere but the registry means a producer bypassed DATASETS (spec 3 §6.3).
-const LITERAL=/(['"`])(entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|company\.events|reconcile\.[a-z][a-z_.]*)\1/;
+// TOPICS ↓
+const LITERAL=/(['"`])(topics\.replay|entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|company\.events|reconcile\.[a-z][a-z_.]*)\1/;
+// TOPICS ↑
 // db-contract.ts is a test-fixture module (shared FactsDb contract cases), not a producer.
 const EXEMPT=new Set(['src/lib/dq/datasets.ts','src/lib/facts/db-contract.ts',
  // F4 — the judgments and macro db-contract modules are shared test-fixture contract cases too ('facts.us' is a negative case)
@@ -38,11 +40,18 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
   }
  });
  it('expands every DATASETS leaf, market and reconcile pair into the inventory, and nothing else',()=>{
-  const leaves=[...Object.values(DATASETS.company),...Object.values(DATASETS.entities),DATASETS.facts('US'),DATASETS.facts('CN'),DATASETS.acceptance,DATASETS.filerCategories,
+  // TOPICS ↓
+  const leaves=[DATASETS.topics.replay,...Object.values(DATASETS.company),...Object.values(DATASETS.entities),DATASETS.facts('US'),DATASETS.facts('CN'),DATASETS.acceptance,DATASETS.filerCategories,
    ...RECONCILE_PAIR_IDS.map(p=>DATASETS.reconcile(p)),DATASETS.calendar('US'),DATASETS.calendar('CN')];
+  expect(DQ_DATASET_NAMES).toHaveLength(1+7+2+1+1+7+2+1);
+  // TOPICS ↑
   expect([...leaves].sort()).toEqual([...DQ_DATASET_NAMES].sort());
-  expect(DQ_DATASET_NAMES).toHaveLength(1+7+2+1+1+7+2);
  });
+ // TOPICS ↓
+ it('registers the weekly topic replay producer',()=>{
+  expect(inventoryEntry('topics.replay')).toEqual({dataset:'topics.replay',producer:'topic-verify',cadence:'weekly'});
+ });
+ // TOPICS ↑
  it('keeps the identifiers plans 1 and 2 already persist',()=>{
   expect(DATASETS.facts('US')).toBe('facts.us');
   expect(DATASETS.facts('CN')).toBe('facts.cn');
