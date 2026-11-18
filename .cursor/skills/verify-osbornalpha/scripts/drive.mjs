@@ -5,7 +5,7 @@
 //
 // Usage (from anywhere; resolves @playwright/test from the repo's node_modules):
 //   node .cursor/skills/verify-osbornalpha/scripts/drive.mjs <journey...|all>
-// Journeys: landing watchlist stock quote-api auth-gate      ("all" = every journey valid for the current mode)
+// Journeys: landing watchlist stock quote-api auth-gate macro intel-hub   ("all" = every journey valid for the current mode)
 // Env: OSB_PORT, OSB_CDP_PORT, OSB_RUN_DIR (same defaults as env.sh); OSB_EVIDENCE_DIR overrides the dir launch.sh chose.
 // Exit code: 0 if every check passed, 1 otherwise. Never weakens a check to pass.
 import { execFileSync } from 'node:child_process';
@@ -56,7 +56,9 @@ async function newCtx(locale = 'zh-CN') {
 
 // Shared research chain (#254; 02 href is `/intel/industries?scheme=sic` since #266, `src/components/research-ui/{chain.ts,ResearchChain.tsx}`), rendered by the (app) layout
 // under the top bar on /macro, /intel/* and /stock/*. Guest has no service-role Supabase, so the foreign-research public
-// flag reads false (#252/#260): steps 01-03 are links, 04 外资研报 and 05 专题研究 are "not served" spans with no link.
+// flag reads false (#252/#260) and so does the topics public flag (#278, `src/lib/topics/public-flag.ts`: off unless
+// TOPICS_ENABLED=1 plus a service-role settings row, or TOPICS_E2E_FIXTURES=1 — launch.sh pins both empty):
+// steps 01-03 are links, 04 外资研报 and 05 专题研究 are "not served" spans with no link.
 const CHAIN = {
   zh: { label: '研究链', notServed: '未服务', steps: { macro: '宏观策略', industry: '行业研究', company: '公司研究', foreign: '外资研报', topic: '专题研究' } },
   en: { label: 'Research chain', notServed: 'Not served', steps: { macro: 'Macro strategy', industry: 'Industry research', company: 'Company research', foreign: 'Foreign research', topic: 'Topic research' } },
@@ -258,7 +260,9 @@ const journeys = {
         // /intel/industries selectors survive (in fixed key order), also through the /en prefix.
         ['/portfolio?s=00700.HK&token=x', '/portfolio'],
         ['/intel/industries?metric=roe&scheme=sw2021&token=x', '/intel/industries?scheme=sw2021&metric=roe'],
-        ['/en/intel/industries?view=table&level=9', '/intel/industries?view=table']]) {
+        ['/en/intel/industries?view=table&level=9', '/intel/industries?view=table'],
+        // Research hub and topics pages (#278/#273/#275) are protected (app) pages like the rest.
+        ['/intel', '/intel'], ['/intel/topics', '/intel/topics'], ['/intel/topics/ai-capex?asOf=x', '/intel/topics/ai-capex']]) {
         await page.goto(BASE + from, { waitUntil: 'networkidle' });
         const u = new URL(page.url());
         check(`${from} → /login?next=${next}`, u.pathname === '/login' && u.searchParams.get('next') === next, page.url());
@@ -337,7 +341,77 @@ journeys.macro = async function macro() {
   }
 };
 
-const ORDER = ['landing', 'watchlist', 'stock', 'quote-api', 'auth-gate', 'macro'];
+// Research hub /intel (#278): five entry cards in research-chain order (`src/components/intel/hub/*`, HUB_ORDER from
+// chain.ts), each `section[data-entry][data-hub-state]` with a `[data-hub-step]` number. Guest: 01 macro / 02 industries /
+// 03 companies are open with an enter link (the macro card itself fails closed: "宏观数据暂不可用"); 04 foreign and
+// 05 topics fetch their public API, get no 200 (`/api/broker-research/reports` 500, `/api/topics` 401) and render
+// notServed with no link. Topics switched off (TOPICS_ENABLED unset, no fixtures): /intel/topics, the dossier
+// (+ /v/<n>) and /admin/topics render the app 404 page; `/api/topics` → 401 unauthenticated (session is checked
+// first); `/api/admin/topics` → 404 topics_disabled.
+journeys['intel-hub'] = async function intelHub() {
+  const HUB = {
+    zh: { locale: 'zh-CN', heading: '研究', notServed: '未服务', macroDown: '宏观数据暂不可用', topicsTitle: '专题研究' },
+    en: { locale: 'en-US', heading: 'Research', notServed: 'Not served', macroDown: 'Macro data unavailable', topicsTitle: 'Topics' },
+  };
+  const EXPECT = [
+    { entry: 'macro', step: '01', state: 'open', href: '/macro' },
+    { entry: 'industries', step: '02', state: 'open', href: '/intel/industries?scheme=sic' },
+    { entry: 'companies', step: '03', state: 'open', href: '/intel/companies' },
+    { entry: 'foreign', step: '04', state: 'notServed', href: null },
+    { entry: 'topics', step: '05', state: 'notServed', href: null },
+  ];
+  for (const lang of ['zh', 'en']) {
+    const L = HUB[lang];
+    const ctx = await newCtx(L.locale); const page = await ctx.newPage();
+    // /intel keeps polling (screener), so networkidle never settles: wait for the cards instead.
+    const r = await page.goto(BASE + '/intel', { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    check(`${lang} /intel → 200 with hub heading "${L.heading}"`, r?.status() === 200 && new URL(page.url()).pathname === '/intel'
+      && await page.getByRole('heading', { level: 1 }).first().innerText().then((t) => t.startsWith(L.heading)).catch(() => false), `${r?.status()} ${page.url()}`);
+    const cards = page.locator('section[data-entry]');
+    await page.waitForFunction(() => { const c = document.querySelectorAll('section[data-entry]');
+      return c.length >= 5 && [...c].every((e) => e.dataset.hubState !== 'loading'); }, null, { timeout: 60_000 }).catch(() => {});
+    // The macro card (MacroSummaryCard) is always "open" but loads its own summary: wait for it to settle too.
+    await page.locator('section[data-entry="macro"]').getByText(L.macroDown).first().waitFor({ timeout: 45_000 }).catch(() => {});
+    const got = await cards.evaluateAll((els) => els.map((e) => ({ entry: e.dataset.entry, state: e.dataset.hubState,
+      step: e.querySelector('[data-hub-step]')?.textContent ?? null, disabled: e.getAttribute('aria-disabled'),
+      text: e.innerText.replace(/\s+/g, ' ').trim(), links: [...e.querySelectorAll('a')].map((a) => a.getAttribute('href')) })));
+    save(`intel-hub-cards-${lang}.json`, got);
+    check(`${lang} /intel: five entry cards in chain order 01-05 (macro, industries, companies, foreign, topics)`,
+      got.length === 5 && EXPECT.every((x, i) => got[i]?.entry === x.entry && got[i]?.step === x.step), JSON.stringify(got.map((g) => `${g.step}:${g.entry}`)));
+    for (const [i, x] of EXPECT.entries()) {
+      const g = got[i] ?? {};
+      if (x.state === 'open') {
+        check(`${lang} /intel: ${x.step} ${x.entry} card open with enter link ${x.href}`, g.state === 'open' && g.links?.includes(x.href), JSON.stringify(g));
+      } else {
+        check(`${lang} /intel: ${x.step} ${x.entry} card "${L.notServed}" (aria-disabled, no link)`,
+          g.state === 'notServed' && g.disabled === 'true' && g.links?.length === 0 && g.text?.includes(L.notServed), JSON.stringify(g));
+      }
+    }
+    check(`${lang} /intel: macro card fails closed ("${L.macroDown}", no invented numbers)`, (got[0]?.text ?? '').includes(L.macroDown), got[0]?.text);
+    await checkResearchChain(page, `${lang} /intel`, lang, 'none');
+    await shot(page, `intel-hub-${lang}`);
+    await ctx.close();
+  }
+  // Topics surfaces with the server switch off.
+  const ctx = await newCtx('zh-CN'); const page = await ctx.newPage();
+  for (const p of ['/intel/topics', '/intel/topics/ai-capex', '/intel/topics/ai-capex/v/1', '/admin/topics']) {
+    await page.goto(BASE + p, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+    const nf = page.getByRole('heading', { name: '页面不存在', exact: true });
+    await nf.waitFor({ timeout: 30_000 }).catch(() => {});
+    check(`topics off: ${p} renders the app 404 page ("页面不存在"), no topic content`, await nf.isVisible()
+      && await page.locator('section[data-entry], [data-testid^="topic"]').count() === 0, page.url());
+    if (p === '/intel/topics') await shot(page, 'topics-off-404');
+  }
+  await ctx.close();
+  const list = await getJson('/api/topics?limit=200');
+  save('api-topics-guest.json', list);
+  check('GET /api/topics?limit=200 (no session) → 401 unauthenticated', list.status === 401 && list.body?.error?.code === 'unauthenticated', `${list.status} ${JSON.stringify(list.body)}`);
+  const adm = await getJson('/api/admin/topics');
+  save('api-admin-topics-guest.json', adm);
+  check('GET /api/admin/topics (topics off) → 404 topics_disabled', adm.status === 404 && adm.body?.error?.code === 'topics_disabled', `${adm.status} ${JSON.stringify(adm.body)}`);
+};
+
+const ORDER = ['landing', 'watchlist', 'stock', 'quote-api', 'auth-gate', 'macro', 'intel-hub'];
 let wanted = process.argv.slice(2);
 if (!wanted.length || wanted.includes('all')) wanted = MODE === 'gate' ? ['landing', 'quote-api', 'auth-gate'] : ORDER;
 const unknown = wanted.filter((w) => !journeys[w]);

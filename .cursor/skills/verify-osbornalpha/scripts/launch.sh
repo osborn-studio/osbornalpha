@@ -43,8 +43,11 @@ if [ "$OSB_MODE" = gate ]; then
 fi
 # MACRO_JUDGMENTS_ENABLED is pinned empty too, so /macro deterministically shows the static
 # allocation template (#231) instead of a judgment slot that needs a database.
+# TOPICS_ENABLED / TOPICS_E2E_FIXTURES are pinned empty so a dotenv cannot switch topics on or
+# into the synthetic Playwright fixture mode (which needs only "no Supabase", i.e. guest mode):
+# topics stay off, so /intel/topics 404s and research-chain step 05 / hub card 05 are "not served".
 ENV_ARGS=("NEXT_PUBLIC_SUPABASE_URL=$SB_URL" "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SB_ANON_KEY"
-  SUPABASE_SERVICE_ROLE_KEY= MACRO_JUDGMENTS_ENABLED= NEXT_TELEMETRY_DISABLED=1)
+  SUPABASE_SERVICE_ROLE_KEY= MACRO_JUDGMENTS_ENABLED= TOPICS_ENABLED= TOPICS_E2E_FIXTURES= NEXT_TELEMETRY_DISABLED=1)
 
 cd "$REPO_ROOT"
 setsid env "${ENV_ARGS[@]}" npx next dev -p "$OSB_PORT" > "$OSB_RUN_DIR/next.log" 2>&1 < /dev/null &
