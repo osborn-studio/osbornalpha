@@ -8,6 +8,7 @@ The `stock` journey opens the Portfolio cockpit with Tencent selected at `/portf
 - K-line range buttons `1D 5D 1M 6M YTD 1Y 5Y All`. The active range has `aria-pressed=true`, and choosing 1Y fetches `/api/kline/00700.HK?range=1y`.
 - Provenance strip, hover tooltip, and Reset view. These controls need their own verification.
 - Company Research entry `/stock/[ticker]` without Supabase: issuer-unavailable state (guest only).
+- Shared research chain (#254, `src/components/research-ui/ResearchChain.tsx`) under the top bar on `/stock/*` (also `/macro`, `/intel/*`; not on `/portfolio` or `/watchlist`): `01 Macro strategy → 02 Industry research → 03 Company research` are links, with 03 `aria-current=page` on `/stock/*`; `04 Foreign research` and `05 Topic research` are `Not served` spans without a link (guest has no service-role Supabase, so the foreign-research public flag reads false).
 
 ## How to get to it (user POV)
 
@@ -15,7 +16,7 @@ Open Portfolio and select Tencent from the watchlist in the positions rail, or o
 
 ## Driving it with CDP browser
 
-Run `node $S/drive.mjs stock` with a fresh en-US guest context. The driver checks the focused route, chart, canvas, successful Tencent quote with a positive price, and visible Tencent name. It clicks 1Y and checks the resulting response for nonempty bars and the button's pressed state. It then opens Company Research at `/stock/600519.SH` and checks the guest fail-closed state: HTTP 200 with `Issuer lookup failed (internal).` / `发行人信息读取失败（internal）。` and no `kline-chart`. The journey records K-line responses in `stock-kline-requests.json` and screenshots in `stock-1-default.png`, `stock-2-1y.png` and `stock-3-company-unavailable.png`.
+Run `node $S/drive.mjs stock` with a fresh en-US guest context. The driver checks the focused route, chart, canvas, successful Tencent quote with a positive price, and visible Tencent name. It clicks 1Y and checks the resulting response for nonempty bars and the button's pressed state. It then opens Company Research at `/stock/600519.SH` and checks the guest fail-closed state: HTTP 200 with `Issuer lookup failed (internal).` / `发行人信息读取失败（internal）。` and no `kline-chart`. The journey records K-line responses in `stock-kline-requests.json` and screenshots in `stock-1-default.png`, `stock-2-1y.png` and `stock-3-company-unavailable.png`. On that page it also checks the research chain (03 current, 04/05 not served).
 
 ## Gotchas
 

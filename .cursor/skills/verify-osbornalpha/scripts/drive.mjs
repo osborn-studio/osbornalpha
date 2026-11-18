@@ -54,6 +54,34 @@ async function newCtx(locale = 'zh-CN') {
   return browser.newContext({ locale, viewport: { width: 1440, height: 900 } });
 }
 
+// Shared research chain (#254, `src/components/research-ui/{chain.ts,ResearchChain.tsx}`), rendered by the (app) layout
+// under the top bar on /macro, /intel/* and /stock/*. Guest has no service-role Supabase, so the foreign-research public
+// flag reads false (#252/#260): steps 01-03 are links, 04 外资研报 and 05 专题研究 are "not served" spans with no link.
+const CHAIN = {
+  zh: { label: '研究链', notServed: '未服务', steps: { macro: '宏观策略', industry: '行业研究', company: '公司研究', foreign: '外资研报', topic: '专题研究' } },
+  en: { label: 'Research chain', notServed: 'Not served', steps: { macro: 'Macro strategy', industry: 'Industry research', company: 'Company research', foreign: 'Foreign research', topic: 'Topic research' } },
+};
+const CHAIN_LINKS = { macro: '/macro', industry: '/intel/industries?scheme=sic&metric=member_count', company: '/intel/companies' };
+const squash = (t) => t.replace(/\s+/g, '');  // innerText of the badge spans has no separators
+async function checkResearchChain(page, tag, lang, currentId) {
+  const L = CHAIN[lang];
+  const nav = page.getByRole('navigation', { name: L.label, exact: true });
+  await nav.waitFor({ timeout: 20_000 }).catch(() => {});
+  const navCount = await nav.count();
+  const links = [];
+  for (const [id, href] of Object.entries(CHAIN_LINKS)) {
+    const a = nav.locator(`a[href="${href}"]`); const n = navCount === 1 ? await a.count() : 0;
+    links.push({ id, n, text: n === 1 ? squash(await a.innerText()) : '', current: n === 1 ? await a.getAttribute('aria-current') : null });
+  }
+  const linksOk = links.every((l) => l.n === 1 && l.text.includes(squash(L.steps[l.id])) && l.current === (l.id === currentId ? 'page' : null));
+  const notServed = navCount === 1 ? (await nav.locator('[data-chain-state="notServed"]').allInnerTexts()).map(squash) : [];
+  const closedOk = notServed.length === 2 && notServed[0].includes(squash(L.steps.foreign)) && notServed[1].includes(squash(L.steps.topic))
+    && notServed.every((t) => t.includes(squash(L.notServed)))
+    && navCount === 1 && await nav.locator('a[href^="/intel/foreign-research"], a[href^="/intel/topics"]').count() === 0;
+  check(`${tag}: research chain "${L.label}" — 01-03 linked (${currentId} current), 04/05 "${L.notServed}" without links`,
+    navCount === 1 && linksOk && closedOk, JSON.stringify({ navCount, links, notServed }));
+}
+
 const journeys = {
   async landing() {
     const ctx = await newCtx('zh-CN'); const page = await ctx.newPage();
@@ -179,6 +207,7 @@ const journeys = {
       await unavailable.waitFor({ timeout: 30_000 }).catch(() => {});
       check('guest /stock/600519.SH → 200 issuer-unavailable state (internal)', cr?.status() === 200 && await unavailable.isVisible(), `${cr?.status()} ${page.url()}`);
       check('unavailable Company Research shows no K-line fallback', (await page.getByTestId('kline-chart').count()) === 0);
+      await checkResearchChain(page, 'en /stock/600519.SH', 'en', 'company');
       await shot(page, 'stock-3-company-unavailable');
     } finally {
       save('stock-kline-requests.json', klines);
@@ -299,6 +328,7 @@ journeys.macro = async function macro() {
       && await footer.getByText(c.disclaimer).isVisible()
       && await methodsLink.count() === 1 && (await methodsLink.innerText()).trim() === c.methods,
       `footer=${await footer.count()} link=${await methodsLink.count()}`);
+    await checkResearchChain(page, tag, c.lang, 'macro');
     if (c.shotName === 'macro-zh') {
       check('zh /macro overview fails closed with a read-failure notice (no DB)', await page.getByText(/读取失败/).first().isVisible());
     }
