@@ -52,7 +52,7 @@ const one=<T extends string>(v:string|undefined,allowed:readonly T[],fallback:T)
 const intIn=(v:string|undefined,lo:number,hi:number,fallback:number)=>v!==undefined&&/^\d{1,5}$/.test(v)&&Number(v)>=lo&&Number(v)<=hi?Number(v):fallback;
 const isDate=(v:string|undefined):v is string=>v!==undefined&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&!Number.isNaN(Date.parse(`${v}T00:00:00Z`))&&new Date(`${v}T00:00:00Z`).toISOString().slice(0,10)===v;
 
-export function schemeFromSearch(sp:SP):Scheme{return one(sp.scheme,['sw2021','sic'] as const,'sw2021');}
+export function schemeFromSearch(sp:SP):Scheme{return one(sp.scheme,['sw2021','sic'] as const,'sic');}
 /** Dynamic route segments → scheme / code, or null (the page answers notFound()). */
 export const schemeOfPath=(raw:string):Scheme|null=>raw==='sw2021'||raw==='sic'?raw:null;
 export function codeOfPath(raw:string):string|null{

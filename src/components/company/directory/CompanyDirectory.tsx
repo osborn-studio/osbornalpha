@@ -4,6 +4,7 @@
 // Rows, total and pagination are bound to the query key of the response that produced them (directory-view.ts).
 'use client';
 
+import { PageHeader } from '@/components/research-ui';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
@@ -98,8 +99,8 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   return (
     <>
       <div className="mb-1 text-[11px] text-[var(--text-dim)]">{t('breadcrumb')}</div>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-bold">{t('title')}</h1>
+      <div className="mb-3 flex flex-col gap-2">
+        <PageHeader title={t('title')} scope={t('scope')} />
         <div className="flex flex-wrap gap-1" data-testid="freshness-strip">
           {fresh === 'unavailable' && <Tag tone="accent">{t('freshnessUnavailable')}</Tag>}
           {Array.isArray(fresh) && fresh.map((f) => {

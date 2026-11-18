@@ -11,6 +11,8 @@ import { loadCompanyPageData, universeCandidates, type CompanyPageData } from '@
 import { parseAsOf, parseView } from '@/lib/company/client';
 import { requireAdminUser } from '@/lib/admin/auth';
 import { parseFocus } from '@/components/company/focus-target';
+import { readForeignPublicEnabled } from '@/lib/broker-research/public-flag';
+import { companyFixtureMode, fixtureCompanyPageData } from '@/lib/company/e2e-fixture';
 import { CompanyPage } from './CompanyPage';
 
 // Auth-gated server component — must render dynamically per request (see briefs/page.tsx).
@@ -31,6 +33,7 @@ async function knownSecurity(anon: ReturnType<typeof getAnonSupabase>, ticker: s
 }
 
 async function loadEntryData(ticker: string, today: string): Promise<CompanyPageData> {
+  if (companyFixtureMode()) { const f = fixtureCompanyPageData(ticker, today); if (f) return f; }
   let anon: ReturnType<typeof getAnonSupabase>;
   try {
     anon = getAnonSupabase();
@@ -52,10 +55,11 @@ export default async function StockPage({ params, searchParams }: { params: Prom
   let ticker = raw;
   try { ticker = decodeURIComponent(raw); } catch { /* keep raw */ }
   const today = new Date().toISOString().slice(0, 10);
-  const [data, isAdmin, locale] = await Promise.all([
+  const [data, isAdmin, locale, foreignPublic] = await Promise.all([
     loadEntryData(ticker, today),
     isAdminViewer(),
     getLocale(),
+    Promise.resolve().then(() => readForeignPublicEnabled()).catch(() => false),
   ]);
   const highlight = typeof query.highlight === 'string' && /^[0-9a-f-]{36}$/i.test(query.highlight) ? query.highlight : null;
   return (
@@ -65,6 +69,7 @@ export default async function StockPage({ params, searchParams }: { params: Prom
       asOf={parseAsOf(query.asOf, today)}
       highlight={highlight}
       focus={parseFocus(query)}
+      foreignPublic={foreignPublic}
       isAdmin={isAdmin}
       locale={locale === 'en' ? 'en' : 'zh'}
     />

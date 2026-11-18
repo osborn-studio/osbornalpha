@@ -14,7 +14,7 @@ import { emptyStack, isInteractive, stackReducer } from './drawer-stack';
 export type DrawerTarget =
   | { kind: 'history'; key: SeriesKey; duration: string; otherUnits: boolean; scaleExp: number }
   | { kind: 'historyByFact'; factId: string; scaleExp: number }
-  | { kind: 'withheld'; reason: WithheldReason; title: string }
+  | { kind: 'withheld'; reason: WithheldReason; title: string; id?: string }
   | { kind: 'formula'; metric: string; cell: DerivedCell; periodLabel: string; computedAt: string | null; computedAtKind: 'materialized' | 'live'; basedOnRev: number | null; scaleExp: number };
 
 interface Ctx { open: (t: DrawerTarget) => void }
@@ -37,6 +37,8 @@ export function DrawerHost({ ticker, asOf, admin, children }: { ticker: string; 
     const el = openers.current.get(stack.returnFocusTo);
     openers.current.delete(stack.returnFocusTo);
     dispatch({ type: 'focused' });
+    // Shared drawer cleanup restores its captured focus first. This host effect runs
+    // after unmount cleanup and after lower entries lose inert, so the exact opener wins.
     if (el && el.isConnected) el.focus();
   }, [stack.returnFocusTo]);
   const anyOpen = stack.entries.length > 0;
@@ -54,10 +56,10 @@ export function DrawerHost({ ticker, asOf, admin, children }: { ticker: string; 
         return (
           <div key={id} inert={!live} aria-hidden={!live || undefined}>
             {target.kind === 'history' || target.kind === 'historyByFact'
-              ? <DisclosureDrawer ticker={ticker} asOf={asOf} admin={admin} target={target} onClose={close} />
+              ? <DisclosureDrawer ticker={ticker} asOf={asOf} admin={admin} target={target} onClose={() => { if (live) close(); }} />
               : target.kind === 'withheld'
-                ? <WithheldDrawer reason={target.reason} title={target.title} onClose={close} />
-                : <FormulaDrawer asOf={asOf} target={target} onClose={close} onOpenInput={(factId) => open({ kind: 'historyByFact', factId, scaleExp: target.scaleExp })} />}
+                ? <WithheldDrawer id={target.id} reason={target.reason} title={target.title} onClose={() => { if (live) close(); }} />
+                : <FormulaDrawer asOf={asOf} target={target} onClose={() => { if (live) close(); }} onOpenInput={(factId) => open({ kind: 'historyByFact', factId, scaleExp: target.scaleExp })} />}
           </div>
         );
       })}

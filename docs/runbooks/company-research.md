@@ -194,3 +194,21 @@ with pre-rebuild coverage, while an explicit UTC-today MISS returned rebuilt cov
 The 60-second policy governs newly served responses; it does not purge existing cache
 entries or prove deployed CDN propagation. Release behavior requires separate authorized
 verification after deployment.
+
+## 夹具模式
+
+在无 Supabase 配置的隔离本地环境启动开发服务器（包含 `.env.local` 在内，均不得设置 `NEXT_PUBLIC_SUPABASE_URL` 或 `SUPABASE_SERVICE_ROLE_KEY`；`VERCEL` 不得设置）：
+
+```sh
+COMPANY_E2E_FIXTURES=1 NEXT_PUBLIC_COMPANY_JUDGMENTS=1 NEXT_PUBLIC_COMPANY_F3_DRAWER=1 npm run dev
+```
+
+另一个终端运行（指向已经启动的服务器，避免 Playwright 再启动服务）：
+
+```sh
+COMPANY_E2E_FIXTURES=1 E2E_BASE_URL=http://localhost:3000 npx playwright test e2e/company-fixture.spec.ts
+```
+
+两个 public flag 在开发服务器启动前设置为 `1`；解析器也接受字面量 `true`，F3 未设置时默认开启。服务端仅为 `FIXT`（Fixture Corp / 夹具公司）及 `999999.SH` 返回合成布局数据；其余 ticker 保留现有行为。浏览器通过 `page.route` 拦截所有 `/api/**`，未声明的请求被阻断并令测试失败，自动分析事件也只返回本地模拟响应，不提交真实写入。API 服务端没有夹具分支。
+
+覆盖页头、导航、来源页脚、普通与受限报表单元格、共享来源抽屉及公式叠层、判断读取状态、跟踪及收件箱降级、目录、375px 布局和中英文文案。不验证真实数据、登录或后端读写；判断层关闭状态由单测覆盖。生产环境或 Vercel 永不启用夹具；不要指向生产地址。运行前无需 seed 或本地 Supabase。

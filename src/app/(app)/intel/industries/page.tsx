@@ -5,6 +5,7 @@
 // internal preview. States: error (with the last good view when there is one), unlicensed, empty,
 // stale, reconstruction, SIC navigation. Every number is a source-drawer button; the heatmap has a
 // table view. Valuations render "not enabled" until the deferred I-3 pipeline publishes.
+import {metricsForDisplay,countIndustryValues} from '@/components/industries/display-model';
 import Link from 'next/link';
 import {getLocale,getTranslations} from 'next-intl/server';
 import {Heatmap} from '@/components/industries/Heatmap';
@@ -18,7 +19,7 @@ import {StateNotice} from '@/components/industries/StateNotice';
 import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
 import {listQueryFromSearch,loadView} from '@/lib/industry/page-data';
-import {metricsForScheme,durationsForScheme,SOURCES,industryListView} from '@/lib/industry/read';
+import {durationsForScheme,SOURCES,industryListView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
@@ -34,6 +35,8 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
   const header=v?.state==='ok'&&v.kind==='aggregate'?v.header:null;
   const navigationNodes=v?.state==='empty'||v?.state==='ok'&&v.kind==='navigation'?v.nodes:v?.state==='ok'&&v.kind==='aggregate'?v.navigationNodes??[]:[];
   const aggregateNodes=v?.state==='ok'&&v.kind==='aggregate'?v.nodes.filter(n=>!v.navigationNodes?.some(x=>x.code===n.code)):[];
+  const coverage=v?.state==='ok'&&v.kind==='aggregate'
+    ?countIndustryValues(v.nodes.map(n=>v.cells.find(c=>c.code===n.code&&c.metric===v.metric&&c.periodEnd===v.periodEnds.at(-1)))):0;
   return (
     <SourceDrawerProvider>
       <div className="mx-auto flex max-w-[1400px] flex-col gap-5" data-page="industries-list">
@@ -75,12 +78,12 @@ export default async function IndustriesPage({searchParams}:{searchParams:Promis
         )}
         {v?.state==='ok'&&v.kind==='aggregate'&&(
           <>
-            <RunHeaderBar methodsHref="#industry-methods" header={v.header} freshness={v.freshness} extra={t('header.grid',{codes:v.nodes.length,periods:v.periodEnds.length})} />
+            <RunHeaderBar methodsHref="#industry-methods" header={v.header} freshness={v.freshness} extra={`${t('header.grid',{codes:v.nodes.length,periods:v.periodEnds.length})} · ${t('header.coverage',{n:coverage,total:v.nodes.length})}`} />
             {v.freshness==='stale'&&<StateNotice kind="stale" values={{date:v.header.factsAsOf,activatedAt:v.header.activatedAt?v.header.activatedAt.replace('T',' ').slice(0,16):'—',generation:v.header.generation}} />}
             {v.header.historyClass==='reconstruction'&&<StateNotice kind="reconstruction" body={t(q.scheme==='sic'?'states.reconstruction.bodySic':'states.reconstruction.bodySw',{date:v.header.membershipOn??v.header.factsAsOf})} />}
             <div className="flex flex-wrap items-center gap-2">
               <SchemeLevelSwitch path={INDUSTRIES_PATH} search={search} scheme={q.scheme} level={q.level} />
-              <LinkMenu label={t('controls.metric')} current={q.metric} options={metricsForScheme(q.scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(INDUSTRIES_PATH,search,{metric:m,duration:undefined})}))} />
+              <LinkMenu label={t('controls.metric')} current={q.metric} options={metricsForDisplay(q.scheme).map(m=>({value:m,label:t(`metrics.${m}`),href:hrefWith(INDUSTRIES_PATH,search,{metric:m,duration:undefined})}))} />
               <LinkMenu label={t('controls.basis')} current={q.duration} options={durationsForScheme(q.scheme,q.metric).map(d=>({value:d,label:t(`durations.${d}`),href:hrefWith(INDUSTRIES_PATH,search,{duration:d})}))} />
               <div className="ml-auto"><LinkSegment label={t('controls.view')} current={mode} options={[
                 {value:'heatmap',label:t('controls.heatmap'),href:hrefWith(INDUSTRIES_PATH,search,{view:undefined})},

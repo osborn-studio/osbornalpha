@@ -1,6 +1,8 @@
 'use client';
 // Overview view (plan 2026-11-06 Task 13; spec §5.8, §5.10, decision J; canvas Overview).
 // No K-line, no quote card, no PE/PB/ROE/dividend yield/market cap.
+import { StateCell } from '@/components/research-ui';
+import { naturalKey } from './disclosure-drawer-adapter';
 import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { Card, Tag } from '@/components/ui';
@@ -39,7 +41,7 @@ function ValueButton({ refv, concept, unit: unitHint, currency, exp }: { refv: V
   const tst = useTranslations('company.statements');
   const drawers = useDrawers();
   if (isWithheld(refv)) {
-    return <button type="button" className={`text-[var(--text-dim)] ${FOCUS}`} onClick={() => drawers.open({ kind: 'withheld', reason: refv.reason, title: concept })}>{refv.reason === 'citation_pending' ? tst('cellPending') : tst('cellIncomplete')}</button>;
+    return <button type="button" className={`min-h-11 sm:min-h-0 text-[var(--text-dim)] ${FOCUS}`} onClick={() => drawers.open({ kind: 'withheld', reason: refv.reason, title: concept })}><StateCell state="withheld" detail={refv.reason === 'citation_pending' ? tst('cellPending') : tst('cellIncomplete')} /></button>;
   }
   const unit = refv.unit ?? unitHint ?? currency;
   return (
@@ -62,7 +64,7 @@ function QuickValue({ cell, k, periodKey, stateRev, exp, label, unavailableReaso
   if (!cell && unavailableReason === 'multiple_units') return <span className="text-sm text-[var(--text-dim)]">{t('multipleUnits')}</span>;
   if (!cell) return <span className="num text-[var(--text-muted)]" title={tst('cellMissingTitle')}>—</span>;
   if (cell.kind === 'withheld') {
-    return <button type="button" className={`text-sm text-[var(--text-dim)] ${FOCUS}`} onClick={() => drawers.open({ kind: 'withheld', reason: cell.reason, title: label })}>{cell.reason === 'citation_pending' ? tst('cellPending') : tst('cellIncomplete')}</button>;
+    return <button type="button" className={`min-h-11 sm:min-h-0 text-sm text-[var(--text-dim)] ${FOCUS}`} onClick={() => drawers.open({ kind: 'withheld', id: naturalKey({concept: k, ...periodKeyParts(periodKey), unit: null}), reason: cell.reason, title: label })}><StateCell state="withheld" detail={cell.reason === 'citation_pending' ? tst('cellPending') : tst('cellIncomplete')} /></button>;
   }
   const parts = periodKeyParts(periodKey);
   const cls = `num text-xl underline decoration-dotted underline-offset-4 hover:text-[var(--accent)] ${FOCUS}`;

@@ -2,10 +2,12 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { NextIntlClientProvider } from 'next-intl';
 import { describe, expect, it } from 'vitest';
+import enResearch from '../../../../messages/en/research.json';
+import zhResearch from '../../../../messages/zh/research.json';
 import en from '../../../../messages/en/company.json';
 import zh from '../../../../messages/zh/company.json';
 import type { DirectoryRow } from '@/lib/company/directory';
-import { DirectorySyncCell } from './CompanyDirectory';
+import { CompanyDirectory, DirectorySyncCell } from './CompanyDirectory';
 
 type Sync = Pick<DirectoryRow, 'scopeLastSuccessAt' | 'scopeLastStatus'>;
 const lastSuccess = '2026-11-02T03:04:05.000Z';
@@ -54,3 +56,10 @@ for (const { locale, successLabel, failed, succeeded } of [
     });
   });
 }
+
+for(const locale of ['en','zh'] as const) it(`directory shared header (${locale})`,()=>{
+ const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale,messages:{company:locale==='en'?en:zh,research:locale==='en'?enResearch:zhResearch},children:createElement(CompanyDirectory,{isAdmin:false})}));
+ expect(html).toContain('data-research-page-header');
+ expect(html).toContain('data-testid="freshness-strip"');
+ expect(html).not.toContain('data-freshness=');
+});
