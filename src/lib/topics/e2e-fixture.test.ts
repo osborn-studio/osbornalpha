@@ -1,6 +1,7 @@
 // Topic local fixture mode (spec §9, §13.2).
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
-import {fixtureDeps,fixtureMode} from './e2e-fixture';
+import {fixtureMode} from './e2e-fixture';
+import {fixtureDeps} from './fixtures/deps';
 import {topicsEnabled} from './flags';
 describe('topic fixture mode fails closed',()=>{
  it.each([[{TOPICS_E2E_FIXTURES:'1',NODE_ENV:'development'},true],[{TOPICS_E2E_FIXTURES:'1',NODE_ENV:'production'},false],
