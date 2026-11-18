@@ -1,5 +1,63 @@
 {
   "meta": {
     "title": "Topic admin"
+  },
+  "frame": {
+    "topics": "Topic research",
+    "admin": "Admin",
+    "adminOnly": "Admin only",
+    "breadcrumb": "Breadcrumb",
+    "publicOpen": "Directory: public",
+    "publicClosed": "Directory: private"
+  },
+  "denied": {
+    "title": "Admin only",
+    "body": "This page is available to administrators only."
+  },
+  "list": {
+    "title": "Manage topics",
+    "titleColumn": "Title",
+    "category": "Category",
+    "status": "Status",
+    "version": "Current version",
+    "drift": "Drift",
+    "origin": "Origin",
+    "edit": "Edit",
+    "revisedOnly": "Only with revisions",
+    "neverPublished": "Not published",
+    "revisedCount": "{n} revised items",
+    "promoted": "Promoted from a private thesis",
+    "empty": "No topics in this status"
+  },
+  "status": {
+    "draft": "Draft",
+    "published": "Published",
+    "unpublished": "Unpublished",
+    "retired": "Retired"
+  },
+  "category": {
+    "macro": "Macro",
+    "industry": "Industry",
+    "company": "Company",
+    "cross_market": "Cross-market",
+    "method": "Method"
+  },
+  "newTopic": {
+    "title": "New topic",
+    "slug": "slug",
+    "slugHint": "Lowercase letters, digits and hyphens, 3–64 characters",
+    "immutable": "Cannot be changed after creation",
+    "category": "Category",
+    "title_zh": "Chinese title",
+    "title_en": "English title",
+    "create": "Create topic",
+    "creating": "Creating"
+  },
+  "errors": {
+    "slug": "Use lowercase letters or digits separated by single hyphens, with 3–64 characters.",
+    "category": "Choose a category.",
+    "title": "Enter a title of at most 120 characters.",
+    "slugTaken": "This slug is already in use, including by a retired topic.",
+    "generic": "The action failed. Please try again."
   }
 }

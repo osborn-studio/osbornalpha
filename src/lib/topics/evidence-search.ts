@@ -33,7 +33,7 @@ export function parseEvidenceQuery(body:Record<string,unknown>):{query:EvidenceQ
  let query:EvidenceQuery;
  switch(body.kind){
   case 'macro_observation':query={kind:body.kind,series_id:text('series_id',/^[A-Z0-9_]{1,40}$/),period_end:date('period_end')};break;
-  case 'financial_fact':query={kind:body.kind,ticker:text('ticker',/^\S{1,16}$/),concept:text('concept',/^[a-z_]{1,60}$/),period_end:date('period_end')};break;
+  case 'financial_fact':query={kind:body.kind,ticker:text('ticker',/^\S{1,16}$/),concept:text('concept',/^[A-Za-z0-9_.:-]{1,80}$/),period_end:date('period_end')};break;
   case 'industry_metric':{
    const scheme=body.scheme;if(scheme!=='sic'&&scheme!=='sw2021')return bad('scheme');
    query={kind:body.kind,scheme,code:text('code',/^[A-Za-z0-9.]{1,16}$/),metric:text('metric',/^[a-z_]{1,40}$/),period_end:date('period_end')};break;

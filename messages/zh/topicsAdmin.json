@@ -1,5 +1,63 @@
 {
   "meta": {
     "title": "专题管理"
+  },
+  "frame": {
+    "topics": "专题研究",
+    "admin": "管理",
+    "adminOnly": "仅管理员",
+    "breadcrumb": "当前位置",
+    "publicOpen": "目录开关：已对外",
+    "publicClosed": "目录开关：未对外"
+  },
+  "denied": {
+    "title": "仅管理员",
+    "body": "此页面仅供管理员使用。"
+  },
+  "list": {
+    "title": "管理列表",
+    "titleColumn": "标题",
+    "category": "分类",
+    "status": "状态",
+    "version": "当前版本",
+    "drift": "漂移",
+    "origin": "起点",
+    "edit": "编辑",
+    "revisedOnly": "只看有修订",
+    "neverPublished": "未发布",
+    "revisedCount": "{n} 条已修订",
+    "promoted": "由私有论点晋升",
+    "empty": "此状态下没有专题"
+  },
+  "status": {
+    "draft": "草稿",
+    "published": "已发布",
+    "unpublished": "已取消",
+    "retired": "已退役"
+  },
+  "category": {
+    "macro": "宏观",
+    "industry": "行业",
+    "company": "公司",
+    "cross_market": "跨市场",
+    "method": "方法"
+  },
+  "newTopic": {
+    "title": "新建专题",
+    "slug": "slug",
+    "slugHint": "小写字母、数字、连字符，3–64 位",
+    "immutable": "创建后不可改",
+    "category": "分类",
+    "title_zh": "中文标题",
+    "title_en": "英文标题",
+    "create": "创建专题",
+    "creating": "正在创建"
+  },
+  "errors": {
+    "slug": "请输入有效的 slug：小写字母或数字，以单个连字符分隔，长度为 3–64 位。",
+    "category": "请选择分类。",
+    "title": "标题不能为空，且不能超过 120 个字符。",
+    "slugTaken": "这个 slug 已被使用（含已退役专题）",
+    "generic": "操作失败，请重试。"
   }
 }

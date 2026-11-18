@@ -52,7 +52,7 @@ it('validates query kinds and calendar dates',()=>{
 it.each([
  [{...query,series_id:'bad'},'series_id'],[{...query,period_end:'2026-02-30'},'period_end'],[{...query,as_of:'bad'},'as_of'],
  [{kind:'financial_fact',ticker:'',concept:'revenue',period_end:'2025-12-31'},'ticker'],
- [{kind:'financial_fact',ticker:'TEST',concept:'us-gaap:Revenues',period_end:'2025-12-31'},'concept'],
+ [{kind:'financial_fact',ticker:'TEST',concept:'us gaap:Revenues',period_end:'2025-12-31'},'concept'],
  [{kind:'industry_metric',scheme:'other'},'scheme'],[{kind:'industry_metric',scheme:'sic',code:'!'},'code'],
  [{kind:'industry_metric',scheme:'sic',code:'3571',metric:'bad1'},'metric'],
  [{kind:'document_citation',document_id:'bad'},'document_id'],[{kind:'document_citation',document_id:DOC.ok,page_no:0},'page_no'],
@@ -86,4 +86,11 @@ it('renders source errors as missing and formats citation and judgment slots',as
  expect(valueText(resolved[0],'en')).toBe('Annual report · p.12');
  expect(valueText(resolved[1],'en')).toBe(resolved[1].display.fact!.slots.method);
  expect(valueText({...resolved[0],state:'withheld'},'en')).toBeNull();
+});
+
+it('accepts the namespaced concept used by the facts fixture',()=>{
+ const concept=allFixtures().facts!.infos!.find(i=>i.row.fact_id===FACT.usOk)!.row.concept;
+ expect(concept).toBe('us-gaap:Revenues');
+ const body={kind:'financial_fact',ticker:'TEST',concept,period_end:'2025-12-31'};
+ expect(parseEvidenceQuery(body)).toEqual({query:body,asOf:null});
 });
