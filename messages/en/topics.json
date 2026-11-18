@@ -3,5 +3,39 @@
     "title": "Topic research",
     "titleEn": "Topic research",
     "scope": "Versioned topic dossiers assembled from this site's evidence."
+  },
+  "directory": {
+    "searchLabel": "Search topic titles",
+    "searchPlaceholder": "Search titles",
+    "manage": "Manage topics",
+    "categoryLabel": "Topic categories",
+    "categories": {
+      "all": "All",
+      "macro": "Macro",
+      "industry": "Industry",
+      "company": "Company",
+      "cross_market": "Cross-market",
+      "method": "Method"
+    },
+    "evidence": "Evidence",
+    "ok": "Available",
+    "unsupported": "Not supported",
+    "revisedBadge": "{n} evidence items revised since publication",
+    "staleBadge": "Stale · not updated for over 90 days",
+    "mostlyWithheld": "Most values withheld",
+    "previewBanner": {
+      "title": "Directory not public · preview",
+      "body": "Visible to administrators only. The directory is not yet public."
+    },
+    "states": {
+      "emptyTitle": "No published topics yet",
+      "emptyUser": "Topics will appear here after publication.",
+      "emptyAdmin": "No published topics yet. Create a topic to get started.",
+      "create": "Create a topic",
+      "errorTitle": "Read failed ({code})",
+      "errorBody": "This page is not cached. There are no older results to fall back to.",
+      "retry": "Retry"
+    },
+    "loadMore": "Load more"
   }
 }
