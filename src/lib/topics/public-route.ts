@@ -2,6 +2,7 @@
 import {NextResponse} from 'next/server';
 import {requireSessionUser} from '@/lib/macro/route-helpers';
 import {errorResponse,failureResponse,paramErrorResponse} from '@/lib/facts/public-route';
+import {fixtureMode} from './e2e-fixture';
 import {topicsEnabled} from './flags';
 import {TopicError} from './errors';
 export const jsonNoStore=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:{'Cache-Control':'private, no-store'}});
@@ -9,7 +10,7 @@ export function topicRoute<C>(tag:string,fn:(a:{request:Request;ctx:C;userId:str
  return async(request:Request,ctx:C):Promise<Response>=>{
   let response:Response;
   try{
-   const session=await requireSessionUser();
+   const session=fixtureMode()?{ok:true as const,user:{id:'topics-fixture'}}:await requireSessionUser();
    if(!session.ok)response=session.response;
    else if(!topicsEnabled())response=errorResponse('topics_disabled','not found',404);
    else response=await fn({request,ctx,userId:session.user.id});

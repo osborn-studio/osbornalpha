@@ -2,14 +2,17 @@
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {getServerSupabase} from '@/lib/supabase/server';
 import {getAdminSupabase} from '@/lib/supabase/admin';
+import {fixtureDeps,fixtureMode} from './e2e-fixture';
 import {supabaseTopicsDb} from './db';
 import type {TopicsDb} from './types';
 import type {PublicTopicRow} from './database-types';
 export interface PublicDeps{db:Pick<TopicsDb,'publicOpen'|'publicTopics'|'publicTopicBySlug'|'publicVersions'|'publicDrift'>;now():Date;preview:boolean}
 export async function publicDeps():Promise<PublicDeps>{
+ if(fixtureMode())return fixtureDeps();
  return {db:supabaseTopicsDb({session:await getServerSupabase() as unknown as SupabaseClient}),now:()=>new Date(),preview:false};
 }
 export function previewDeps():PublicDeps{
+ if(fixtureMode())return fixtureDeps();
  const db=supabaseTopicsDb({admin:getAdminSupabase()});
  const publicTopics=async():Promise<PublicTopicRow[]>=>{
   const [topics,settings]=await Promise.all([db.adminTopics(),db.settings()]);

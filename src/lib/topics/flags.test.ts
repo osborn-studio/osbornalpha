@@ -7,6 +7,7 @@ describe('topics flag',()=>{
  it.each([[undefined,false],['',false],['0',false],['true',false],['1',true]] as const)('TOPICS_ENABLED=%s → %s',(v,on)=>{
   expect(topicsEnabled({TOPICS_ENABLED:v})).toBe(on);
  });
+ it('enables isolated local fixtures without the server flag',()=>{expect(topicsEnabled({TOPICS_E2E_FIXTURES:'1',NODE_ENV:'development'})).toBe(true);});
  it('uses the D9 default',()=>{expect(TOPIC_STALE_DAYS).toBe(90);});
 });
 describe('TopicError',()=>{
