@@ -15,7 +15,9 @@ export function HubCard({id,no,title,titleEn,state,href,enterLabel,children,test
   aria-disabled={state==='notServed'||undefined} aria-busy={state==='loading'}
   className="card-base flex min-w-0 flex-col gap-3 break-words">
   <header className="flex flex-wrap items-baseline gap-2">
-   <span className="font-mono tabular-nums text-xs text-text-dim">{no}</span>
+   {/* TOPICS ↓ */}
+   <span data-hub-step={no} className="font-mono tabular-nums text-xs text-text-dim">{no}</span>
+   {/* TOPICS ↑ */}
    <h2 className="min-w-0 flex-1 text-sm font-semibold">{title} <span className="text-xs font-normal text-text-dim">{titleEn}</span></h2>
    {state==='notServed'&&<StateBadge state="notServed"/>}
    {state==='loading'&&<span className="text-xs text-text-dim">{t('loading')}</span>}

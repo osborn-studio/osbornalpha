@@ -109,8 +109,13 @@ test.describe.serial('publication',()=>{
   await expect(dialog).toHaveAccessibleName('发布 发布测试 为 v1？',{timeout:15000});
   await dialog.getByRole('button',{name:'发布 v1'}).click();
   await expect(page.getByRole('status')).toHaveText('已发布 v1',{timeout:15000});
-  const row=page.getByRole('region',{name:'版本管理'}).getByRole('row').filter({hasText:'v1'});
+  const row=page.getByRole('region',{name:'版本管理'}).getByRole('row').filter({has:page.getByRole('cell',{name:'v1',exact:true})});
   await expect(row).toContainText('当前',{timeout:15000});
+  await row.getByRole('button',{name:'核验',exact:true}).click();
+  await expect(row.getByText(/^一致 · /)).toBeVisible({timeout:15000});
+  await row.getByRole('button',{name:'详情',exact:true}).click();
+  const details=page.getByRole('table',{name:'详情 · v1',exact:true});
+  await expect(details.getByRole('columnheader',{name:'核对时间'})).toBeVisible();
   await row.getByRole('button',{name:'取消发布'}).click();
   await dialog.getByLabel('原因类别（读者可见）').selectOption('privacy');
   await dialog.getByRole('button',{name:'取消发布 v1'}).click();

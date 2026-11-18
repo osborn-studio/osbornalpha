@@ -20,6 +20,9 @@ it.each(['notServed','loading','open'] as const)('renders destinations only when
  const card=createElement(HubCard,{id:'topics',no:'05',title:'专题研究',titleEn:'Topics',state,
   href:'/intel/topics',enterLabel:'进入专题目录 →',children:createElement('a',{href:'/detail'},'Detail')});
  const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale:'zh',timeZone:'UTC',messages:{research,intel},children:card}));
+ // TOPICS ↓
+ expect(html).toContain('data-hub-step="05"');
+ // TOPICS ↑
  expect(html).toContain(`data-hub-state="${state}"`);
  if(state==='open'){expect(html).toContain('href="/intel/topics"');return;}
  expect(html).not.toContain('href=');
