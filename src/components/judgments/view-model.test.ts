@@ -2,6 +2,10 @@
 // Task 21 (spec §9.1–§9.3, §9.5–§9.6): the judgment UI's pure view rules — percent only for probability × calibrated, brass
 // only for the calibrated badge and selected state, hit / miss tones, table equivalents, timeline steps, admin actions.
 import {describe,expect,it} from 'vitest';
+import {checkJudgmentsResponse} from '@/lib/company/judgments';
+import {judgmentDetail,judgmentGallery,US} from '../../../e2e/fixtures/company';
+import zh from '../../../messages/zh/judgments.json';
+import en from '../../../messages/en/judgments.json';
 import type {CalibrationRow,JudgmentCard,ReliabilityBin,SettlementRow} from '@/lib/judgments/types';
 import type {MethodologyListItem,QueueItem} from './api-types';
 import {BRASS_BADGE,LINK,NEUTRAL_BADGE,SELECTED,TONE,UNSELECTED,badgeClass,calibrationMsg,cardBody,collapsedView,confusionView,footerView,gatesView,holdoutRows,
@@ -106,6 +110,21 @@ describe('drawer and timeline',()=>{
   expect(scores).toEqual({type:'scores',rows:[{cls:'recovery',score:'0.326'},{cls:'overheat',score:'0.235'},{cls:'stagflation',score:'0.220'},{cls:'recession',score:'0.220'}]});
   expect(JSON.stringify(scores)).not.toContain('%');
  });
+ it('formats target and settlement deadline with a timeline message',()=>{
+  const c=card(),condition=c.condition!,steps=timelineSteps(c,undefined,'en');
+  for(const step of steps)expect.soft(step.detail??'').not.toContain('settle_by');
+  expect(steps.find(s=>s.key==='ui.timeline.target')).toHaveProperty('detailMsg',{key:'ui.timeline.targetDetail',values:{target:targetText(condition.target),date:condition.settle_by.slice(0,10)}});
+ });
+ for(const [locale,messages] of [['zh',zh],['en',en]] as const)it(`defines the target detail message (${locale})`,()=>{
+  expect(messages.ui.timeline).toHaveProperty('targetDetail',expect.stringMatching(/\S/));
+ });
+ it('translates known abstention reasons and preserves unknown reasons',()=>{
+  const step=(reason:string)=>timelineSteps(card({lifecycle:'abstained',condition:null,abstain_reason:reason}),undefined,'en')[1];
+  expect(step('input_unavailable').detailMsg).toEqual({key:'ui.abstainReason.input_unavailable'});
+  const unknown=step('no_data');
+  expect(unknown.detail).toBe('no_data');
+  expect(unknown).not.toHaveProperty('detailMsg');
+ });
  it('timeline: open → registered, target, pending; append-only history settled → withdrawn → reopened → settled; abstained',()=>{
   expect(timelineSteps(card(),undefined,'zh').map(s=>s.key)).toEqual(['ui.timeline.registered','ui.timeline.target','ui.timeline.pending']);
   const history=[settlement({seq:4,kind:'settled',outcome:'hit'}),settlement({seq:1,kind:'settled',outcome:'miss',realized:{value:21.4,label:'21.4%',unit:'pct',from:null,to:null,label_policy:'first_observed'}}),
@@ -161,6 +180,10 @@ describe('methods and admin',()=>{
 });
 
 describe('committed wire and calibration contracts',()=>{
+ it('accepts the company gallery and resolves each card by id',()=>{
+  expect(checkJudgmentsResponse(judgmentGallery,null,US)).toEqual({ok:true,cards:judgmentGallery.cards});
+  for(const c of judgmentGallery.cards)expect(judgmentDetail(c.judgment_id).card).toBe(c);
+ });
  it('reads holdout metrics from temporal_split and categorical Wilson from accuracy_wilson',()=>{
   const c=calRow({metrics:{brier:0.18,ece_raw:0.05,temporal_split:{n_holdout:64,brier_holdout:0.17,brier_skill_holdout:0.1,ece_raw_holdout:0.046}}});
   expect(holdoutRows(c)[1]).toMatchObject({n:64,brier:'0.170',skill:'+0.10',ece:'0.046'});

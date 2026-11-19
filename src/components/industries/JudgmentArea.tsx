@@ -35,6 +35,7 @@ export function JudgmentArea({enabled,subjectKey,scope}:{enabled:boolean;subject
 
 export function JudgmentCards({cards}:{cards:JudgmentCard[]}){
   const t=useTranslations('industries.judgments');
+  const j=useTranslations('judgments');
   const locale=useLocale()==='en'?'en':'zh';
   return (
     <>
@@ -52,7 +53,7 @@ export function JudgmentCards({cards}:{cards:JudgmentCard[]}){
             <div className="text-xl font-semibold">{v.headline}{v.percent!==null&&<span className="ml-2 font-mono text-base tabular-nums">{v.percent}%</span>}</div>
             {v.abstainReason&&<p className="text-sm text-text-dim">{t('abstained',{reason:v.abstainReason})}</p>}
             {v.condition&&<p className="text-sm text-text-dim"><span>{t('condition')}：</span>{v.condition}</p>}
-            {v.settlement&&<p className="text-sm" data-settlement={v.settlement.outcome}><span className="text-text-dim">{t('outcome')}：</span><span className="font-medium">{v.settlement.outcome}</span>{v.settlement.realized!==null&&<> · <span className="text-text-dim">{t('realized')}</span> <span className="font-mono tabular-nums">{v.settlement.realized}</span></>} · <span className="text-text-dim">{t('settledAt')}</span> <span className="font-mono tabular-nums">{v.settlement.settledAt.slice(0,10)}</span></p>}
+            {v.settlement&&<p className="text-sm" data-settlement={v.settlement.outcome}><span className="text-text-dim">{t('outcome')}：</span><span className="font-medium">{j.has(`outcome.${v.settlement.outcome}`)?j(`outcome.${v.settlement.outcome}`):v.settlement.outcome}</span>{v.settlement.realized!==null&&<> · <span className="text-text-dim">{t('realized')}</span> <span className="font-mono tabular-nums">{v.settlement.realized}</span></>} · <span className="text-text-dim">{t('settledAt')}</span> <span className="font-mono tabular-nums">{v.settlement.settledAt.slice(0,10)}</span></p>}
             <div className="border-t border-border pt-2 text-xs text-text-dim">
               {t('method')} <a href={c.methodology.href} className="font-mono">{v.footer.method}</a> · {t('asOf')} <span className="font-mono tabular-nums">{v.footer.asOf}</span> · {t(`lifecycle.${v.lifecycle}`)}
               {v.footer.settleBy&&<> · {t('settlement')} <span className="font-mono tabular-nums">{v.footer.settleBy}</span></>}
@@ -64,7 +65,7 @@ export function JudgmentCards({cards}:{cards:JudgmentCard[]}){
               <ul className="mt-1 flex list-none flex-col gap-1 p-0">
                 {v.inputs.map((i,k)=>(
                   <li key={k} className="flex flex-wrap gap-x-2" data-input={i.kind}>
-                    <span className="font-mono">{i.kind}</span>
+                    <span className="font-mono">{j.has(`ui.inputKind.${i.kind}`)?j(`ui.inputKind.${i.kind}`):i.kind}</span>
                     {i.href?<a href={i.href} className="font-mono break-all">{i.ref||i.href}</a>:<span className="font-mono break-all">{i.ref}</span>}
                     <span className="font-mono tabular-nums">{i.availableAt.slice(0,10)}</span>
                   </li>

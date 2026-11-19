@@ -116,7 +116,7 @@
     },
     "replayMismatch": {
       "title": "回放不一致",
-      "body": "清单重算值与存储值不同。该格不作为可回放数字：页面仍显示原值并加异常徽标，隔离项 manifest_mismatch 已开。"
+      "body": "清单重算值与存储值不同。该格不作为可回放数字：页面仍显示原值并加异常徽标，并已开隔离项（清单自检失败）。"
     },
     "officialUnavailable": {
       "title": "官方对照值不可用",
@@ -131,7 +131,7 @@
       "body": "生命周期阶段、景气、高估/低估是判断，不是事实。它们只在 F4 登记、带可证伪条件并可结算后出现在这里；未校准时只显示类别与徽标。"
     },
     "currentOnly": {
-      "title": "只有当前值（current_only）",
+      "title": "仅当前值",
       "body": "SEC 只提供当前 SIC，没有纳入/剔除历史：纳入日一列是首次观察日，早于首次观察日的日期没有成分。"
     },
     "noMembers": {
@@ -145,12 +145,12 @@
     }
   },
   "missing": {
-    "empty_set": "无可用数据（empty_set）",
-    "zero_denominator": "分母为零（zero_denominator）",
-    "no_members": "无成分（no_members）",
-    "financial_excluded": "方法排除：金融业不算毛利率（financial_excluded）",
-    "unresolved_over_limit": "未解析超限（unresolved_over_limit）",
-    "manifest_mismatch": "清单自检失败（manifest_mismatch）",
+    "empty_set": "无可用数据",
+    "zero_denominator": "分母为零",
+    "no_members": "无成分",
+    "financial_excluded": "方法排除：金融业不算毛利率",
+    "unresolved_over_limit": "未解析超限",
+    "manifest_mismatch": "清单自检失败",
     "absent": "期望网格缺行"
   },
   "roles": {
@@ -348,9 +348,9 @@
     "membershipUpstreamSw": "申万宏源研究所 → Tushare index_member_all",
     "membershipUpstreamSic": "SEC submissions（sic 字段）",
     "availableDateLabel": "可得日",
-    "availabilityAssumed": "按纳入日假设（effective_date_assumed）",
-    "availabilityObserved": "首次观察日（observed）",
-    "availabilityEvidenced": "有公告证据（evidenced）",
+    "availabilityAssumed": "按纳入日假设",
+    "availabilityObserved": "首次观察日",
+    "availabilityEvidenced": "有公告证据",
     "path": "归属路径",
     "sourceRecord": "来源记录",
     "rawHash": "raw_hash",

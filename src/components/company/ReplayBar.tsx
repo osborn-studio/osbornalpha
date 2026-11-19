@@ -22,12 +22,12 @@ function DateInput({ value, onPick, onCancel }: { value: string; onPick: (d: str
       onKeyDown={(e) => { if (e.key === 'Escape' && onCancel) onCancel(); }}>
       <label>
         <span className="sr-only">{t('dateLabel')}</span>
-        <input type="date" min={REPLAY_MIN_DATE} max={today} value={draft} aria-label={t('dateLabel')} className="num w-[160px]"
+        <input type="date" min={REPLAY_MIN_DATE} max={today} value={draft} aria-label={t('dateLabel')} className="num w-[160px] min-h-11 sm:min-h-0"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } }} />
       </label>
-      <Button variant="secondary" size="sm" disabled={!valid || draft === value} onClick={apply}>{t('apply')}</Button>
-      {onCancel && <Button variant="ghost" size="sm" onClick={onCancel}>{t('cancel')}</Button>}
+      <Button variant="secondary" size="sm" className="min-h-11 sm:min-h-0" disabled={!valid || draft === value} onClick={apply}>{t('apply')}</Button>
+      {onCancel && <Button variant="ghost" size="sm" className="min-h-11 sm:min-h-0" onClick={onCancel}>{t('cancel')}</Button>}
     </div>
   );
 }
@@ -42,7 +42,7 @@ export function ReplayBar({ ticker, view, asOf, extra }: { ticker: string; view:
       <span className="text-xs text-[var(--text-dim)]">{t('ownershipNote')}</span>
       <div className="ml-auto flex items-center gap-2">
         <DateInput key={asOf} value={asOf} onPick={(d) => router.push(companyHref(ticker, { view, asOf: d, extra }) as never)} />
-        <Button variant="secondary" size="sm" onClick={() => router.push(companyHref(ticker, { view, asOf: null, extra }) as never)}>{t('back')}</Button>
+        <Button variant="secondary" size="sm" className="min-h-11 sm:min-h-0" onClick={() => router.push(companyHref(ticker, { view, asOf: null, extra }) as never)}>{t('back')}</Button>
       </div>
     </div>
   );
@@ -54,7 +54,7 @@ export function ReplayOpener({ ticker, view }: { ticker: string; view: ViewId })
   const [open, setOpen] = useState(false);
   return open
     ? <DateInput value="" onPick={(d) => router.push(companyHref(ticker, { view, asOf: d }) as never)} onCancel={() => setOpen(false)} />
-    : <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>{t('button')}</Button>;
+    : <Button variant="secondary" size="sm" className="min-h-11 sm:min-h-0" onClick={() => setOpen(true)}>{t('button')}</Button>;
 }
 
 export function ReplayUnsupportedBanner({ ticker, view }: { ticker: string; view: ViewId }) {
@@ -64,7 +64,7 @@ export function ReplayUnsupportedBanner({ ticker, view }: { ticker: string; view
     <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-dashed border-[var(--text-muted)] px-3 py-2.5">
       <span className="text-sm font-semibold">{t('unsupportedTitle')}</span>
       <span className="text-xs text-[var(--text-dim)]">{t('unsupportedBody')}</span>
-      <Button variant="secondary" size="sm" className="ml-auto" onClick={() => router.push(companyHref(ticker, { view, asOf: null }) as never)}>{t('back')}</Button>
+      <Button variant="secondary" size="sm" className="ml-auto min-h-11 sm:min-h-0" onClick={() => router.push(companyHref(ticker, { view, asOf: null }) as never)}>{t('back')}</Button>
     </div>
   );
 }

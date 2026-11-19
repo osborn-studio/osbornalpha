@@ -285,6 +285,16 @@
       "evaluatedSpearman": "Evaluated · Spearman {rho} (n {n})",
       "selfAssessed": "Self-assessed"
     },
+    "abstainReason": {
+      "binding_missing": "Method binding missing",
+      "input_not_public": "Input not public",
+      "input_unavailable": "Input data unavailable",
+      "metric_missing": "Metric missing",
+      "snapshot_missing": "Snapshot missing",
+      "snapshot_unclassified": "Snapshot unclassified",
+      "subject_not_issuer": "Subject is not an issuer",
+      "target_unresolvable": "Target cannot be resolved"
+    },
     "inputKind": {
       "financial_fact": "Fact",
       "financial_metric": "Derived metric",
@@ -354,6 +364,7 @@
       "title": "Settlement timeline",
       "registered": "Registered",
       "target": "Target",
+      "targetDetail": "{target} · settle by {date}",
       "settledHit": "Settled · hit",
       "settledMiss": "Settled · miss",
       "void": "Void",
@@ -362,7 +373,7 @@
       "pending": "Awaiting settlement",
       "pendingFill": "Awaiting fill price",
       "abstained": "Abstained",
-      "asKnownNote": "The historical (as_known) view only shows settlements and calibrations known before its cutoff."
+      "asKnownNote": "The historical view only shows settlements and calibrations known before its cutoff."
     },
     "reliability": {
       "title": "Reliability",
