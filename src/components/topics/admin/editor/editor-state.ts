@@ -1,6 +1,7 @@
 // Topic plan T5.5: client-safe draft reducer; persistence and validation stay on the server.
 import type {DraftBody,DraftRef,ExpectedSlot,Bilingual} from '@/lib/topics/types';
 export type EditorAction=
+ |{type:'confirmBlock';key:string}
  |{type:'setTitle'|'setDek';locale:'zh'|'en';value:string}
  |{type:'addSection';key:string}|{type:'removeSection';key:string}|{type:'moveSection';key:string;dir:-1|1}
  |{type:'setSectionTitle'|'setSectionNote';key:string;locale:'zh'|'en';value:string}
@@ -37,8 +38,10 @@ function move<T>(list:T[],index:number,dir:-1|1):T[]{
  const next=[...list];[next[index],next[to]]=[next[to],next[index]];return next;
 }
 export function reduce(body:DraftBody,a:EditorAction):DraftBody{
+ const review=(key:string)=>body.blocks_provenance[key]==='from_thesis'?{...body,blocks_provenance:{...body.blocks_provenance,[key]:'reviewed' as const}}:body;
  switch(a.type){
-  case 'setTitle':return {...body,title:{...body.title,[a.locale]:a.value}};
+  case 'confirmBlock':return review(a.key);
+  case 'setTitle':return {...review('title'),title:{...body.title,[a.locale]:a.value}};
   case 'setDek':return {...body,dek:{...body.dek,[a.locale]:a.value}};
   case 'addSection':return !validKey(a.key)||body.sections.some(s=>s.key===a.key)||body.sections.length>=20?body:{...body,sections:[...body.sections,{key:a.key,title:blank(),note:null,items:[]}]};
   case 'removeSection':{
@@ -66,7 +69,18 @@ export function reduce(body:DraftBody,a:EditorAction):DraftBody{
    const at=Math.max(0,Math.min(text.length,a.at));return setField(body,a.field,`${text.slice(0,at)}{{ev:${a.ordinal}${a.part==='period'?'.period':''}}}${text.slice(at)}`);
   }
   case 'addOwnerNote':return !validKey(a.key)||body.entries.length>=50||body.entries.some(e=>e.key===a.key)?body:{...body,entries:[...body.entries,{key:a.key,entry_type:'owner_note',body:blank()}]};
-  case 'setOwnerNote':return {...body,entries:body.entries.map(e=>e.key===a.key&&e.entry_type==='owner_note'?{...e,body:{...e.body,[a.locale]:a.value}}:e)};
-  case 'removeEntry':return {...body,entries:body.entries.filter(e=>e.key!==a.key)};
+  case 'setOwnerNote':return {...review('entry.'+a.key),entries:body.entries.map(e=>e.key===a.key&&e.entry_type==='owner_note'?{...e,body:{...e.body,[a.locale]:a.value}}:e)};
+  case 'removeEntry':{
+   const provenance={...body.blocks_provenance};delete provenance['entry.'+a.key];
+   return {...body,blocks_provenance:provenance,entries:body.entries.filter(e=>e.key!==a.key)};
+  }
  }
+}
+export function unreviewedBlocks(body:DraftBody,locale:'zh'|'en'){
+ return Object.entries(body.blocks_provenance).flatMap(([key,state])=>{
+  if(state!=='from_thesis')return [];
+  const field=key==='title'?'title.'+locale:`entries.${key.slice('entry.'.length)}.body.${locale}`;
+  const text=fieldText(body,field);
+  return text===null?[]:[{key,field,text}];
+ });
 }

@@ -10,7 +10,7 @@ import {runDisclosure} from './disclosure';
 import {TopicError} from './errors';
 import {formatSlot} from '@/lib/macro/strategy/explain-render';
 import type {Resolved} from '@/lib/evidence/resolve';
-import {maskSnapshot} from './masking';
+import {maskedEntries,maskSnapshot} from './masking';
 import type {DossierDto} from './public-dto';
 import {licenceProblems,withLicenceCheck} from './settings';
 import {TopicsDbError,UNPUBLISH_REASONS,type DriftRow,type TopicsDb,type UnpublishReason} from './types';
@@ -33,10 +33,10 @@ function summaryMatches(input:Awaited<ReturnType<typeof load>>,assembled:Assembl
  return canonicalJson(input.summary.facts)===canonicalJson(factSentences(facts,input.candidate.locale));
 }
 async function disclose(d:AdminDeps,input:Awaited<ReturnType<typeof load>>,assembled:Assembled,actor:string){
- const [privateIds,settings]=await Promise.all([d.privateIds(actor),d.db.settings()]);
+ const [privateIds,settings,licences]=await Promise.all([d.privateIds(actor),d.db.settings(),d.db.licences()]);
  const row=input.candidate;
  const summary=row&&{factsMatch:summaryMatches(input,assembled),status:row.status,draft_hash:row.draft_hash,provider:row.rendered.provider,model:row.rendered.model};
- return runDisclosure({...input,summary,assembled,privateIds,settings,licences:new Map()});
+ return runDisclosure({...input,summary,assembled,privateIds,settings,licences:new Map(licences.map(l=>[l.licence_id,l]))});
 }
 export async function checkDraft(d:AdminDeps,i:{topicId:string;actor:string}){
  const input=await load(d,i.topicId),assembled=await assemble(d,input);
@@ -65,7 +65,7 @@ export async function previewDraft(d:AdminDeps,i:{topicId:string;actor:string}){
  const view:DossierDto['view']='current';
  const dossier={attributions:[...keys].sort(),topic:s.topic,version:{version_no,published_at:input.cutoff,cutoff:input.cutoff,is_current:true,superseded:false,unpublished_at:null,unpublish_reason:null},
   total_versions:versions.length+1,current_version_no:versions.find(v=>v.version_id===input.currentVersionId)?.version_no??null,view,replay_as_of:null,
-  sections:s.sections,evidence,expected_slots:s.expected_slots,entries:s.entries,summary,counts:s.counts,freshness_at_publication:s.freshness_at_publication,
+  sections:s.sections,evidence,expected_slots:s.expected_slots,entries:maskedEntries(s.entries,await d.db.licences()),summary,counts:s.counts,freshness_at_publication:s.freshness_at_publication,
   stale:false,age_days:0,drift_checked_at:null,drift_unchecked:true};
  const difference=s.evidence.map(({ordinal,resolved},n)=>({ordinal,label:resolved.display.label,
   public:{state:resolved.state,text:previewText(resolved)},admin:{text:previewText(adminResolved[n])}}));

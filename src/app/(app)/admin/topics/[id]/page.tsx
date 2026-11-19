@@ -13,7 +13,7 @@ export default async function TopicEditorPage({params}:{params:Promise<{id:strin
  const user=await adminGate('/admin/topics');if(!user)return <AdminDenied/>;
  const {id}=await params;if(!UUID_RE.test(id))notFound();
  const deps=await adminDeps(),topicId=id.toLowerCase();
- const [topic,draft,settings]=await Promise.all([deps.db.topicById(topicId),deps.db.draftOf(topicId),deps.db.settings()]);
+ const [topic,draft,settings,promotion]=await Promise.all([deps.db.topicById(topicId),deps.db.draftOf(topicId),deps.db.settings(),deps.db.promotionOf(topicId)]);
  if(!topic||!draft)notFound();
- return <EditorClient initial={{id:topicId,slug:topic.topic_slug,revision:draft.revision,body:draft.body,updated_at:draft.updated_at,public_enabled:settings.public_enabled,retired:topic.status==='retired',lint:draftLint(draft.body),evidence:await draftEvidenceView(deps,draft.body)}}/>;
+ return <EditorClient initial={{stripped:promotion?.stripped??null,id:topicId,slug:topic.topic_slug,revision:draft.revision,body:draft.body,updated_at:draft.updated_at,public_enabled:settings.public_enabled,retired:topic.status==='retired',lint:draftLint(draft.body),evidence:await draftEvidenceView(deps,draft.body)}}/>;
 }

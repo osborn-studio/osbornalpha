@@ -1,6 +1,7 @@
 // Topic plan PR-5 commander fixture support.
 import {expect,it,vi,afterEach} from 'vitest';
 import {adminFixtureMode,adminFixtureDeps} from './admin-fixture';
+import {checkDraft} from './publish';
 import {parseDraftBody} from './drafts';
 import {OBS} from '@/lib/evidence/fixtures/macro';
 import {FACT} from '@/lib/evidence/fixtures/facts';
@@ -12,10 +13,22 @@ it('enables only explicitly isolated fixtures',()=>{
   expect(adminFixtureMode({TOPICS_E2E_FIXTURES:'1',[key]:value})).toBe(false);
  }
 });
+it('loads both source licences on the first admin read',async()=>{
+ const rows=await adminFixtureDeps().db.licences();
+ expect(rows.map(row=>[row.source_title,row.status]).sort()).toEqual([['Archive','revoked'],['Survey','approved']]);
+});
+it('passes the excerpt disclosure check on each seeded admin draft',async()=>{
+ const deps=adminFixtureDeps();
+ for(const topic of await deps.db.adminTopics()){
+  const receipt=await checkDraft(deps,{topicId:topic.topic_id,actor:topic.created_by});
+  expect(receipt.checks.find(c=>c.key==='excerpt'),topic.topic_slug).toMatchObject({result:'pass',codes:[]});
+ }
+});
 it('shares a seeded database across calls and module reloads',async()=>{
  const a=adminFixtureDeps(),b=adminFixtureDeps();expect(a.db).toBe(b.db);
  const topics=await a.db.adminTopics();expect(topics.map(t=>t.topic_slug).sort()).toEqual(['cn-company','rates-and-banks']);
- for(const topic of topics){const draft=(await a.db.draftOf(topic.topic_id))!;expect(parseDraftBody(draft.body)).toEqual(draft.body);}
+ const licenceIds=new Set((await a.db.licences()).map(l=>l.licence_id));
+ for(const topic of topics){const draft=(await a.db.draftOf(topic.topic_id))!;expect(parseDraftBody(draft.body,licenceIds)).toEqual(draft.body);}
  const rates=topics.find(t=>t.topic_slug==='rates-and-banks')!;
  expect(rates.category).toBe('macro');expect(rates.title).toEqual({zh:'利率与银行',en:'Rates and banks'});
  const draft=(await a.db.draftOf(rates.topic_id))!;
@@ -24,7 +37,7 @@ it('shares a seeded database across calls and module reloads',async()=>{
  expect(draft.body.sections[0].note!.zh).toContain('{{ev:1.period}}');expect(draft.body.sections[0].note!.zh).toContain('{{ev:1}}');
  const company=topics.find(t=>t.topic_slug==='cn-company')!;expect(company.category).toBe('company');
  expect((await a.db.draftOf(company.topic_id))!.body.evidence).toEqual([]);
- expect(a.codeVersion).toBe('fixture');expect(await a.privateIds('user')).toEqual(new Set());
+ expect(a.codeVersion).toBe('fixture');expect(await a.privateIds('user')).toEqual(new Set(['00000000-0000-4000-8000-000000000abc']));
  expect(Math.abs(a.now().getTime()-Date.now())).toBeLessThan(1000);
  vi.resetModules();expect((await import('./admin-fixture')).adminFixtureDeps().db).toBe(a.db);
 });

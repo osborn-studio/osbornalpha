@@ -26,7 +26,7 @@ const ordinalOf=(raw:unknown,path:string):number=>{
  if(typeof raw!=='number'||!Number.isSafeInteger(raw)||raw<1)return bad(path);return raw;
 };
 export const emptyDraft=(title:Bilingual):DraftBody=>({title,dek:{zh:'',en:''},sections:[],evidence:[],expected_slots:[],entries:[],blocks_provenance:{}});
-export function parseDraftBody(raw:unknown):DraftBody{
+export function parseDraftBody(raw:unknown,licenceIds:ReadonlySet<string>=new Set()):DraftBody{
  const b=object(raw,'');
  const allowed=new Set(['title','dek','sections','evidence','expected_slots','entries','blocks_provenance']);
  for(const key of Object.keys(b))if(!allowed.has(key))bad(key);
@@ -75,7 +75,15 @@ export function parseDraftBody(raw:unknown):DraftBody{
  expected_slots.forEach((s,i)=>{if(!listedSlots.has(s.key))bad(`expected_slots.${i}.key`);});
  const entries=list(b.entries,'entries',DRAFT_LIMITS.entries).map((raw,i)=>{
   const path=`entries.${i}`,e=object(raw,path);
-  if(e.entry_type==='licensed_excerpt')return bad('entries');
+  if(e.entry_type==='licensed_excerpt'){
+   if(typeof e.licence_id!=='string'||!licenceIds.has(e.licence_id))return bad(path+'.licence_id');
+   const fragments=list(e.fragments,path+'.fragments').map((raw,j)=>{
+    const f=object(raw,path+'.fragments.'+j);
+    if(typeof f.text!=='string'||typeof f.attribution!=='string'||typeof f.url!=='string'||typeof f.date!=='string')return bad(path+'.fragments.'+j);
+    return {text:f.text,attribution:f.attribution,url:f.url,date:f.date};
+   });
+   return {entry_type:'licensed_excerpt' as const,key:keyOf(e.key,path+'.key',entryKeys),licence_id:e.licence_id,fragments};
+  }
   if(e.entry_type!=='owner_note')return bad(`${path}.entry_type`);
   return {key:keyOf(e.key,`${path}.key`,entryKeys),entry_type:'owner_note' as const,body:bilingual(e.body,`${path}.body`,DRAFT_LIMITS.ownerNote)};
  });

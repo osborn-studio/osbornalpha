@@ -26,6 +26,7 @@ export function pgTopicsDb(pool:Pool,opts?:{role:'authenticated'}):TopicsDb{
    const values:unknown[]=[],clauses:string[]=[];
    const bind=(v:unknown)=>{values.push(v);return `$${values.length}`;};
    for(const [key,value] of Object.entries(r.match??{}))clauses.push(value===null?`r.${ident(key)} is null`:`r.${ident(key)}=${bind(value)}`);
+   if(r.licenceIds)clauses.push(`r.licence_id=any(${bind(r.licenceIds)}::uuid[])`);
    if(r.live)clauses.push('v.unpublished_at is null');
    if(r.after)clauses.push(`(r.version_id,r.ordinal)>(${bind(r.after.version_id)},${bind(r.after.ordinal)})`);
    const columns=r.columns?.map(key=>'r.'+ident(key)).join(',')??'r.*';

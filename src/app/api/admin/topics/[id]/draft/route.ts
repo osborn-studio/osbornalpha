@@ -15,8 +15,9 @@ export const GET=adminGet<Context>('[admin/topics] draft',async({ctx})=>{
  });
 });
 export const PUT=adminPost<Context>('[admin/topics] save draft',async({ctx,body,userId})=>{
- const topicId=uuidParam((await ctx.params).id),expectedRevision=intField(body,'expected_revision',1,Number.MAX_SAFE_INTEGER),draft=parseDraftBody(body.body);
+ const topicId=uuidParam((await ctx.params).id),expectedRevision=intField(body,'expected_revision',1,Number.MAX_SAFE_INTEGER);
  const deps=await adminDeps();
+ const draft=parseDraftBody(body.body,new Set((await deps.db.licences()).map(l=>l.licence_id)));
  const saved=await deps.db.saveDraft({topicId,expectedRevision,body:draft,actor:userId});
  return jsonNoStore({...saved,lint:draftLint(draft),evidence:await draftEvidenceView(deps,draft)});
 });

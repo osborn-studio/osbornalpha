@@ -1,4 +1,11 @@
 {
+  "excerpt": {
+    "caption": "许可引文",
+    "masked": "引文已遮蔽",
+    "reason": "该来源的许可状态已变更，引文不再显示；署名与链接保留。",
+    "link": "原链接",
+    "note": "引文中的数字为原文表述，未经本站核实"
+  },
   "summaryTemplates": {
     "macro_level": "{period} {name}为 {value}",
     "fact_value": "{company} {period} {concept}为 {value}",

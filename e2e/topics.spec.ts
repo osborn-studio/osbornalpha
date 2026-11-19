@@ -123,3 +123,14 @@ test('English hub shows the Research heading',async({page,context})=>{
  await page.reload();
  await expect(page.getByRole('heading',{level:1})).toHaveText(/^Research\s*研究$/);
 });
+test('shows licensed fragments and preserves only the revoked source credit',async({page})=>{
+ await page.goto('/intel/topics/rates-and-banks');
+ await expect(page.locator('[data-hydrated="true"]').first()).toBeVisible();
+ const quote=page.locator('article').filter({has:page.getByRole('heading',{name:'许可引文'})});
+ await expect(quote).toContainText('Published survey: 42');
+ await expect(quote).toContainText('引文中的数字为原文表述，未经本站核实');
+ const masked=page.locator('article').filter({has:page.getByRole('heading',{name:'引文已遮蔽'})});
+ await expect(masked).toContainText('Archive');
+ await expect(masked.getByRole('link')).toHaveAttribute('href','https://example.org/archive');
+ await expect(page.getByText(/Withdrawn survey: 31/)).toHaveCount(0);
+});

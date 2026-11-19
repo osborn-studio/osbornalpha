@@ -113,3 +113,10 @@ it('publishes a single-locale fixture summary with period-specific facts',async(
  expect(s.facts[0].text).toBe('2026-08 失业率为 3.75%。');
  expect(JSON.stringify([...s.facts,...s.points,...s.counterpoints])).not.toContain(' / ');
 });
+it('serves the approved fixture quote and only credits for the revoked quote',async()=>{
+ const dto=await readTopic(deps(publishedFixture()),'rates-and-banks',{});
+ expect(dto.entries.filter(e=>e.entry_type==='licensed_excerpt')).toHaveLength(2);
+ expect(JSON.stringify(dto.entries)).toContain('Published survey: 42');
+ expect(JSON.stringify(dto.entries)).not.toContain('Withdrawn survey: 31');
+ expect(dto.entries).toContainEqual(expect.objectContaining({masked:true,attributions:[{attribution:'Archive',url:'https://example.org/archive'}]}));
+});

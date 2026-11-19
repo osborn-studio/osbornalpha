@@ -171,3 +171,39 @@ test.describe.serial('publication',()=>{
   }
  });
 });
+test('licence register loads the selected source and its fixed attribution',async({page})=>{
+ await page.goto('/admin/topics/licences');
+ await expect(page.getByRole('heading',{level:1,name:'许可登记'})).toBeVisible();
+ const survey=page.getByRole('row').filter({has:page.getByRole('button',{name:'Survey',exact:true})});
+ await expect(survey).toBeVisible();
+ await ready(page);
+ await survey.getByRole('button',{name:'Survey',exact:true}).click();
+ await expect(page.getByLabel('来源名称',{exact:true})).toHaveValue('Survey');
+ await expect(page.getByLabel('需要署名')).toBeChecked();
+ await expect(page.getByLabel('需要署名')).toBeDisabled();
+});
+test('reviews the two copied thesis blocks in the existing editor',async({page})=>{
+ const id='00000000-0000-4000-8000-000000000abc';
+ const probes:string[]=[];
+ page.on('request',req=>{if(new URL(req.url()).pathname==='/api/admin/topics')probes.push(req.url());});
+ await page.route(`**/api/research/theses/${id}`,route=>route.fulfill({json:{
+  thesis:{id,title:'Liquidity',status:'DRAFT',invalidation_conditions:[],watch_metrics:[]},
+ }}));
+ await page.goto(`/research/theses/${id}`);
+ const link=page.getByRole('link',{name:'以此为起点新建公开专题'});
+ await expect(link).toHaveAttribute('href',`/admin/topics/new?fromThesis=${id}`);
+ expect(probes).toEqual([]);
+ await link.click();await ready(page);
+ await expect(page.getByLabel('中文标题',{exact:true})).toHaveCount(0);
+ await page.getByLabel('slug',{exact:true}).fill(`from-thesis-${Date.now()}`);
+ await page.getByRole('button',{name:'创建专题',exact:true}).click();
+ await expect(page).toHaveURL(editorUrl);await ready(page);
+ const card=page.locator('section').filter({has:page.getByRole('heading',{name:'未带入的私有内容'})});
+ await card.getByRole('button',{name:'逐段审阅'}).click();
+ await expect(card.getByRole('button',{name:'已检查，无私有内容'})).toHaveCount(2);
+ await card.getByRole('button',{name:'已检查，无私有内容'}).first().click();
+ await card.getByRole('button',{name:'改写'}).click();
+ await expect(page.locator(':focus')).toHaveValue(/Liquidity/);
+ await page.locator(':focus').fill('Public context');
+ await expect(card.getByText('unreviewed_private_block')).toHaveCount(0);
+});

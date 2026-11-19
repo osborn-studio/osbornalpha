@@ -11,9 +11,10 @@ import {adminJson,baseCode} from '@/app/(app)/admin/topics/_shared/admin-fetch';
 import {reduce} from './editor-state';
 import {OutlineColumn} from './OutlineColumn';
 import {TextColumn} from './TextColumn';
+import {NotCarriedOver} from './NotCarriedOver';
 import {PickerColumn} from './PickerColumn';
 import {BUTTON,FlowBar} from './FlowBar';
-export interface EditorInitial{id:string;slug:string;revision:number;body:DraftBody;updated_at:string;public_enabled:boolean;retired:boolean;lint:LintFinding[];evidence:EvidenceView[]}
+export interface EditorInitial{stripped?:{field:string;count:number|null}[]|null;id:string;slug:string;revision:number;body:DraftBody;updated_at:string;public_enabled:boolean;retired:boolean;lint:LintFinding[];evidence:EvidenceView[]}
 type Inspection={lint:LintFinding[];evidence:EvidenceView[]};
 export function EditorClient({initial,publishHref=`/admin/topics/${initial.id}/publish`}:{initial:EditorInitial;publishHref?:string}){
  const [hydrated,setHydrated]=useState(false);
@@ -67,7 +68,9 @@ export function EditorClient({initial,publishHref=`/admin/topics/${initial.id}/p
   <div className="grid min-w-0 grid-cols-1 items-start gap-3 min-[1280px]:grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(360px,460px)]">
    <OutlineColumn body={body} evidence={evidence} locale={locale} dispatch={dispatch} readOnly={readOnly}/>
    <TextColumn body={body} evidence={evidence} lint={lint} busy={busy} locale={locale} setLocale={setLocale} dispatch={dispatch} readOnly={readOnly}/>
-   <PickerColumn id={initial.id} body={body} locale={locale} onAdd={add} readOnly={readOnly}/>
+   <div className="min-w-0 space-y-3"><PickerColumn id={initial.id} body={body} locale={locale} onAdd={add} readOnly={readOnly}/>
+    {initial.stripped&&<NotCarriedOver stripped={initial.stripped} body={body} locale={locale} dispatch={dispatch} readOnly={readOnly}/>}
+   </div>
   </div>
   <FlowBar dirty={dirty} pending={pending} readOnly={readOnly} onSave={save} publishHref={publishHref}/>
  </TopicAdminFrame></div>;

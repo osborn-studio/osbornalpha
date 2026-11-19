@@ -11,10 +11,10 @@ export function listModel(rows:AdminTopicRow[],f:{status:ListStatus;revisedOnly:
   revised_count:r.revised_count,origin:r.promoted?'promoted' as const:null,created_at:r.created_at,
  })).sort((a,b)=>Date.parse(b.created_at)-Date.parse(a.created_at)||a.slug.localeCompare(b.slug))};
 }
-export function newTopicErrors(input:{slug:string;category:string;title:Bilingual}):Record<string,string>{
+export function newTopicErrors(input:{slug:string;category:string;title:Bilingual},requireTitle=true):Record<string,string>{
  const errors:Record<string,string>={};
  if(input.slug.length<3||input.slug.length>64||!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(input.slug))errors.slug='errors.slug';
  if(!CATEGORIES.some(c=>c===input.category))errors.category='errors.category';
- for(const loc of ['zh','en'] as const)if(!input.title[loc].trim()||input.title[loc].length>120)errors[`title.${loc}`]='errors.title';
+ if(requireTitle)for(const loc of ['zh','en'] as const)if(!input.title[loc].trim()||input.title[loc].length>120)errors[`title.${loc}`]='errors.title';
  return errors;
 }

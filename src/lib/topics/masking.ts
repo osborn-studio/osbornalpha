@@ -2,6 +2,11 @@
 import type {Resolved} from '@/lib/evidence/resolve';
 import type {DriftRow,RenderedSummary,TopicSnapshot} from './types';
 import type {PublicEvidence} from './public-dto';
+import {maskExcerpts} from './excerpts';
+import type {PublicLicenceStatusRow} from './database-types';
+export function maskedEntries(entries:TopicSnapshot['entries'],rows:PublicLicenceStatusRow[]){
+ return maskExcerpts(entries,new Map(rows.map(l=>[l.licence_id,l.status])));
+}
 export const MASKING_DRIFTS=['retracted','now_withheld'] as const;
 export function maskSnapshot(snapshot:TopicSnapshot,drift:ReadonlyMap<number,DriftRow>,view:'current'|'version'|'replay'):
  {evidence:PublicEvidence[];drawers:Map<number,Resolved['drawer']>;summary:(RenderedSummary&{hidden_points:number})|null}{

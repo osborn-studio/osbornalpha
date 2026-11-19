@@ -4,8 +4,8 @@ import {topicsEnabled} from '@/lib/topics/flags';
 import {NewTopicForm} from '@/components/topics/admin/NewTopicForm';
 import {adminGate,AdminDenied} from '../_shared/gate';
 export const dynamic='force-dynamic';
-export default async function NewTopicPage(){
+export default async function NewTopicPage({searchParams}:{searchParams:Promise<{fromThesis?:string}>}){
  if(!topicsEnabled())notFound();
  const user=await adminGate('/admin/topics/new');if(!user)return <AdminDenied/>;
- return <NewTopicForm/>;
+ return <NewTopicForm fromThesis={(await searchParams).fromThesis}/>;
 }
