@@ -2,12 +2,20 @@
 import {randomUUID} from 'node:crypto';
 import {canonicalJson,sha256Hex} from '@/lib/evidence/hash';
 import {CATEGORIES,UNPUBLISH_REASONS,TopicsDbError,type TopicsDb,type TopicSnapshot} from './types';
-import type {PublicTopicRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
+import type {PublicTopicRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicSummaryRunRow,TopicSummaryRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
 const copy=<T>(x:T):T=>structuredClone(x);
 const fail=(code:string):never=>{throw new TopicsDbError(code);};
 export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:Date):void}{
  let clock:Date|null=null;const now=()=> (clock??new Date()).toISOString();
  const topics:TopicRow[]=[],drafts:TopicDraftRow[]=[],versions:TopicVersionRow[]=[],evidence:TopicVersionEvidenceRow[]=[],receipts:TopicDisclosureReceiptRow[]=[],audits:TopicAuditRow[]=[],drifts:TopicEvidenceDriftRow[]=[];
+ const runs:TopicSummaryRunRow[]=[],summaries:TopicSummaryRow[]=[];
+ const result=(run:TopicSummaryRunRow)=>copy({...run,summary:summaries.find(s=>s.run_id===run.run_id)??null});
+ const version=(data:unknown)=>data&&typeof data==='object'&&'validator_version' in data?data.validator_version:null;
+ const checkCompletion=(r:TopicSummaryRunRow,raw:unknown,payload:Record<string,unknown>)=>{
+  if(payload==null||(r.finalize_payload!==null&&
+   (canonicalJson(payload)!==canonicalJson(r.finalize_payload)||canonicalJson(raw)!==canonicalJson(r.raw_output))))fail('invalid_transition');
+ };
+ const discard=(s:TopicSummaryRow)=>Object.assign(s,{status:'discarded',approved_by:null,approved_at:null});
  const settings:TopicSettingsRow={id:1,public_enabled:false,summary_public_enabled:false,summary_provider_note:null,drift_checked_at:null,drift_cursor:null,updated_by:null,updated_at:now()};
  const actor=(a:string)=>{if(a==null)fail('invalid_actor');};
  const topic=(id:string)=>topics.find(t=>t.topic_id===id)??fail('not_found');
@@ -45,6 +53,77 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    receipts.push({receipt_id,topic_id:i.topicId,draft_hash:i.draftHash,checks:copy(i.checks),passed:i.passed,code_version:i.codeVersion,actor:i.actor,created_at:now()});
    audit(i.topicId,i.actor,'disclosure_check',{receipt_id,passed:i.passed,blocked:i.checks.filter(c=>c.result==='block').flatMap(c=>c.codes)});return receipt_id;
   },
+  async summaryRunByRequest(actor,id){
+   const run=runs.find(r=>r.actor===actor&&r.request_id===id);
+   return run?{payload_hash:run.payload_hash}:null;
+  },
+  async claimSummary(i){
+   actor(i.actor);const prior=runs.find(r=>r.actor===i.actor&&r.request_id===i.requestId);
+   if(prior){
+    if(prior.payload_hash!==i.payloadHash)fail('payload_conflict');
+    return {...result(prior),replayed:true};
+   }
+   if(!drafts.some(d=>d.topic_id===i.topicId&&d.draft_hash===i.draftHash))fail('draft_changed');
+   if(!/^[0-9a-f]{64}$/.test(i.payloadHash)||!['zh','en'].includes(i.locale))fail('invalid_parameter:summary');
+   const run_id=randomUUID();
+   const run:TopicSummaryRunRow={run_id,usage_audit_key:run_id,topic_id:i.topicId,draft_hash:i.draftHash,locale:i.locale,actor:i.actor,
+    request_id:i.requestId,payload_hash:i.payloadHash,state:'running',manifest:copy(i.manifest),prompt_version:i.promptVersion,validator_version:i.validatorVersion,
+    raw_output:null,validation:null,finalize_payload:null,finalized:false,claimed_at:now(),finished_at:null,provider:null,model:null};
+   runs.push(run);audit(run.topic_id,i.actor,'summary_run',{run_id,state:run.state});
+   return {...result(run),replayed:false};
+  },
+  async recordSummaryCompletion(i){
+   const r=runs.find(r=>r.run_id===i.runId&&r.state==='running')??fail('run_not_running');
+   checkCompletion(r,i.rawOutput,i.finalizePayload);
+   if(r.finalize_payload!==null)return;
+   r.raw_output=copy(i.rawOutput);r.finalize_payload=copy(i.finalizePayload);
+   audit(r.topic_id,r.actor,'summary_run',{run_id:r.run_id,step:'completion'});
+  },
+  async finishSummary(i){
+   const r=runs.find(r=>r.run_id===i.runId)??fail('not_found');
+   checkCompletion(r,i.rawOutput,i.finalizePayload);
+   if(r.state==='abandoned'&&r.finalize_payload===null){
+    Object.assign(r,{raw_output:copy(i.rawOutput),finalize_payload:copy(i.finalizePayload),provider:i.provider,model:i.model});
+    audit(r.topic_id,r.actor,'summary_run',{run_id:r.run_id,step:'late_completion'});
+   }
+   if(r.state!=='running')return result(r);
+   if(!['accepted','rejected','failed'].includes(i.state))fail('invalid_state');
+   const changed=[i.validation,i.rendered,i.rawOutput,r.raw_output].map(version).some(v=>v!=null&&v!==r.validator_version);
+   const state=changed?'failed':i.state;
+   if(state==='accepted'){
+    const rendered=i.rendered??fail('rendered_required');
+    summaries.push({summary_id:randomUUID(),run_id:r.run_id,topic_id:r.topic_id,draft_hash:r.draft_hash,locale:r.locale,
+     rendered:copy(rendered),status:'generated',approved_by:null,approved_at:null});
+   }
+   Object.assign(r,{state,provider:i.provider,model:i.model,raw_output:copy(i.rawOutput),finished_at:now(),finalize_payload:copy(i.finalizePayload),
+    validation:changed?{code:'validator_version_changed',failure_codes:['validator_version_changed']}:copy(i.validation)});
+   audit(r.topic_id,r.actor,'summary_run',{run_id:r.run_id,state});
+   return result(r);
+  },
+  async markSummaryFinalized(id){
+   const r=runs.find(r=>r.run_id===id)??fail('not_found');
+   if(r.finalize_payload===null)fail('invalid_transition');
+   if(!r.finalized){r.finalized=true;audit(r.topic_id,r.actor,'summary_run',{run_id:id,step:'finalized'});}
+  },
+  async expireSummaries(a){
+   actor(a);const expired=runs.filter(r=>r.state==='running'&&Date.parse(r.claimed_at)<Date.parse(now())-600000);
+   for(const r of expired){
+    r.state='abandoned';r.finished_at=now();audit(r.topic_id,a,'summary_run',{run_id:r.run_id,state:r.state});
+   }
+   return expired.length;
+  },
+  async approveSummary(i){
+   actor(i.actor);if(!['approve','discard'].includes(i.decision))fail('invalid_decision');
+   const s=summaries.find(s=>s.summary_id===i.summaryId)??fail('not_found');
+   if(i.decision==='approve'){
+    if(!drafts.some(d=>d.topic_id===s.topic_id&&d.draft_hash===s.draft_hash)||!runs.some(r=>r.run_id===s.run_id&&r.state==='accepted'))fail('summary_mismatch');
+    for(const old of summaries)if(old!==s&&old.status==='approved'&&old.topic_id===s.topic_id&&old.draft_hash===s.draft_hash&&old.locale===s.locale)discard(old);
+    s.status='approved';s.approved_by=i.actor;s.approved_at=now();
+   }else discard(s);
+   audit(s.topic_id,i.actor,'summary_approve',{summary_id:i.summaryId,decision:i.decision});
+  },
+  async summariesOf(id,hash){return copy(summaries.filter(s=>s.topic_id===id&&s.draft_hash===hash).sort((a,b)=>a.summary_id.localeCompare(b.summary_id)));},
+  async approvedSummary(id,hash,locale){return copy(summaries.find(s=>s.topic_id===id&&s.draft_hash===hash&&s.locale===locale&&s.status==='approved')??null);},
   async receiptById(id){return copy(receipts.find(r=>r.receipt_id===id)??null);},
   async latestReceipt(id,hash){return copy(receipts.filter(r=>r.topic_id===id&&r.draft_hash===hash).sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.receipt_id.localeCompare(a.receipt_id))[0]??null);},
   async publish(i){
@@ -56,7 +135,10 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    if(snapshot.evidence.some(e=>e.resolved.state!=='ok'&&e.resolved.display?.fact!=null))fail('publish_blocked:restricted_value');
    if(snapshot.evidence.length!==i.evidence.length||snapshot.evidence.some((e,n)=>e.ref_hash!==i.evidence[n].ref_hash||e.ordinal!==i.evidence[n].ordinal||e.resolved.state!==i.evidence[n].state))fail('publish_blocked:evidence_mismatch');
    if(i.evidence.some(e=>Date.parse(e.as_of)>Date.parse(i.cutoff)))fail('publish_blocked:as_of_after_cutoff');
-   if(i.summaryId!==null){if(!settings.summary_public_enabled)fail('publish_blocked:summary_provider_unconfirmed');fail('publish_blocked:summary_mismatch');}
+   if(i.summaryId!==null){
+    if(!settings.summary_public_enabled)fail('publish_blocked:summary_provider_unconfirmed');
+    if(!summaries.some(s=>s.summary_id===i.summaryId&&s.topic_id===i.topicId&&s.draft_hash===i.expectedDraftHash&&s.status==='approved'))fail('publish_blocked:summary_mismatch');
+   }
    const ordinals=new Set<number>(),hashes=new Set<string>();
    for(const e of i.evidence){
     if(!Number.isInteger(e.ordinal)||e.ordinal<1||ordinals.has(e.ordinal)||hashes.has(e.ref_hash))fail('evidence_constraint');

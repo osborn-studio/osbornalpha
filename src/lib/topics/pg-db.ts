@@ -17,7 +17,8 @@ export function pgTopicsDb(pool:Pool,opts?:{role:'authenticated'}):TopicsDb{
  return topicsAdapter({
   async rpc<T>(name:string,args:Record<string,unknown>):Promise<T>{
    const entries=Object.entries(args);
-   const rows=await query(`select public.${ident(name)}(${entries.map(([key],n)=>`${ident(key)} => $${n+1}`).join(',')}) as result`,entries.map(([,v])=>param(v)));
+   const rows=await query(`select public.${ident(name)}(${entries.map(([key],n)=>`${ident(key)} => $${n+1}`).join(',')}) as result`,entries.map(([key,v])=>
+    typeof v==='string'&&(key==='p_raw_output'||key==='p_validation')?JSON.stringify(v):param(v)));
    const result=rows[0]?.result;
    return result!==null&&typeof result==='object'&&!Array.isArray(result)?topicRow<T>(result):result as T;
   },

@@ -47,6 +47,13 @@ describe('dayWindowUtc8', () => {
 });
 
 describe('limitFor', () => {
+  // TOPICS ↓
+  it('meters topic summaries by plan and exempts admins', () => {
+    expect(limitFor('topic_summary', 'free', 'user')).toBe(0);
+    expect(limitFor('topic_summary', 'pro', 'user')).toBe(20);
+    expect(limitFor('topic_summary', 'free', 'admin')).toBe(-1);
+  });
+  // TOPICS ↑
   it('free plan: copilot=20, perspectives=5, brief_preview=2', () => {
     expect(limitFor('copilot', 'free', 'user')).toBe(20);
     expect(limitFor('perspectives', 'free', 'user')).toBe(5);

@@ -32,8 +32,11 @@ export type Drift=typeof DRIFTS[number];
 export interface DriftRow{version_id:string;ordinal:number;drift:Drift;current_identity:{value_text:string|null;unit:string|null;period:string|null;available_at:string|null}|null}
 export interface EvidenceRowInput{ordinal:number;kind:EvidenceKind;ref:EvidenceRef;ref_hash:string;as_of:string;state:ResolveState;digest:string|null;section_key:string}
 export interface DisclosureCheck{id:number;key:string;result:'pass'|'warn'|'block';codes:string[];detail:Record<string,unknown>}
-import type {PublicDriftRow,PublicTopicRow,PublicVersionRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
+import type {PublicDriftRow,PublicTopicRow,PublicVersionRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicSummaryRow,TopicSummaryRunRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
 export class TopicsDbError extends Error{constructor(readonly code:string){super(code);this.name='TopicsDbError';}}
+export interface SummarySubject{topicId:string;draftHash:string;locale:'zh'|'en';manifest:Record<string,unknown>;promptVersion:string;validatorVersion:string}
+export type SummaryResult=TopicSummaryRunRow&{summary:TopicSummaryRow|null};
+export type SummaryClaim=SummaryResult&{replayed:boolean};
 export interface TopicsDb{
  // service role (admin routes, crons)
  createTopic(i:{slug:string;category:Category;body:DraftBody;actor:string}):Promise<{topic_id:string;revision:number;draft_hash:string}>;
@@ -42,6 +45,15 @@ export interface TopicsDb{
  draftOf(topicId:string):Promise<TopicDraftRow|null>;
  saveDraft(i:{topicId:string;expectedRevision:number;body:DraftBody;actor:string}):Promise<{revision:number;draft_hash:string}>;
  recordDisclosure(i:{topicId:string;draftHash:string;checks:DisclosureCheck[];passed:boolean;codeVersion:string;actor:string}):Promise<string>;
+ summaryRunByRequest(actor:string,requestId:string):Promise<Pick<TopicSummaryRunRow,'payload_hash'>|null>;
+ claimSummary(i:SummarySubject&{actor:string;requestId:string;payloadHash:string}):Promise<SummaryClaim>;
+ recordSummaryCompletion(i:{runId:string;rawOutput:unknown;finalizePayload:Record<string,unknown>}):Promise<void>;
+ finishSummary(i:{runId:string;state:'accepted'|'rejected'|'failed';provider:string;model:string;rawOutput:unknown;validation:unknown;rendered:RenderedSummary|null;finalizePayload:Record<string,unknown>}):Promise<SummaryResult>;
+ markSummaryFinalized(runId:string):Promise<void>;
+ expireSummaries(actor:string):Promise<number>;
+ approveSummary(i:{summaryId:string;decision:'approve'|'discard';actor:string}):Promise<void>;
+ summariesOf(topicId:string,draftHash:string):Promise<TopicSummaryRow[]>;
+ approvedSummary(topicId:string,draftHash:string,locale:'zh'|'en'):Promise<TopicSummaryRow|null>;
  receiptById(receiptId:string):Promise<TopicDisclosureReceiptRow|null>;
  latestReceipt(topicId:string,draftHash:string):Promise<TopicDisclosureReceiptRow|null>;
  publish(i:{topicId:string;expectedDraftHash:string;snapshotText:string;evidence:EvidenceRowInput[];summaryId:string|null;receiptId:string;cutoff:string;actor:string}):Promise<{version_id:string;version_no:number}>;

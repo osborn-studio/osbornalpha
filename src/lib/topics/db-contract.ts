@@ -87,6 +87,64 @@ export function topicsDbContract(label:string,setup:()=>Promise<TopicsContractHa
    expect((await h.db.driftOf(p.version_id))[0].drift).toBe('revised');
    expect((await h.db.settings()).drift_checked_at).toBe('2026-11-12T06:30:00.000Z');
   });
+  const summaryDraft=async(h:TopicsContractHarness,suffix:string)=>{
+   const t=await h.db.createTopic({slug:`${label}-summary-${suffix}`,category:'macro',body:body('summary'),actor});
+   return {topicId:t.topic_id,draftHash:t.draft_hash,actor,requestId:h.newId(),payloadHash:sha256Hex('payload'),
+    locale:'en' as const,manifest:{facts:[]},promptVersion:'prompt/1',validatorVersion:'validator/1'};
+  };
+  const rendered={facts:[],points:[],counterpoints:[],incomparable:[],prompt_version:'prompt/1',validator_version:'validator/1',provider:'test',model:'test'};
+  const finish={state:'accepted' as const,provider:'test',model:'test',rawOutput:{content:'output'},validation:{validator_version:'validator/1'},rendered,finalizePayload:{status:'completed'}};
+  it('claims once, replays the same payload and rejects conflicting or stale claims',async()=>{
+   const h=await setup(),i=await summaryDraft(h,'claim');
+   const claims=await Promise.all([h.db.claimSummary(i),h.db.claimSummary(i)]);
+   expect(claims.map(c=>c.replayed).sort()).toEqual([false,true]);
+   expect(claims[1].run_id).toBe(claims[0].run_id);
+   expect(claims[0].usage_audit_key).toBe(claims[0].run_id);
+   await expect(h.db.claimSummary({...i,payloadHash:sha256Hex('other')})).rejects.toThrow('payload_conflict');
+   await h.db.saveDraft({topicId:i.topicId,expectedRevision:1,body:body('edited'),actor});
+   expect((await h.db.claimSummary(i)).replayed).toBe(true);
+   await expect(h.db.claimSummary({...i,requestId:h.newId()})).rejects.toThrow('draft_changed');
+  });
+  it('approves one generated summary per draft and locale and rejects stale approval',async()=>{
+   const h=await setup(),i=await summaryDraft(h,'approve');
+   for(const locale of ['en','zh','en'] as const){
+    const {run_id}=await h.db.claimSummary({...i,locale,requestId:h.newId()});
+    await h.db.recordSummaryCompletion({runId:run_id,rawOutput:finish.rawOutput,finalizePayload:finish.finalizePayload});
+    await h.db.finishSummary({...finish,runId:run_id});
+    await h.db.markSummaryFinalized(run_id);
+    const summary=(await h.db.summariesOf(i.topicId,i.draftHash)).find(s=>s.run_id===run_id)!;
+    expect(summary).toMatchObject({status:'generated',rendered});
+    await h.db.approveSummary({summaryId:summary.summary_id,decision:'approve',actor});
+    expect(await h.db.approvedSummary(i.topicId,i.draftHash,locale)).toMatchObject({run_id,status:'approved',approved_by:actor});
+   }
+   const all=await h.db.summariesOf(i.topicId,i.draftHash);
+   expect(all.filter(s=>s.status==='approved')).toHaveLength(2);
+   const older=all.find(s=>s.status==='discarded')!;
+   expect(older).toMatchObject({locale:'en',approved_by:null,approved_at:null});
+   await h.db.saveDraft({topicId:i.topicId,expectedRevision:1,body:body('edited'),actor});
+   await expect(h.db.approveSummary({summaryId:older.summary_id,decision:'approve',actor})).rejects.toThrow('summary_mismatch');
+  });
+  it('preserves the recorded output and settlement payload across retries',async()=>{
+   const h=await setup(),i=await summaryDraft(h,'retry'),{run_id:runId}=await h.db.claimSummary(i);
+   await expect(h.db.markSummaryFinalized(runId)).rejects.toThrow('invalid_transition');
+   const completion={runId,rawOutput:finish.rawOutput,finalizePayload:finish.finalizePayload};
+   await h.db.recordSummaryCompletion(completion);
+   await h.db.recordSummaryCompletion(completion);
+   await expect(h.db.recordSummaryCompletion({...completion,rawOutput:'other'})).rejects.toThrow('invalid_transition');
+   await expect(h.db.finishSummary({...finish,runId,finalizePayload:{status:'failed'}})).rejects.toThrow('invalid_transition');
+   await expect(h.db.finishSummary({...finish,runId,rendered:null})).rejects.toThrow('rendered_required');
+   const accepted=await h.db.finishSummary({...finish,runId});
+   expect((await h.db.finishSummary({...finish,runId})).summary?.summary_id).toBe(accepted.summary?.summary_id);
+   await h.db.markSummaryFinalized(runId);
+   expect(await h.db.claimSummary(i)).toMatchObject({finalized:true,raw_output:finish.rawOutput,finalize_payload:finish.finalizePayload});
+  });
+  it('fails a validator version change without generating a summary',async()=>{
+   const h=await setup(),i=await summaryDraft(h,'validator'),run=await h.db.claimSummary(i);
+   const result=await h.db.finishSummary({...finish,runId:run.run_id,validation:{validator_version:'validator/2'}});
+   expect(result).toMatchObject({state:'failed',validation:{code:'validator_version_changed'}});
+   expect(await h.db.summariesOf(i.topicId,i.draftHash)).toEqual([]);
+   await expect(h.db.recordSummaryCompletion({runId:run.run_id,rawOutput:{},finalizePayload:{}})).rejects.toThrow('run_not_running');
+  });
   it('writes one audit row per write, without content',async()=>{
    const h=await setup();const p=await make(h,`${label}-c8`);
    expect((await h.db.auditOf(p.topic_id)).map(a=>a.action)).toEqual(['create','disclosure_check','publish']);

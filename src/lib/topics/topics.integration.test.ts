@@ -131,6 +131,37 @@ it('topic_publish refuses a failed receipt and a summary while the summary switc
  await expect(pool.query(`select public.topic_publish($1,$2,$3,$4::jsonb,$7,$5,'2026-11-10T00:00:00Z',$6)`,
   [t.topicId,t.draftHash,snapshotOf('fn-block-receipt',rows),JSON.stringify(rows),ok.rows[0].id,ACTOR,randomUUID()])).rejects.toThrow('publish_blocked:summary_provider_unconfirmed');
 });
+it('publishes an approved summary only with provider confirmation',async()=>{
+ const t=await draftTopic('fn-approved-summary'),db=pgTopicsDb(pool);
+ const claim=await db.claimSummary({...t,actor:ACTOR,requestId:randomUUID(),payloadHash:sha('payload'),locale:'en',manifest:{},promptVersion:'p1',validatorVersion:'v1'});
+ const rendered={facts:[],points:[],counterpoints:[],incomparable:[],prompt_version:'p1',validator_version:'v1',provider:'test',model:'test'};
+ await db.finishSummary({runId:claim.run_id,state:'accepted',provider:'test',model:'test',rendered,rawOutput:{},validation:{validator_version:'v1'},finalizePayload:{}});
+ const [summary]=await db.summariesOf(t.topicId,t.draftHash);
+ await db.approveSummary({summaryId:summary.summary_id,decision:'approve',actor:ACTOR});
+ const receiptId=await db.recordDisclosure({...t,actor:ACTOR,checks:[],passed:true,codeVersion:'test'});
+ const c=await pool.connect();
+ const args=[t.topicId,t.draftHash,snapshotOf('fn-approved-summary',[],{summary:rendered}),summary.summary_id,receiptId,ACTOR];
+ const sql=`select public.topic_publish($1,$2,$3,'[]'::jsonb,$4,$5,now(),$6) as r`;
+ try{
+  await c.query('begin');
+  await c.query("select pg_advisory_xact_lock(hashtext('topic_settings'))");
+  await c.query('savepoint closed');
+  await expect(c.query(sql,args)).rejects.toThrow('publish_blocked:summary_provider_unconfirmed');
+  await c.query('rollback to closed');
+  await c.query(`select public.topic_set_public_enabled(false,true,'test','{}'::jsonb,$1)`,[ACTOR]);
+  expect((await c.query(sql,args)).rows[0].r.version_no).toBe(1);
+ }finally{await c.query('rollback');c.release();}
+});
+it('accepts topic_summary usage and rejects an unknown feature',async()=>{
+ const c=await pool.connect(),user=randomUUID();
+ try{
+  await c.query('begin');
+  await c.query('insert into auth.users(id,email) values($1,$2)',[user,`${user}@example.test`]);
+  const sql=`insert into public.usage_events(user_id,feature,run_provider,run_model,run_byo) values ($1,$2,'test','test',false)`;
+  expect((await c.query(sql,[user,'topic_summary'])).rowCount).toBe(1);
+  await expect(c.query(sql,[user,'nonsense'])).rejects.toThrow(/usage_events_feature_check/);
+ }finally{await c.query('rollback');c.release();}
+});
 it('versions are immutable except the one-time unpublish columns (A14)',async()=>{
  const p=await publish('fn-immutable-a');
  await expect(pool.query(`update public.topic_versions set cutoff=now() where version_id=$1`,[p.versionId])).rejects.toThrow(/append_only:topic_versions/);
@@ -244,7 +275,8 @@ it('grants every non-trigger function only to service_role, excluding the intern
  const functions=(await pool.query(`select p.oid::regprocedure::text signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and left(p.proname,6)='topic_' and p.prorettype <> 'trigger'::regtype`)).rows;
  expect(functions.map(f=>f.proname).sort()).toEqual(['topic_audit','topic_create','topic_save_draft','topic_record_disclosure','topic_publish',
-  'topic_unpublish','topic_retire','topic_set_licence','topic_set_public_enabled','topic_record_promotion','topic_upsert_drift','topic_record_event'].sort());
+  'topic_unpublish','topic_retire','topic_set_licence','topic_set_public_enabled','topic_record_promotion','topic_upsert_drift','topic_record_event',
+  'topic_claim_summary','topic_record_summary_completion','topic_finish_summary','topic_mark_summary_finalized','topic_expire_summaries','topic_approve_summary'].sort());
  for(const f of functions){
   for(const role of ['anon','authenticated','service_role']){
    expect((await pool.query(`select has_function_privilege($1,$2,'EXECUTE') allowed`,[role,f.signature])).rows[0].allowed,

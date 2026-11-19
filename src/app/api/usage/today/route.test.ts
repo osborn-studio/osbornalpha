@@ -291,6 +291,11 @@ describe('GET /api/usage/today status semantics', () => {
       perspectives: { used: 6, limit: -1 },
       brief_preview: { used: 5, limit: -1 },
     });
+    // TOPICS ↓
+    for (const query of queries) {
+      expect(query.eq).not.toHaveBeenCalledWith('feature', 'topic_summary');
+    }
+    // TOPICS ↑
     expect(body.byoCalls).toBe(4);
     expect(body.isAdmin).toBe(true);
     for (const query of queries.slice(0, 3)) {
