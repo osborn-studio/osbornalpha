@@ -21,8 +21,8 @@ describe('research database CI cannot silently skip', () => {
   it('pins the recovered historical SQL and rejects deletion/duplicate versions/tampering', () => {
     expect(migrationInventory().some(m => m.file === recoveredMigration.file)).toBe(true);
     const root = mkdtempSync(join(tmpdir(), 'alpha-migration-contract-'));
-    const directory = join(root, 'supabase/migrations'); mkdirSync(directory, { recursive: true });
     try {
+      const directory = join(root, 'supabase/migrations'); mkdirSync(directory, { recursive: true });
       expect(() => migrationInventory(root)).toThrow('missing');
       cpSync('supabase/migrations', directory, { recursive: true });
       copyFileSync('supabase/migrations.lock.json', join(root, 'supabase/migrations.lock.json'));

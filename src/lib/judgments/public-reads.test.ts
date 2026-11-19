@@ -1,7 +1,7 @@
 // src/lib/judgments/public-reads.test.ts
 // The anon read paths with a recording fake of the supabase-js query builder, the document reader
 // against a temp directory, and the cohort sample reader against the memory store.
-import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
@@ -66,7 +66,7 @@ describe('publicReads',()=>{
 describe('readMethodologyDoc',()=>{
  const cwd=process.cwd();let dir:string;
  beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),'f4-doc-'));mkdirSync(join(dir,'docs/methodologies/macro_regime'),{recursive:true});writeFileSync(join(dir,'docs/methodologies/macro_regime/v1.md'),'# macro');process.chdir(dir);});
- afterEach(()=>{process.chdir(cwd);});
+ afterEach(()=>{process.chdir(cwd);if(dir)rmSync(dir,{recursive:true,force:true});});
  it('reads the registry path under docs/methodologies and checks its sha256',async()=>{
   expect(await readMethodologyDoc('docs/methodologies/macro_regime/v1.md',sha256(Buffer.from('# macro')))).toEqual({markdown:'# macro',sha256_matches:true});
   expect(await readMethodologyDoc('docs/methodologies/macro_regime/v1.md','0'.repeat(64))).toEqual({markdown:'# macro',sha256_matches:false});
