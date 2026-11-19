@@ -15,6 +15,9 @@ import {memorySnapshotReader,readSnapshot} from './snapshot-read';
 companyDbContract('memoryCompanyDb contract',async()=>{
  const facts=memoryFactsDb();const db=memoryCompanyDb({facts});
  return {db,facts,upsertEvidence:(...a)=>db.upsertEvidence(...a),pruneEvidence:(...a)=>db.pruneEvidence(...a),
+  backlogBeside:async own=>({backlog:await db.backlog(),
+   otherFailed:db.states().filter(s=>s.last_status==='failed'&&!own.includes(s.issuer_id)).length,
+   otherActive:facts.scope().filter(s=>s.state_rev>0&&!own.includes(s.issuer_id)).length}),
   issuer:async(name='ZZ Company')=>{const id=randomUUID();db.registerIssuer(id,name);return id;},
   user:async()=>randomUUID(),
   batch:async(producer='company-digest')=>{const id=randomUUID();db.registerBatch(id,{producer,status:'running',code_version:'test-sha',tool_versions:{node:'test'}});return id;}};

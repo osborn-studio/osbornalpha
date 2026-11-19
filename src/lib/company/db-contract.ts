@@ -11,10 +11,13 @@ import type {FactInsert,FactRow,FactsDb,FilingInsert,FilingRow} from '../facts/t
 import {eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
 import {EVIDENCE_CHUNK_ROWS,MAX_COMPANY_WATCHES} from './db';
 import {CompanyDbError} from './types';
-import type {CompanyDb,CoverageInput,EventInput,EvidenceIndexRow,Market} from './types';
+import type {CompanyDb,CoverageInput,DigestBacklog,EventInput,EvidenceIndexRow,Market} from './types';
 
 export interface CompanyContractHarness{
  db:CompanyDb;facts:FactsDb;
+ /** The backlog together with the failed / active stream counts that do NOT belong to `own` issuers, all read from ONE
+  * snapshot: on a database shared with suites running in parallel, two separate reads can be moved by their writes. */
+ backlogBeside(own:string[]):Promise<{backlog:DigestBacklog;otherFailed:number;otherActive:number}>;
  upsertEvidence(issuer:string,market:Market,attempt:number,rev:number,rows:EvidenceIndexRow[]):Promise<{upserted:number}>;
  pruneEvidence(issuer:string,market:Market,attempt:number,rev:number,keep:string[]):Promise<{deleted:number}>;
  issuer(name?:string):Promise<string>;
@@ -256,13 +259,15 @@ export function companyDbContract(label:string,setup:()=>Promise<CompanyContract
    expect((await db.evidenceOf(ids)).size).toBe(1);
   });
   it('backlog details count active streams, order failures and limit the named list to 20',async()=>{
-   const before=await db.backlog();
+   const own:string[]=[];
    for(let i=0;i<22;i++){
-    const {iss,fb}=await ready();await publish(iss,fb,[{facts:[{}]}]);
+    const {iss,fb}=await ready();own.push(iss);await publish(iss,fb,[{facts:[{}]}]);
     for(let j=0;j<2;j++)await db.markDigestFailed(iss,'US',await attempt(iss),new Date('2026-01-01T00:00:00.000Z'));
    }
+   // Parallel suites can change the database-wide counts between a before and an after read.
+   const beside=await h.backlogBeside(own);
+   expect(beside.backlog.failedStreams-beside.otherFailed).toBe(22);expect(beside.backlog.activeStreams-beside.otherActive).toBe(22);
    const got=await db.backlog();
-   expect(got.failedStreams).toBe(before.failedStreams+22);expect(got.activeStreams).toBe(before.activeStreams+22);
    expect(got.streams).toHaveLength(20);
    const sorted=[...got.streams].sort((a,b)=>b.consecutiveFailures-a.consecutiveFailures||a.issuerId.localeCompare(b.issuerId)||a.market.localeCompare(b.market));
    expect(got.streams).toEqual(sorted);

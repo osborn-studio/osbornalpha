@@ -13,7 +13,7 @@ import {canonicalJson,eventIdOf,payloadHashOf,sha256Utf8} from './canonical';
 import {pgFactsDb} from '../facts/pg-facts-db';
 import {companyDbContract} from './db-contract';
 import type {CompanyContractHarness} from './db-contract';
-import {toCompanyDbError} from './db';
+import {backlogFromJson,toCompanyDbError} from './db';
 import {pgCompanyDb,pgRpcClient} from './pg-company-db';
 import {readSnapshot,snapshotReader} from './snapshot-read';
 import {pgTableClient} from '../db/pg-table-client';
@@ -922,6 +922,13 @@ async function companyHarness():Promise<CompanyContractHarness&{pool:Pool}>{
  return {pool,db:pgCompanyDb(pool),facts:pgFactsDb(pool),
   upsertEvidence:(i,m,a,r,rows)=>inTx(pool,{role:'service_role'},async tx=>(await tx.c.query(`select public.upsert_company_fact_evidence($1,$2,$3,$4,$5::jsonb) v`,[i,m,a,r,JSON.stringify(rows)])).rows[0].v).catch(e=>{throw toCompanyDbError(e);}),
   pruneEvidence:(i,m,a,r,keep)=>inTx(pool,{role:'service_role'},async tx=>(await tx.c.query(`select public.prune_company_fact_evidence($1,$2,$3,$4,$5::uuid[]) v`,[i,m,a,r,keep])).rows[0].v).catch(e=>{throw toCompanyDbError(e);}),
+  // One statement shares one snapshot. The contract's db.backlog() call covers the role and grant path.
+  backlogBeside:async own=>{
+   const row=(await pool.query(`select public.company_digest_backlog_detail() v,
+    (select count(*)::int from public.company_digest_state where last_status='failed' and issuer_id<>all($1::uuid[])) f,
+    (select count(*)::int from public.fact_sync_scope where state_rev>0 and issuer_id<>all($1::uuid[])) a`,[own])).rows[0];
+   return {backlog:backlogFromJson(row.v),otherFailed:Number(row.f),otherActive:Number(row.a)};
+  },
   issuer:(name='ZZ Company Contract')=>fx.issuer(name),user:()=>fx.user(),
   batch:(producer='company-digest')=>fx.batch(producer,producer==='company-digest'?'company.digest':'facts.us'),
   close:async()=>{await pool.end();}};

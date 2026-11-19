@@ -9,6 +9,47 @@ import {cpLength,cpSlice} from './pages-json';
 const enc=(s:string)=>new TextEncoder().encode(s);
 const PLTR=readFileSync(fileURLToPath(new URL('../../research/ingest/__fixtures__/collectors/edgar-8k-pltr-20260803.htm',import.meta.url)));
 
+// Count work through these primitives instead of time so load is irrelevant. Direct s[i] indexing is invisible.
+function scanWork(run:()=>void):number{
+ let work=0;let depth=0;
+ const restore:(()=>void)[]=[];
+ function wrap<T>(proto:T,name:keyof T,cost:(receiver:T,args:unknown[],result:unknown,start:number)=>number){
+  const methods=proto as Record<keyof T,(this:T,...args:unknown[])=>unknown>;
+  const original=methods[name];
+  methods[name]=function(...args){
+   if(depth)return original.apply(this,args);
+   depth++;
+   try{
+    const start=this instanceof RegExp&&(this.global||this.sticky)?this.lastIndex:0;
+    const result=original.apply(this,args);
+    work+=Math.max(1,cost(this,args,result,start));
+    return result;
+   }finally{depth--;}
+  };
+  restore.push(()=>{methods[name]=original;});
+ }
+ try{
+  for(const name of ['indexOf','lastIndexOf','includes','startsWith','endsWith','slice','substring','charAt','charCodeAt','codePointAt','at','replace','replaceAll','match','matchAll','search','split','normalize','toLowerCase','toUpperCase','trim'] as const){
+   wrap(String.prototype,name,(s,args,result)=>{
+    switch(name){
+     case 'indexOf':case 'includes':{
+      const from=Math.min(s.length,Math.max(0,Math.trunc(Number(args[1]))||0));
+      return (name==='includes'||Number(result)<0?s.length:Number(result)+String(args[0]).length)-from;
+     }
+     case 'lastIndexOf':return Number(result)<0?s.length:s.length-Number(result);
+     case 'slice':case 'substring':return (result as string).length;
+     case 'charAt':case 'charCodeAt':case 'codePointAt':case 'at':return 1;
+     case 'startsWith':case 'endsWith':return String(args[0]).length;
+     default:return s.length;
+    }
+   });
+  }
+  for(const name of ['exec','test'] as const)wrap(RegExp.prototype,name,(_re,args,_result,start)=>String(args[0]).length-start);
+  run();
+ }finally{for(const reset of restore)reset();}
+ return work;
+}
+
 describe('extractHtml',()=>{
  it('splits the recorded EDGAR 8-K at its two <hr style="page-break-after:always"/> markers',()=>{
   const pages=extractHtml(PLTR);
@@ -53,22 +94,21 @@ describe('extractHtml review fixes',()=>{
   expect(extractHtml(enc('<table><tr><td>Revenue</td><td>1,234</td></tr><tr><td>Cost</td><td>(5)</td></tr></table>'))[0].text).toBe('Revenue 1,234\nCost (5)');
   expect(extractHtml(enc('<p>one\ntwo\n  three</p><p>four<br>five</p>'))[0].text).toBe('one two three\nfour\nfive');
  });
- it('unterminated tags and comments scale well below quadratic (20 KB to 160 KB)',()=>{
+ it('unterminated tags and comments cost linear work (20 KB to 160 KB), counted not timed',()=>{
   for(const piece of ['<a ','<!--','<a href="','<a b=\'','<'+'x'.repeat(3),'<script ','<p '] ){
    const small=enc(piece.repeat(Math.floor(20_000/piece.length)));
    const large=enc(piece.repeat(Math.floor(160_000/piece.length)));
-   // Warm both paths, then use the median of interleaved samples to tolerate scheduling pauses.
-   extractHtml(small);extractHtml(large);
-   const measure=(input:Uint8Array)=>{const start=performance.now();extractHtml(input);return performance.now()-start;};
-   const smallTimes:number[]=[];const largeTimes:number[]=[];
-   for(let i=0;i<7;i++){smallTimes.push(measure(small));largeTimes.push(measure(large));}
-   const median=(times:number[])=>times.sort((a,b)=>a-b)[3];
-   const smallMs=median(smallTimes);const largeMs=median(largeTimes);
-   // 8x input would cost 64x for quadratic scanning; allow 24x for runtime noise.
-   expect(largeMs/smallMs,piece).toBeLessThan(24);
-   expect(Math.max(...largeTimes),piece).toBeLessThan(2000);
+   const smallWork=scanWork(()=>{extractHtml(small);});
+   const largeWork=scanWork(()=>{extractHtml(large);});
+   expect(largeWork/smallWork,piece).toBeLessThan(12);
   }
   expect(extractHtml(enc('a < b <a href="x'))[0].text).toBe('a < b <a href="x');
+ });
+ it('the work counter sees a quadratic scanner',()=>{
+  const naive=(s:string)=>{let n=0;for(let i=s.indexOf('<');i>=0;i=s.indexOf('<',i+1)){if(s.indexOf('>',i)<0)n++;}return n;};
+  const smallWork=scanWork(()=>{naive('<a '.repeat(2_000));});
+  const largeWork=scanWork(()=>{naive('<a '.repeat(16_000));});
+  expect(largeWork/smallWork).toBeGreaterThan(40);
  });
  it('drops <ix:header> and display:none elements (nested same-name tags included)',()=>{
   const html='<div>shown</div><ix:header><ix:hidden><ix:nonNumeric>secret</ix:nonNumeric></ix:hidden></ix:header><div style="display:none"><div>hid</div>den</div><p>after</p><span style="display: none">x</span>y';

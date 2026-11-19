@@ -1,11 +1,11 @@
-import {describe,it,expect} from 'vitest';
+import {afterEach,describe,it,expect} from 'vitest';
 import {mkdtempSync,readFileSync,statSync,appendFileSync,writeFileSync,mkdirSync,chmodSync,symlinkSync} from 'node:fs';
 import {open,type FileHandle} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {canonicalize,digest} from '../ingest/pa-v1/json.js';
-import {fileAnchorStore,ZERO_HASH,type AnchorReceiptEntry,type AnchorStore} from './anchor-store';
+import {fileAnchorStore,ZERO_HASH,type AnchorReceiptEntry,type AnchorStore,type OpenFile} from './anchor-store';
 
 const scope='c'.repeat(64);
 export function syntheticEntries(count:number,start=1,previous=ZERO_HASH,ownerScope=scope):AnchorReceiptEntry[]{
@@ -17,6 +17,17 @@ export function syntheticEntries(count:number,start=1,previous=ZERO_HASH,ownerSc
   }
   return out;
 }
+const opened:FileHandle[]=[];
+const trackingOpen:OpenFile=async(path,flags,mode)=>{
+ const handle=await open(path,flags,mode);opened.push(handle);return handle;
+};
+const storeAt=(root:string)=>fileAnchorStore(root,scope,{openFile:trackingOpen});
+afterEach(async()=>{
+ // The store holds the journal open until flush, and Node turns a GC-closed FileHandle into an uncaught error.
+ const leaked=opened.splice(0).filter(handle=>handle.fd!==-1);
+ await Promise.all(leaked.map(handle=>handle.close()));
+ expect(leaked.length).toBe(0);
+});
 const root=()=>mkdtempSync(join(tmpdir(),'s4-store-'));
 
 describe('file AnchorStore',()=>{
@@ -27,14 +38,14 @@ describe('file AnchorStore',()=>{
   expect(Object.getPrototypeOf(store)).toBe(Object.prototype);
  });
  it('starts from the ZERO genesis with a 0700 directory and a 0600 journal',async()=>{
-  const r=root();const store=fileAnchorStore(r,scope);
+  const r=root();const store=storeAt(r);
   expect(await store.readCheckpoint()).toEqual({bytes:0,last_sequence:null,last_hash:ZERO_HASH});
   expect(await store.verify()).toEqual(expect.objectContaining({bytes:0,entries:0,last_hash:ZERO_HASH,last_sequence:null}));
   expect(statSync(join(r,scope)).mode&0o777).toBe(0o700);
   expect(statSync(join(r,scope,'receipts.jsonl')).mode&0o777).toBe(0o600);
  });
  it('appends canonical one-line receipts in today\'s format and reports the new tail',async()=>{
-  const r=root();const store=fileAnchorStore(r,scope);const entries=syntheticEntries(3);
+  const r=root();const store=storeAt(r);const entries=syntheticEntries(3);
   const tail=await store.appendExpected({bytes:0,last_sequence:null,last_hash:ZERO_HASH},entries);await store.flush();
   const text=readFileSync(join(r,scope,'receipts.jsonl'),'utf8');
   expect(text).toBe(entries.map(e=>canonicalize(e)+'\n').join(''));
@@ -44,7 +55,7 @@ describe('file AnchorStore',()=>{
   const verified=await store.verify();expect(verified).toEqual({...tail,entries:3,scan_ms:expect.any(Number)});
  });
  it('refuses to append against a stale tail or a broken chain and leaves the file unchanged',async()=>{
-  const r=root();const store=fileAnchorStore(r,scope);const first=syntheticEntries(2);
+  const r=root();const store=storeAt(r);const first=syntheticEntries(2);
   const tail=await store.appendExpected({bytes:0,last_sequence:null,last_hash:ZERO_HASH},first);await store.flush();
   const before=readFileSync(join(r,scope,'receipts.jsonl'));
   await expect(store.appendExpected({bytes:0,last_sequence:null,last_hash:ZERO_HASH},syntheticEntries(1,3))).rejects.toThrow('anchor_tail_moved');
@@ -54,9 +65,10 @@ describe('file AnchorStore',()=>{
   await expect(store.appendExpected(tail,syntheticEntries(1,3,tail.last_hash,'f'.repeat(64)))).rejects.toThrow('anchor_integrity_failed');
   expect(readFileSync(join(r,scope,'receipts.jsonl'))).toEqual(before);
   expect(await store.appendExpected(tail,syntheticEntries(1,3,tail.last_hash))).toEqual(expect.objectContaining({last_sequence:'3'}));
+  await store.flush();
  });
  it('fails closed on a partial last line and on a damaged hash',async()=>{
-  const r=root();const store=fileAnchorStore(r,scope);const entries=syntheticEntries(2);
+  const r=root();const store=storeAt(r);const entries=syntheticEntries(2);
   await store.appendExpected({bytes:0,last_sequence:null,last_hash:ZERO_HASH},entries);await store.flush();
   const path=join(r,scope,'receipts.jsonl');appendFileSync(path,'{"sequence":"3"');
   await expect(store.readCheckpoint()).rejects.toThrow('anchor_integrity_failed');
@@ -80,16 +92,16 @@ describe('file AnchorStore',()=>{
   expect(()=>fileAnchorStore('relative',scope)).toThrow('scope_denied');
   expect(()=>fileAnchorStore(root(),'not-a-scope-hash')).toThrow('scope_denied');
   const loose=root();mkdirSync(join(loose,scope),{mode:0o750});
-  await expect(fileAnchorStore(loose,scope).readCheckpoint()).rejects.toThrow('scope_denied');
+  await expect(storeAt(loose).readCheckpoint()).rejects.toThrow('scope_denied');
   const linked=root();mkdirSync(join(linked,scope),{mode:0o700});writeFileSync(join(linked,'real.jsonl'),'',{mode:0o600});symlinkSync(join(linked,'real.jsonl'),join(linked,scope,'receipts.jsonl'));
-  await expect(fileAnchorStore(linked,scope).readCheckpoint()).rejects.toThrow();
+  await expect(storeAt(linked).readCheckpoint()).rejects.toThrow();
   const mode=root();mkdirSync(join(mode,scope),{mode:0o700});writeFileSync(join(mode,scope,'receipts.jsonl'),'',{mode:0o600});chmodSync(join(mode,scope,'receipts.jsonl'),0o640);
-  await expect(fileAnchorStore(mode,scope).verify()).rejects.toThrow('anchor_integrity_failed');
+  await expect(storeAt(mode).verify()).rejects.toThrow('anchor_integrity_failed');
  });
  it('lets a caller inject the file handle so a stalled fsync is observable',async()=>{
   const r=root();let stalled=0;const handles:FileHandle[]=[];
   const openFile=async(path:string,flags:number,mode:number):Promise<FileHandle>=>{
-    const real=await open(path,flags,mode);handles.push(real);
+    const real=await trackingOpen(path,flags,mode);handles.push(real);
     return new Proxy(real,{get(target,key){if(key==='sync'){return()=>{stalled++;return new Promise<void>(()=>{});};}const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;}}) as FileHandle;
   };
   const store:AnchorStore=fileAnchorStore(r,scope,{openFile});

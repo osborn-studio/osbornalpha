@@ -78,7 +78,7 @@ describe('runVerify',()=>{
   expect(db.setReportFlags).not.toHaveBeenCalledWith('r-ok',expect.anything());
   const q=tables.rows('dq_quarantine').map(x=>[x.natural_key,x.reason_code]).sort();
   expect(q).toEqual([['sha-dr:span_drift:T','span_drift'],['sha-un:artifact_unreadable:-','artifact_unreadable']]);
-  expect(JSON.stringify(tables.rows('dq_quarantine'))).not.toContain('12.3');      // payload holds field names and pages only
+  expect(JSON.stringify(tables.rows('dq_quarantine').map(x=>[x.payload,x.detail]))).not.toContain('12.3');      // payload holds field names and pages only; exclude the whole-row timestamp because created_at uses the real clock
   const [batch]=tables.rows('ingest_batches');
   expect(batch).toMatchObject({producer:'broker-research-verify',status:'partial',counts:{fetched:3,inserted:1,quarantined:2,failed:0}});
   expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'broker_research',expected_cadence:'daily',consecutive_errors:0});
