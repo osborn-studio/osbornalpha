@@ -183,7 +183,17 @@ test('licence register loads the selected source and its fixed attribution',asyn
  await expect(page.getByLabel('需要署名')).toBeDisabled();
 });
 test('reviews the two copied thesis blocks in the existing editor',async({page})=>{
- await page.goto('/admin/topics/new?fromThesis=00000000-0000-4000-8000-000000000abc');await ready(page);
+ const id='00000000-0000-4000-8000-000000000abc';
+ const probes:string[]=[];
+ page.on('request',req=>{if(new URL(req.url()).pathname==='/api/admin/topics')probes.push(req.url());});
+ await page.route(`**/api/research/theses/${id}`,route=>route.fulfill({json:{
+  thesis:{id,title:'Liquidity',status:'DRAFT',invalidation_conditions:[],watch_metrics:[]},
+ }}));
+ await page.goto(`/research/theses/${id}`);
+ const link=page.getByRole('link',{name:'以此为起点新建公开专题'});
+ await expect(link).toHaveAttribute('href',`/admin/topics/new?fromThesis=${id}`);
+ expect(probes).toEqual([]);
+ await link.click();await ready(page);
  await expect(page.getByLabel('中文标题',{exact:true})).toHaveCount(0);
  await page.getByLabel('slug',{exact:true}).fill(`from-thesis-${Date.now()}`);
  await page.getByRole('button',{name:'创建专题',exact:true}).click();

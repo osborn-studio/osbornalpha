@@ -1,13 +1,16 @@
 'use client';
 import Link from 'next/link';
-import {useEffect,useState} from 'react';
+import {createContext,useContext,type ReactNode} from 'react';
 import {useTranslations} from 'next-intl';
+
+const Available=createContext(false);
+export function FromThesisLinkProvider({children}:{children:ReactNode}){
+ return <Available.Provider value={true}>{children}</Available.Provider>;
+}
 export function FromThesisLink({href}:{href:string}){
- const t=useTranslations('topicsAdmin.promotion'),[available,setAvailable]=useState(false);
- useEffect(()=>{
-  const controller=new AbortController();
-  fetch('/api/admin/topics',{signal:controller.signal,cache:'no-store'}).then(res=>setAvailable(res.status===200)).catch(()=>{});
-  return ()=>controller.abort();
- },[]);
- return available?<Link href={href} className="rounded border border-border px-2 py-1 text-sm">{t('start')}</Link>:null;
+ return useContext(Available)?<PromotionLink href={href}/>:null;
+}
+function PromotionLink({href}:{href:string}){
+ const t=useTranslations('topicsAdmin.promotion');
+ return <Link href={href} className="rounded border border-border px-2 py-1 text-sm">{t('start')}</Link>;
 }
