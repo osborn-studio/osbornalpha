@@ -1,5 +1,5 @@
-import {beforeAll,afterAll,describe,it,expect} from 'vitest';
-import {readFileSync,mkdtempSync,appendFileSync} from 'node:fs';
+import {beforeAll,afterAll,afterEach,describe,it,expect} from 'vitest';
+import {readFileSync,mkdtempSync,rmSync,appendFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -14,6 +14,11 @@ import {drainOutbox} from './anchor';
 import {digest,canonicalize} from '../ingest/pa-v1/json.js';
 import {addRecord} from './records';
 import {legacySourceVisible} from '../sources';
+const tempDirs:string[]=[];
+function tempDir(prefix:string){
+ const dir=mkdtempSync(join(tmpdir(),prefix));tempDirs.push(dir);return dir;
+}
+afterEach(()=>{for(const dir of tempDirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 const enabled=!!process.env.S4_TEST_STATE;
 describe.skipIf(!enabled)('S4 real PostgreSQL and filesystem integration',()=>{
  let admin:Pool,pack:ReturnType<typeof testPack>,id:string,revealed:any,input:DecisionInput;
@@ -96,7 +101,7 @@ describe.skipIf(!enabled)('S4 real PostgreSQL and filesystem integration',()=>{
   const a={userId:randomUUID(),kind:'agent' as const};
   await admin.query('insert into auth.users(id,email) values($1,$2)',[a.userId,a.userId+'@example.test']);await admin.query("update profiles set role='admin' where id=$1",[a.userId]);
   const p=testPack(a.userId);await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[a.userId,p.binding.approvedPayloadHash,p.binding]);await importCandidate(a,JSON.stringify(p.pack));
-  const root=mkdtempSync(join(tmpdir(),'s4-forge-test-'));
+  const root=tempDir('s4-forge-test-');
   await admin.query(`create function s4_test_ack_abort() returns trigger language plpgsql as $$ begin raise exception 'abort_ack'; end $$;create trigger s4_test_ack_abort before update on research_s4_outbox for each row execute function s4_test_ack_abort()`);
   try{await expect(drainOutbox(a,root)).rejects.toThrow('abort_ack');}finally{await admin.query('drop trigger s4_test_ack_abort on research_s4_outbox;drop function s4_test_ack_abort()');}
   const path=join(root,digest(a.userId),'receipts.jsonl'),entry=JSON.parse(readFileSync(path,'utf8'));
@@ -109,13 +114,14 @@ describe.skipIf(!enabled)('S4 real PostgreSQL and filesystem integration',()=>{
   const a={userId:randomUUID(),kind:'agent' as const};await admin.query('insert into auth.users(id,email) values($1,$2)',[a.userId,a.userId+'@example.test']);await admin.query("update profiles set role='admin' where id=$1",[a.userId]);
   const p=testPack(a.userId);await admin.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[a.userId,p.binding.approvedPayloadHash,p.binding]);const candidate=await importCandidate(a,JSON.stringify(p.pack));
   await transaction(a,async db=>{for(let i=0;i<1001;i++)await addRecord(db,a,candidate.id,'ControlEvent',{synthetic:true,index:i});});
-  const root=mkdtempSync(join(tmpdir(),'s4-page-test-'));const results=[];let left;
+  const root=tempDir('s4-page-test-');const results=[];let left;
   do{const r=await drainOutbox(a,root);results.push(r);left=r.remaining;}while(left);
   expect(results.map(r=>r.appended)).toEqual([500,500,2]);expect((await drainOutbox(a,root)).acknowledged).toBe(0);
  },30000);
  it('concurrent journal workers export once; malformed journal marks integrity failed with audit',async()=>{
-  const root=mkdtempSync(join(tmpdir(),'s4-test-journal-'));
-  const results=await Promise.all([drainOutbox(actor,root),drainOutbox(actor,root)]);expect(results.filter(r=>r.appended>0)).toHaveLength(1);
+  const root=tempDir('s4-test-journal-');
+  const drains=[drainOutbox(actor,root),drainOutbox(actor,root)];
+  const results=await Promise.all(drains).finally(()=>Promise.allSettled(drains));expect(results.filter(r=>r.appended>0)).toHaveLength(1);
   expect((await candidateStatus(actor,id)).observations.every(r=>r.anchor_status==='anchored')).toBe(true);
   const path=join(root,digest(actor.userId),'receipts.jsonl');const lines=readFileSync(path,'utf8').trim().split('\n');expect(lines.every(l=>!l.includes(pack.raw))).toBe(true);
   appendFileSync(path,'{broken}\n');await expect(drainOutbox(actor,root)).rejects.toThrow('anchor_integrity_failed');
