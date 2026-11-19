@@ -328,6 +328,14 @@
     {
       "file": "20261210091000_topics_functions.sql",
       "sha256": "04d413ab146f836537abc81c359554bf7056ba1225839aa19ff9de1d60596961"
+    },
+    {
+      "file": "20261210092000_topics_summary_functions.sql",
+      "sha256": "3ed1ae1f2ee0f6e2f89f04a632ba81b47aa7e1013994e2be2761ed81a5da9617"
+    },
+    {
+      "file": "20261210093000_usage_feature_topic_summary.sql",
+      "sha256": "d360327ca7121582b985c7537f969bb223dababf555f41d2927245c91f758b24"
     }
   ]
 }
