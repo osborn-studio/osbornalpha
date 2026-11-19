@@ -5,6 +5,11 @@ import { classifyMarket } from '@/lib/utils';
 import { createArtifact } from '@/lib/portfolio/artifacts-store';
 import { reviewEarningsQuality } from '@/lib/research/earnings-quality';
 
+// TOPICS ↓
+import { topicsEnabled } from '@/lib/topics/flags';
+import { topicDossierTool } from '@/lib/topics/copilot';
+// TOPICS ↑
+
 export interface ToolCtx { origin: string; }
 export interface AgentTool {
   name: string;
@@ -138,6 +143,9 @@ export const TOOLS: AgentTool[] = [
       });
       return { ok: true, artifact_id: artifact.id };
     } },
+  // TOPICS ↓
+  ...(topicsEnabled() ? [topicDossierTool] : []),
+  // TOPICS ↑
 ];
 
 export const TOOLS_BY_NAME: Record<string, AgentTool> = Object.fromEntries(TOOLS.map((t) => [t.name, t]));
