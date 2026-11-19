@@ -86,6 +86,54 @@ async function publish(slug:string,rows=[evRow(1)],snapshotExtra:Record<string,u
  return {...t,snap,versionId:r.rows[0].r.version_id as string,versionNo:r.rows[0].r.version_no as number};
 }
 
+it('A12/A13 leaves private research untouched through promotion and publication and blocks a source id',async()=>{
+ const {promoteThesis,thesisReader}=await import('./promote');
+ const {privateIds}=await import('./private-ids');
+ const {checkDraft,publishTopic}=await import('./publish');
+ const {scenario}=await import('./fixtures/scenario');
+ const actor=randomUUID(),thesisId=randomUUID(),sourceId=randomUUID();
+ const stamps={research_theses:'updated_at',research_memos:'updated_at',research_source_documents:'ingested_at',research_thesis_events:'created_at'};
+ const footprint=async()=>Promise.all(Object.entries(stamps).map(async([table,stamp])=>
+  (await pool.query(`select count(*)::int as n,max(${stamp})::text as stamp from public.${table} where user_id=$1`,[actor])).rows[0]));
+ await pool.query('insert into auth.users(id,email) values($1,$2)',[actor,`${actor}@example.test`]);
+ try{
+  await pool.query("insert into public.research_theses(id,user_id,title,body) values($1,$2,'Conditions','Initial conditions')",[thesisId,actor]);
+  await pool.query("insert into public.research_memos(user_id,title) values($1,'Memo')",[actor]);
+  await pool.query("insert into public.research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'NOTE','Source','Private text',$3)",[sourceId,actor,sha('Private text')]);
+  await pool.query("insert into public.research_thesis_events(user_id,thesis_id,kind) values($1,$2,'SUPPORT')",[actor,thesisId]);
+  const before=await footprint();expect(before.map(row=>row.n)).toEqual([1,1,1,1]);
+  await asRole('authenticated',async c=>{
+   await c.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)",[actor,JSON.stringify({sub:actor,role:'authenticated'})]);
+   // Exercise the production projections against real RLS rows on this connection.
+   const session={from:(table:string)=>({select:(columns:string)=>{
+    if(!Object.hasOwn(stamps,table)||!/^\w+(,\w+)*$/.test(columns))throw new Error('unexpected projection');
+    const sql=`select ${columns} from public.${table}`;
+    return {eq:(_field:string,id:string)=>({maybeSingle:async()=>({data:(await c.query(sql+' where id=$1',[id])).rows[0]??null})}),
+     order:()=>{
+      const page=(after:string|null)=>({limit:async(limit:number)=>({data:(await c.query(sql+' where ($1::uuid is null or id>$1) order by id limit $2',[after,limit])).rows})});
+      return {...page(null),gt:(_key:string,after:string)=>page(after)};
+     }};
+   }})};
+   const {deps}=await scenario();deps.db=pgTopicsDb(pool);deps.privateIds=()=>privateIds(session);
+   const {topic_id:topicId,promotion_id}=await promoteThesis({...deps,thesis:thesisReader(session)},{thesisId,slug:'rls-promotion',category:'macro',actor});
+   const draft=(await deps.db.draftOf(topicId))!,note=draft.body.entries[0];
+   if(note.entry_type!=='owner_note')throw new Error('expected promoted note');
+   draft.body.blocks_provenance={title:'reviewed','entry.from-thesis':'reviewed'};
+   draft.body.expected_slots=[{key:'industry',kind:'industry_metric',label:{en:'Industry',zh:'行业'},reason_code:'industry_not_published'}];
+   draft.body.sections=[{key:'data',title:draft.body.title,note:null,items:[{expected_slot:'industry'}]}];
+   note.body.en=sourceId;
+   const saved=await deps.db.saveDraft({topicId,body:draft.body,expectedRevision:draft.revision,actor});
+   expect((await checkDraft(deps,{topicId,actor})).blocked).toContain('private_reference');
+   note.body.en='Reviewed conditions';
+   const clean=await deps.db.saveDraft({topicId,body:draft.body,expectedRevision:saved.revision,actor});
+   expect((await checkDraft(deps,{topicId,actor})).passed).toBe(true);
+   await publishTopic(deps,{topicId,expectedDraftHash:clean.draft_hash,actor});
+   expect((await deps.db.versionsOfTopic(topicId))[0].promotion_id).toBe(promotion_id);
+  });
+  expect(await footprint()).toEqual(before);
+ }finally{await pool.query('delete from auth.users where id=$1',[actor]);}
+});
+
 it('topic_create stores the draft hash of the text it was given and rejects a reused slug (A18)',async()=>{
  const t=await draftTopic('fn-create-a');
  const d=await pool.query('select revision,draft_hash from public.topic_drafts where topic_id=$1',[t.topicId]);

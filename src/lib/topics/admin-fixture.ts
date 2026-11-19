@@ -43,6 +43,6 @@ export function adminFixtureDeps():AdminDeps{
  }});
  const sources=memorySources(allFixtures());
  const resolver=createResolver([macroResolver(sources),industryResolver(sources),factResolver(sources),citationResolver(sources),judgmentResolver(sources),brokerResolver()]);
- const deps:AdminDeps={tables:memoryTableClient(),db,resolver,lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'fixture',privateIds:async()=>new Set<string>()};
+ const deps:AdminDeps={tables:memoryTableClient(),db,resolver,lookup:memoryCandidateLookup(sources),now:()=>new Date(),codeVersion:'fixture',privateIds:async()=>(await import('./fixtures/promotion')).fixturePrivateIds()};
  globals[KEY]=deps;return deps;
 }

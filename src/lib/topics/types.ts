@@ -32,7 +32,7 @@ export type Drift=typeof DRIFTS[number];
 export interface DriftRow{version_id:string;ordinal:number;drift:Drift;current_identity:{value_text:string|null;unit:string|null;period:string|null;available_at:string|null}|null}
 export interface EvidenceRowInput{ordinal:number;kind:EvidenceKind;ref:EvidenceRef;ref_hash:string;as_of:string;state:ResolveState;digest:string|null;section_key:string}
 export interface DisclosureCheck{id:number;key:string;result:'pass'|'warn'|'block';codes:string[];detail:Record<string,unknown>}
-import type {PublicDriftRow,PublicTopicRow,PublicVersionRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicSummaryRow,TopicSummaryRunRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
+import type {PublicDriftRow,PublicTopicRow,PublicVersionRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicPromotionRow,TopicRow,TopicSettingsRow,TopicSummaryRow,TopicSummaryRunRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
 export class TopicsDbError extends Error{constructor(readonly code:string){super(code);this.name='TopicsDbError';}}
 export interface SummarySubject{topicId:string;draftHash:string;locale:'zh'|'en';manifest:Record<string,unknown>;promptVersion:string;validatorVersion:string}
 export type SummaryResult=TopicSummaryRunRow&{summary:TopicSummaryRow|null};
@@ -44,6 +44,8 @@ export interface TopicsDb{
  adminTopics():Promise<(TopicRow&{title:Bilingual;draft_revision:number;current_version_no:number|null;revised_count:number;promoted:boolean})[]>;
  draftOf(topicId:string):Promise<TopicDraftRow|null>;
  saveDraft(i:{topicId:string;expectedRevision:number;body:DraftBody;actor:string}):Promise<{revision:number;draft_hash:string}>;
+ promotionOf(topicId:string):Promise<TopicPromotionRow|null>;
+ recordPromotion(i:{topicId:string;sourceId:string;sourceContentHash:string;copied:TopicPromotionRow['copied'];stripped:TopicPromotionRow['stripped'];actor:string}):Promise<string>;
  recordDisclosure(i:{topicId:string;draftHash:string;checks:DisclosureCheck[];passed:boolean;codeVersion:string;actor:string}):Promise<string>;
  latestSummaryRun(topicId:string,locale:'zh'|'en'):Promise<Pick<TopicSummaryRunRow,'run_id'|'draft_hash'|'state'|'validation'>|null>;
  summaryById(topicId:string,summaryId:string):Promise<TopicSummaryRow|null>;

@@ -2,12 +2,13 @@
 import {randomUUID} from 'node:crypto';
 import {canonicalJson,sha256Hex} from '@/lib/evidence/hash';
 import {CATEGORIES,UNPUBLISH_REASONS,TopicsDbError,type TopicsDb,type TopicSnapshot} from './types';
-import type {PublicTopicRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicRow,TopicSettingsRow,TopicSummaryRunRow,TopicSummaryRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
+import type {PublicTopicRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicPromotionRow,TopicRow,TopicSettingsRow,TopicSummaryRunRow,TopicSummaryRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
 const copy=<T>(x:T):T=>structuredClone(x);
 const fail=(code:string):never=>{throw new TopicsDbError(code);};
 export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:Date):void}{
  let clock:Date|null=null;const now=()=> (clock??new Date()).toISOString();
  const topics:TopicRow[]=[],drafts:TopicDraftRow[]=[],versions:TopicVersionRow[]=[],evidence:TopicVersionEvidenceRow[]=[],receipts:TopicDisclosureReceiptRow[]=[],audits:TopicAuditRow[]=[],drifts:TopicEvidenceDriftRow[]=[];
+ const promotions:TopicPromotionRow[]=[];
  const runs:TopicSummaryRunRow[]=[],summaries:TopicSummaryRow[]=[];
  const result=(run:TopicSummaryRunRow)=>copy({...run,summary:summaries.find(s=>s.run_id===run.run_id)??null});
  const version=(data:unknown)=>data&&typeof data==='object'&&'validator_version' in data?data.validator_version:null;
@@ -39,7 +40,7 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    audit(topic_id,i.actor,'create',{revision:1,draft_hash});return {topic_id,revision:1,draft_hash};
   },
   async topicById(id){return copy(topics.find(t=>t.topic_id===id)??null);},
-  async adminTopics(){return copy(topics.map(t=>{const d=drafts.find(d=>d.topic_id===t.topic_id)!;return {...t,title:d.body.title,draft_revision:d.revision,current_version_no:versions.find(v=>v.version_id===t.current_version_id)?.version_no??null,revised_count:drifts.filter(d=>d.version_id===t.current_version_id&&d.drift==='revised').length,promoted:false};}));},
+  async adminTopics(){return copy(topics.map(t=>{const d=drafts.find(d=>d.topic_id===t.topic_id)!;return {...t,title:d.body.title,draft_revision:d.revision,current_version_no:versions.find(v=>v.version_id===t.current_version_id)?.version_no??null,revised_count:drifts.filter(d=>d.version_id===t.current_version_id&&d.drift==='revised').length,promoted:promotions.some(p=>p.topic_id===t.topic_id)};}));},
   async draftOf(id){return copy(drafts.find(d=>d.topic_id===id)??null);},
   async saveDraft(i){
    actor(i.actor);if(topic(i.topicId).status==='retired')fail('topic_retired');
@@ -47,6 +48,14 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    const body_text=canonicalJson(i.body),draft_hash=sha256Hex(body_text);
    Object.assign(d,{revision:d.revision+1,body:JSON.parse(body_text),body_text,draft_hash,updated_by:i.actor,updated_at:now()});
    audit(i.topicId,i.actor,'draft_save',{revision:d.revision,draft_hash});return {revision:d.revision,draft_hash};
+  },
+  async promotionOf(id){return copy(promotions.find(p=>p.topic_id===id)??null);},
+  async recordPromotion(i){
+   actor(i.actor);topic(i.topicId);
+   const promotion_id=randomUUID();
+   promotions.push({promotion_id,topic_id:i.topicId,source_kind:'research_thesis',source_id:i.sourceId,source_content_hash:i.sourceContentHash,
+    copied:copy(i.copied),stripped:copy(i.stripped),actor:i.actor,created_at:now()});
+   audit(i.topicId,i.actor,'promote',{promotion_id});return promotion_id;
   },
   async recordDisclosure(i){
    actor(i.actor);topic(i.topicId);const receipt_id=randomUUID();
@@ -152,7 +161,7 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    }
    const cutoff=new Date(i.cutoff).toISOString(),version_id=randomUUID(),version_no=Math.max(0,...versions.filter(v=>v.topic_id===i.topicId).map(v=>v.version_no))+1;
    const rows=i.evidence.map(e=>({...copy(e),version_id,as_of:new Date(e.as_of).toISOString()}));
-   versions.push({version_id,topic_id:i.topicId,version_no,contract_version:'evidence-ref/1',cutoff,snapshot,snapshot_text:i.snapshotText,snapshot_hash:sha256Hex(i.snapshotText),summary_id:i.summaryId,disclosure_receipt_id:i.receiptId,promotion_id:null,published_at:now(),published_by:i.actor,supersedes_version_id:t.current_version_id,unpublished_at:null,unpublish_reason:null});
+   versions.push({version_id,topic_id:i.topicId,version_no,contract_version:'evidence-ref/1',cutoff,snapshot,snapshot_text:i.snapshotText,snapshot_hash:sha256Hex(i.snapshotText),summary_id:i.summaryId,disclosure_receipt_id:i.receiptId,promotion_id:promotions.find(p=>p.topic_id===i.topicId)?.promotion_id??null,published_at:now(),published_by:i.actor,supersedes_version_id:t.current_version_id,unpublished_at:null,unpublish_reason:null});
    evidence.push(...rows);t.current_version_id=version_id;t.status='published';
    audit(i.topicId,i.actor,'publish',{version_no,evidence:rows.length,receipt_id:i.receiptId});return {version_id,version_no};
   },

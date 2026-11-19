@@ -189,3 +189,19 @@ it('gates all summary operations before dependencies and scopes decisions to the
   const result=await route(req({}),decide(topicId,id));expect(result.status).toBe(200);expect(await result.json()).toEqual({status});
  }
 });
+
+it('gates thesis promotion before opening dependencies and hides unreadable theses',async()=>{
+ const {POST:promote}=await import('./from-thesis/route');
+ const {AdminUnauthenticated,AdminForbidden}=await import('@/lib/admin/auth');
+ const run=()=>promote(req({thesis_id:actor,slug:'from-private',category:'macro'}),{});
+ vi.clearAllMocks();vi.stubEnv('TOPICS_ENABLED',undefined);
+ const disabled=await run();expect(disabled.status).toBe(404);expect((await disabled.json()).error.code).toBe('topics_disabled');
+ expect(requireAdminUser).not.toHaveBeenCalled();expect(adminDeps).not.toHaveBeenCalled();
+ vi.stubEnv('TOPICS_ENABLED','1');
+ vi.mocked(requireAdminUser).mockRejectedValueOnce(new AdminUnauthenticated()).mockRejectedValueOnce(new AdminForbidden());
+ expect((await run()).status).toBe(401);expect((await run()).status).toBe(403);expect(adminDeps).not.toHaveBeenCalled();
+ const deps=await adminDeps();
+ vi.spyOn(await import('@/lib/research/store'),'requireResearchUser').mockResolvedValue({userId:actor,supabase:{from:()=>({select:()=>({eq:()=>({maybeSingle:async()=>({data:null,error:null})})})})}});
+ const missing=await run();expect(missing.status).toBe(404);expect((await missing.json()).error.code).toBe('not_found');
+ expect(await deps.db.adminTopics()).toEqual([]);
+});

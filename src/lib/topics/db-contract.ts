@@ -33,6 +33,14 @@ export function topicsDbContract(label:string,setup:()=>Promise<TopicsContractHa
    const h=await setup();const t=await h.db.createTopic({slug:`${label}-c1`,category:'macro',body:body('a'),actor});
    expect(t.revision).toBe(1);expect(t.draft_hash).toBe(sha256Hex(canonicalJson(body('a'))));
   });
+  it('records promotion provenance and audits only the promotion id',async()=>{
+   const h=await setup(),t=await h.db.createTopic({slug:`${label}-promotion`,category:'macro',body:body('text'),actor});
+   const sourceId=h.newId(),sourceContentHash=sha256Hex('text'),copied={fields:['title','body'] as ['title','body'],at:new Date().toISOString()},stripped=[{field:'status',count:null}];
+   const id=await h.db.recordPromotion({topicId:t.topic_id,sourceId,sourceContentHash,copied,stripped,actor});
+   expect(await h.db.promotionOf(t.topic_id)).toMatchObject({promotion_id:id,source_id:sourceId,source_content_hash:sourceContentHash,copied,stripped});
+   expect((await h.db.adminTopics()).find(row=>row.topic_id===t.topic_id)?.promoted).toBe(true);
+   expect((await h.db.auditOf(t.topic_id)).at(-1)?.detail).toEqual({promotion_id:id});
+  });
   it('rejects a reused slug with slug_taken',async()=>{
    const h=await setup();await h.db.createTopic({slug:`${label}-c2`,category:'macro',body:body('a'),actor});
    await expect(h.db.createTopic({slug:`${label}-c2`,category:'macro',body:body('b'),actor})).rejects.toEqual(new TopicsDbError('slug_taken'));

@@ -5,6 +5,7 @@ import {serviceDeps} from './deps';
 import type {Resolver} from '@/lib/evidence/resolve';
 import {resolveCodeVersion} from '@/lib/judgments/deps';
 import {productionCandidateLookup,type CandidateLookup} from './evidence-search';
+import {privateIds,researchSession} from './private-ids';
 import type {TopicsDb} from './types';
 import {adminFixtureMode} from './admin-fixture-mode';
 export {adminFixtureMode,FIXTURE_ADMIN_ID} from './admin-fixture-mode';
@@ -13,5 +14,5 @@ export async function adminDeps():Promise<AdminDeps>{
  if(adminFixtureMode())return (await import('./admin-fixture')).adminFixtureDeps();
  let codeVersion:string|null=null;
  try{codeVersion=resolveCodeVersion({allowGit:false})||null;}catch{/* Unavailable until deployment supplies a version. */}
- return {...serviceDeps(),lookup:productionCandidateLookup({admin:getAdminSupabase()}),codeVersion,privateIds:async()=>new Set<string>()};
+ return {...serviceDeps(),lookup:productionCandidateLookup({admin:getAdminSupabase()}),codeVersion,privateIds:async actor=>privateIds(await researchSession(actor))};
 }

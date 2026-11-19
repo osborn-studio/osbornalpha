@@ -24,7 +24,7 @@ it('shares a seeded database across calls and module reloads',async()=>{
  expect(draft.body.sections[0].note!.zh).toContain('{{ev:1.period}}');expect(draft.body.sections[0].note!.zh).toContain('{{ev:1}}');
  const company=topics.find(t=>t.topic_slug==='cn-company')!;expect(company.category).toBe('company');
  expect((await a.db.draftOf(company.topic_id))!.body.evidence).toEqual([]);
- expect(a.codeVersion).toBe('fixture');expect(await a.privateIds('user')).toEqual(new Set());
+ expect(a.codeVersion).toBe('fixture');expect(await a.privateIds('user')).toEqual(new Set(['00000000-0000-4000-8000-000000000abc']));
  expect(Math.abs(a.now().getTime()-Date.now())).toBeLessThan(1000);
  vi.resetModules();expect((await import('./admin-fixture')).adminFixtureDeps().db).toBe(a.db);
 });
