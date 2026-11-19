@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -10,12 +12,12 @@ const TABLE='public.research_source_documents';
 
 describe.skipIf(!enabled)('WP-A1 source extension on real PostgreSQL',()=>{
  let admin:Pool;const userId=randomUUID();
- const insertLegacy=async(sourceType:string,text:string)=>{
+ const insertLegacy=async(sourceType:string,text:string,pool=admin)=>{
   const id=randomUUID();
-  await admin.query(`insert into ${TABLE}(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,$3,$4,$5,$6)`,[id,userId,sourceType,`t ${text}`,text,`hash-${randomUUID()}`]);
+  await pool.query(`insert into ${TABLE}(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,$3,$4,$5,$6)`,[id,userId,sourceType,`t ${text}`,text,`hash-${randomUUID()}`]);
   return id;
  };
- const row=async(id:string)=>(await admin.query(`select * from ${TABLE} where id=$1`,[id])).rows[0];
+ const row=async(id:string,pool=admin)=>(await pool.query(`select * from ${TABLE} where id=$1`,[id])).rows[0];
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   admin=new Pool({connectionString:state.adminUrl});
@@ -28,24 +30,31 @@ describe.skipIf(!enabled)('WP-A1 source extension on real PostgreSQL',()=>{
   expect(columns.map((c:any)=>c.column_name).sort()).toEqual(['available_at','cluster_first','cluster_id','event_time','market','origin_type','permission','source_version']);
   expect(columns.find((c:any)=>c.column_name==='available_at').is_nullable).toBe('NO');
   expect(columns.find((c:any)=>c.column_name==='permission').is_nullable).toBe('NO');
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('backfills legacy-shaped rows: availability from ingestion, permission by type, market unknown',async()=>{
-  const news=await row(await insertLegacy('NEWS','news body'));
-  expect(news.available_at.toISOString()).toBe(news.ingested_at.toISOString());
-  expect(news).toMatchObject({source_version:'1',permission:'public',market:null,cluster_id:null,cluster_first:null,origin_type:null,event_time:null});
-  // NOTE/MANUAL inserted through the legacy path are private from the insert
-  // trigger; replaying the migration (backfill included) changes nothing.
-  const note=await row(await insertLegacy('NOTE','note body'));
-  expect(note.permission).toBe('private');
-  await admin.query(readFileSync(MIGRATION,'utf8'));
-  expect((await row(note.id)).permission).toBe('private');
-  expect((await row(news.id)).permission).toBe('public');
-  // pg returns timestamptz as Date; rowToSource passes values through unchanged.
-  const mapped=rowToSource(await row(news.id));
-  expect(mapped).toMatchObject({available_at:news.available_at,source_version:'1',permission:'public',market:null,origin_type:null,event_time:null});
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await fresh.pool.query('insert into auth.users(id,email) values($1,$2)',[userId,`${userId}@example.test`]);
+   const news=await row(await insertLegacy('NEWS','news body',fresh.pool),fresh.pool);
+   expect(news.available_at.toISOString()).toBe(news.ingested_at.toISOString());
+   expect(news).toMatchObject({source_version:'1',permission:'public',market:null,cluster_id:null,cluster_first:null,origin_type:null,event_time:null});
+   // NOTE/MANUAL inserted through the legacy path are private from the insert
+   // trigger; replaying the migration (backfill included) changes nothing.
+   const note=await row(await insertLegacy('NOTE','note body',fresh.pool),fresh.pool);
+   expect(note.permission).toBe('private');
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+   expect((await row(note.id,fresh.pool)).permission).toBe('private');
+   expect((await row(news.id,fresh.pool)).permission).toBe('public');
+   // pg returns timestamptz as Date; rowToSource passes values through unchanged.
+   const mapped=rowToSource(await row(news.id,fresh.pool));
+   expect(mapped).toMatchObject({available_at:news.available_at,source_version:'1',permission:'public',market:null,origin_type:null,event_time:null});
+  }finally{await fresh.drop();}
+ },60000);
 
  it('defaults every writer at insert time: permission by type, availability from the explicit ingestion instant',async()=>{
   // The S4 import writer inserts MANUAL rows with an explicit ingested_at and no permission.

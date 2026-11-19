@@ -9,6 +9,8 @@
 // every scenario uses a private classification version 't…' with its own licence row; only the
 // marks scenario toggles a real licence row (marks:tushare-daily_basic) and restores it. Rows are
 // never cleaned up (memberships are append-only; test:db uses a fresh database per run).
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -24,23 +26,6 @@ const LICENSED=['industry_classifications','issuer_industry_memberships','indust
 const SERVICE_ONLY=TABLES.filter(t=>!LICENSED.includes(t));
 const hex=(n:number)=>randomBytes(n).toString('hex');
 
-// Same replay policy as facts.integration.test.ts (not exported there): one transaction, short
-// lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 type PgErr={message:string;code?:string};
 /** Resolves with the rejection (message + SQLSTATE) so tests can assert both. */
 const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
@@ -93,16 +78,18 @@ describe.skipIf(!enabled)('I-0 industry research migration on real PostgreSQL',(
   expect(rows.map(r=>r.relname).sort()).toEqual([...TABLES].sort());
   for(const r of rows)expect({t:r.relname,rls:r.relrowsecurity,force:r.relforcerowsecurity}).toEqual({t:r.relname,rls:true,force:false});
   expect(await q(`select id,public,file_size_limit,allowed_mime_types from storage.buckets where id='industry-manifests'`)).toEqual([{id:'industry-manifests',public:false,file_size_limit:'20971520',allowed_mime_types:['application/gzip']}]);
-  expect(await q(`select dataset_key,status from public.industry_dataset_licenses where dataset_key=any($1) order by dataset_key`,[['scheme:sw2021:2021','scheme:sic:sec-current','marks:tushare-daily_basic','official:tushare-sw_daily']]))
-   .toEqual([{dataset_key:'marks:tushare-daily_basic',status:expect.any(String)},{dataset_key:'official:tushare-sw_daily',status:'internal'},{dataset_key:'scheme:sic:sec-current',status:'public'},{dataset_key:'scheme:sw2021:2021',status:'internal'}]);
   expect(await one(`select count(*)::int v from pg_indexes where schemaname='public' and indexname='issuers_cninfo_idx'`)).toBe(1);   // V11: reused, no twin
   expect(await one(`select count(*)::int v from pg_indexes where schemaname='public' and tablename='issuers' and indexdef like '%cninfo_org_id%'`)).toBe(1);
-  const d='industry.test-'+hex(4);
-  await q(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[d]);
-  expect((await fails(q(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'hourly','missing')`,[d+'x']))).message).toMatch(/dq_freshness_expected_cadence_check/);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
-  expect(await one(`select status v from public.industry_dataset_licenses where dataset_key='scheme:sic:sec-current'`)).toBe('public');
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   expect((await fresh.pool.query(`select dataset_key,status from public.industry_dataset_licenses where dataset_key=any($1) order by dataset_key`,[['scheme:sw2021:2021','scheme:sic:sec-current','marks:tushare-daily_basic','official:tushare-sw_daily']])).rows)
+    .toEqual([{dataset_key:'marks:tushare-daily_basic',status:expect.any(String)},{dataset_key:'official:tushare-sw_daily',status:'internal'},{dataset_key:'scheme:sic:sec-current',status:'public'},{dataset_key:'scheme:sw2021:2021',status:'internal'}]);
+   const d='industry.test-'+hex(4);
+   await fresh.pool.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'weekly','missing')`,[d]);
+   expect((await fails(fresh.pool.query(`insert into public.dq_freshness(dataset,expected_cadence,status) values($1,'hourly','missing')`,[d+'x']))).message).toMatch(/dq_freshness_expected_cadence_check/);
+   await expect(replayFiles(fresh.pool,[MIGRATION,MIGRATION])).resolves.toBeUndefined();
+   expect((await fresh.pool.query(`select status v from public.industry_dataset_licenses where dataset_key='scheme:sic:sec-current'`)).rows[0].v).toBe('public');
+  }finally{await fresh.drop();}
  },60000);
 
  it('issuer_industry_memberships: old exclusion dropped, membership_id primary key, deferrable successor FK, both classification FKs, partial key and per-level exclusion over ok rows',async()=>{

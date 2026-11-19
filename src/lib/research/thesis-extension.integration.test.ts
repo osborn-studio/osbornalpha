@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -10,14 +12,14 @@ const sha=(s:string)=>createHash('sha256').update(s).digest('hex');
 
 describe.skipIf(!enabled)('WP-A7 thesis extension on real PostgreSQL',()=>{
  let admin:Pool;const owner=randomUUID();
- const insertThesis=async(over:Record<string,unknown>={})=>{
+ const insertThesis=async(over:Record<string,unknown>={},pool=admin)=>{
   const id=randomUUID();
   const cols={id,user_id:owner,title:'t',body:'b',invalidation_conditions:JSON.stringify(['k1']),watch_metrics:JSON.stringify(['m1']),...over};
   const keys=Object.keys(cols);
-  await admin.query(`insert into ${T}(${keys.join(',')}) values(${keys.map((_,i)=>'$'+(i+1)).join(',')})`,Object.values(cols));
+  await pool.query(`insert into ${T}(${keys.join(',')}) values(${keys.map((_,i)=>'$'+(i+1)).join(',')})`,Object.values(cols));
   return id;
  };
- const row=async(id:string)=>(await admin.query(`select * from ${T} where id=$1`,[id])).rows[0];
+ const row=async(id:string,pool=admin)=>(await pool.query(`select * from ${T} where id=$1`,[id])).rows[0];
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));admin=new Pool({connectionString:state.adminUrl});
   await admin.query('insert into auth.users(id,email) values($1,$2)',[owner,`${owner}@example.test`]);
@@ -25,11 +27,15 @@ describe.skipIf(!enabled)('WP-A7 thesis extension on real PostgreSQL',()=>{
  afterAll(async()=>{await admin?.end();});
 
  it('adds the §5.3 columns with defaults and replays without error',async()=>{
-  const r=await row(await insertThesis());
-  expect(r).toMatchObject({opportunity_type:'other',pillars:[],catalysts:[],horizon_weeks:[4,13,26],supersedes:null,kill_condition_revisions:[]});
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
-  expect(await row(r.id)).toMatchObject({opportunity_type:'other',horizon_weeks:[4,13,26]});
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await fresh.pool.query('insert into auth.users(id,email) values($1,$2)',[owner,`${owner}@example.test`]);
+   const r=await row(await insertThesis({},fresh.pool),fresh.pool);
+   expect(r).toMatchObject({opportunity_type:'other',pillars:[],catalysts:[],horizon_weeks:[4,13,26],supersedes:null,kill_condition_revisions:[]});
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+   expect(await row(r.id,fresh.pool)).toMatchObject({opportunity_type:'other',horizon_weeks:[4,13,26]});
+  }finally{await fresh.drop();}
+ },60000);
 
  it('rejects values outside the contract',async()=>{
   const id=await insertThesis();

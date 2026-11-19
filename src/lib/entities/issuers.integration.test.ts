@@ -1,4 +1,6 @@
 // src/lib/entities/issuers.integration.test.ts
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -6,8 +8,7 @@ import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261105091000_issuers.sql';
-// INDUSTRY:BEGIN — 20261111090000 replaces the two industry tables' public-read policies and service_role writes; a replay of
-// the issuers migration re-creates them, so the replay below re-applies the industry migration in the same transaction.
+// INDUSTRY:BEGIN — The industry migration reinstates the licence-gated policies after the issuers migration.
 const INDUSTRY_MIGRATION='supabase/migrations/20261111090000_industry_research.sql';
 // INDUSTRY:END
 const TABLES=['issuers','issuer_securities','issuer_identifier_claims','industry_classifications','issuer_industry_memberships'];
@@ -15,25 +16,6 @@ const PUBLIC_TABLES=TABLES.filter(t=>t!=='issuer_identifier_claims');
 const hex=(n:number)=>randomBytes(n).toString('hex').toUpperCase();
 const randomCik=()=>String(1+Math.floor(Math.random()*9))+String(Math.floor(Math.random()*1e9)).padStart(9,'0');
 
-// Replays a migration in one transaction with a short lock_timeout, retrying lock timeouts
-// (55P03) and deadlocks (40P01). The issuers migration alters research_entity_keys and
-// research_entity_securities, which other DB suites use concurrently; without a timeout the ALTER
-// would queue behind (and block) their locks.
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));   // jittered backoff: other suites hold locks on the shared DB
-  }finally{c.release();}
- }
-}
 
 describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
  let admin:Pool;
@@ -110,23 +92,29 @@ describe.skipIf(!enabled)('WP-F1a issuers on real PostgreSQL',()=>{
 
  // INDUSTRY:BEGIN — title changed (was 'public-read policies on four'): licence-gated reads on the industry tables (20261111090000)
  it('creates five tables with RLS, public-read policies on issuers and securities, licensed-read policies on the industry tables, none on claims, link columns, and replays',async()=>{
-  const rows=(await admin.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
-  expect(rows.map((r:{relname:string})=>r.relname).sort()).toEqual([...TABLES].sort());
-  for(const r of rows) expect(r.relrowsecurity).toBe(true);
-  // INDUSTRY:END
-  // INDUSTRY:BEGIN — ordered by policyname too; 20261111090000: licence-gated reads and service_role policies on the two industry tables
-  const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename,policyname`,[TABLES])).rows;
-  expect(policies).toEqual([
-   {tablename:'industry_classifications',policyname:'industry_classifications licensed read'},{tablename:'industry_classifications',policyname:'industry_classifications service insert'},
-   {tablename:'industry_classifications',policyname:'industry_classifications service read'},{tablename:'industry_classifications',policyname:'industry_classifications service update'},
-   {tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships licensed read'},{tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships service read'},
-   {tablename:'issuer_securities',policyname:'issuer_securities public read'},{tablename:'issuers',policyname:'issuers public read'}]);
-  // INDUSTRY:END
-  const cols=(await admin.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and ((table_name='research_entity_keys' and column_name='issuer_id') or (table_name='research_entity_securities' and column_name='ticker')) order by table_name`)).rows;
-  expect(cols).toEqual([{table_name:'research_entity_keys',column_name:'issuer_id',data_type:'uuid'},{table_name:'research_entity_securities',column_name:'ticker',data_type:'text'}]);
-  // INDUSTRY:BEGIN — replaces `await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();`: one transaction; issuers is locked first so a concurrent apply_industry_memberships (issuers row → memberships) waits instead of deadlocking
-  await expect(replayMigration(admin,'lock table public.issuers in access exclusive mode;\n'+readFileSync(MIGRATION,'utf8')+'\n;\n'+readFileSync(INDUSTRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
-  // INDUSTRY:END
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   const admin=fresh.pool;
+   const id=randomUUID();
+   await admin.query("insert into public.issuers(issuer_id,canonical_name_en) values($1,'Test Co')",[id]);
+   const rows=(await admin.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
+   expect(rows.map((r:{relname:string})=>r.relname).sort()).toEqual([...TABLES].sort());
+   for(const r of rows) expect(r.relrowsecurity).toBe(true);
+   // INDUSTRY:END
+   // INDUSTRY:BEGIN — ordered by policyname too; 20261111090000: licence-gated reads and service_role policies on the two industry tables
+   const policies=(await admin.query(`select tablename,policyname from pg_policies where schemaname='public' and tablename=any($1) order by tablename,policyname`,[TABLES])).rows;
+   expect(policies).toEqual([
+    {tablename:'industry_classifications',policyname:'industry_classifications licensed read'},{tablename:'industry_classifications',policyname:'industry_classifications service insert'},
+    {tablename:'industry_classifications',policyname:'industry_classifications service read'},{tablename:'industry_classifications',policyname:'industry_classifications service update'},
+    {tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships licensed read'},{tablename:'issuer_industry_memberships',policyname:'issuer_industry_memberships service read'},
+    {tablename:'issuer_securities',policyname:'issuer_securities public read'},{tablename:'issuers',policyname:'issuers public read'}]);
+   // INDUSTRY:END
+   const cols=(await admin.query(`select table_name,column_name,data_type from information_schema.columns where table_schema='public' and ((table_name='research_entity_keys' and column_name='issuer_id') or (table_name='research_entity_securities' and column_name='ticker')) order by table_name`)).rows;
+   expect(cols).toEqual([{table_name:'research_entity_keys',column_name:'issuer_id',data_type:'uuid'},{table_name:'research_entity_securities',column_name:'ticker',data_type:'text'}]);
+   // In a private database the two files can run in order in separate transactions.
+   await expect(replayFiles(fresh.pool,[MIGRATION,INDUSTRY_MIGRATION])).resolves.toBeUndefined();
+   expect((await admin.query('select canonical_name_en from public.issuers where issuer_id=$1',[id])).rows).toEqual([{canonical_name_en:'Test Co'}]);
+  }finally{await fresh.drop();}
  },60000);
 
  it('enforces named issuer constraints',async()=>{

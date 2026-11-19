@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase} from '../../documents/fresh-db';
 import {addRecord} from '../s4/records';
 import {loadArmEvaluationHistory} from './arm-evaluation-read';
 import {verifyArmEvaluationBatch} from './arm-evaluations';
@@ -6,7 +8,7 @@ import {beforeAll,afterAll,describe,it,expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {randomUUID,randomBytes,generateKeyPairSync,sign} from 'node:crypto';
 import {createServer,request as httpRequest,type Server} from 'node:http';
-import {Pool} from 'pg';
+import {Pool,type PoolClient} from 'pg';
 import {registerCandidateReference} from '../revocation/register';
 import {applyRevocationPage} from '../revocation/consumer';
 import {canonicalize} from '../ingest/pa-v1/json.js';
@@ -149,11 +151,29 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
   await expect(createS6Store(actor).commitEvaluationResult(late)).rejects.toMatchObject({code:'evaluation_intent_cancelled'});
   expect(await counts()).toEqual(cancelled);
  });
- it.each(['valid','missing','kind','duplicate'])('rehearses cancellation upgrade against legacy %s history atomically',async mode=>{
-  const db=await admin.connect();
+ async function withLegacyHistory(file:string,body:(db:PoolClient)=>Promise<void>){
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl,file);
   try{
-   await db.query('begin');
-   await db.query('drop index research_s6_intent_cancel_owner_key;alter table research_s4_records drop constraint research_s6_intent_cancel_shape');
+   const db=await fresh.pool.connect();
+   try{
+    await db.query('begin');
+    const src=randomUUID(),ver=randomUUID(),hash=digest(candidate);
+    await db.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,actor.userId+'@example.test']);
+    await db.query("insert into research_source_documents(id,user_id,source_type,title,raw_text,content_hash) values($1,$2,'MANUAL','t','b',$3)",[src,actor.userId,hash]);
+    await db.query("insert into research_source_versions(user_id,id,source_document_id,version_identity,source_key,source_ref,source_version) values($1,$2,$3,'v','k','{}','{}')",[actor.userId,ver,src]);
+    await db.query('insert into research_s4_bindings(user_id,payload_hash,binding) values($1,$2,$3)',[actor.userId,hash,{localUserId:actor.userId,approvedPayloadHash:hash}]);
+    await db.query("insert into research_s4_candidates(user_id,id,source_version_id,external_candidate_id,payload_hash,imported) values($1,$2,$3,$4,$5,'{}')",[actor.userId,candidate,ver,randomUUID(),hash]);
+    const history=(await admin.query('select json_agg(r)::text records from research_s4_records r where user_id=$1 and candidate_id=$2',[actor.userId,candidate])).rows[0].records;
+    await db.query('insert into research_s4_records select * from json_populate_recordset(null::research_s4_records,$1)',[history]);
+    await body(db);
+   }finally{try{await db.query('rollback');}finally{db.release(true);}}
+  }finally{await fresh.drop();}
+ }
+ it.each(['valid','missing','kind','duplicate'])('rehearses cancellation upgrade against legacy %s history atomically',async mode=>{
+  const file='20261005165000_evaluation_intent_cancel.sql';
+  await withLegacyHistory(file,async db=>{
+   const valid={type:'evaluation.intent_cancel',observation_ref:id,idempotency_key:randomUUID(),actor_ref:actor.userId,actor_kind:actor.kind};
+   await db.query("insert into research_s4_records(user_id,id,candidate_id,kind,payload,payload_hash) values($1,$2,$3,'ControlEvent',$4,$5)",[actor.userId,randomUUID(),candidate,valid,digest(valid)]);
    const row=(await db.query("select * from research_s4_records where user_id=$1 and payload->>'type'='evaluation.intent_cancel' limit 1",[actor.userId])).rows[0];
    if(mode!=='valid'){
     const payload={...row.payload};if(mode==='missing')delete payload.observation_ref;if(mode==='kind')payload.actor_kind='system';
@@ -167,20 +187,18 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
    expect(issues).toHaveLength(mode==='valid'?0:mode==='duplicate'?2:1);
    if(mode!=='valid')expect(issues.every(r=>mode==='duplicate'?r.duplicate_key:r.invalid_shape)).toBe(true);
    const before=await snapshot();await db.query('savepoint legacy');
-   // Run exact DDL inside a savepoint to preserve the intentionally bad pre-state
-   // for inspection; outer rollback restores the shared disposable test schema.
-   const ddl=readFileSync('supabase/migrations/20261005165000_evaluation_intent_cancel.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   // Keep rejected legacy rows visible after the DDL fails.
+   const ddl=readFileSync('supabase/migrations/'+file,'utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
    if(mode==='valid')await db.query(ddl);
    else{await expect(db.query(ddl)).rejects.toMatchObject({code:mode==='duplicate'?'23505':'23514'});await db.query('rollback to savepoint legacy');}
    expect(await snapshot()).toEqual(before);
    const schema=(await db.query("select exists(select 1 from pg_constraint where conname='research_s6_intent_cancel_shape') as shape,to_regclass('public.research_s6_intent_cancel_owner_key') is not null as idx")).rows[0];
    expect(schema).toEqual({shape:mode==='valid',idx:mode==='valid'});
-  }finally{try{await db.query('rollback');}finally{db.release(true);}}
- });
+  });
+ },60000);
  it.each(['valid','missing','null','string','fraction','negative','overflow','gap','duplicate','request_key_number','request_key_format','observation_upper','actor_ref_foreign','actor_kind_system'])('rehearses fence constraint over legacy %s history',async mode=>{
-  const db=await admin.connect();
-  try{
-   await db.query('begin');await db.query('drop index research_s6_intent_fence_owner_key;alter table research_s4_records drop constraint research_s6_intent_fence_shape');
+  const file='20261005175000_evaluation_intent_fence.sql';
+  await withLegacyHistory(file,async db=>{
    const payload:Record<string,unknown>={type:'evaluation.intent_fence',observation_ref:id,request_key:randomUUID(),previous_revision:1,revision:2,actor_ref:actor.userId,actor_kind:'agent'};
    if(mode==='missing')delete payload.previous_revision;if(mode==='null')payload.revision=null;if(mode==='string')payload.revision='2';
    if(mode==='fraction')payload.revision=2.5;if(mode==='negative')payload.previous_revision=-1;
@@ -195,14 +213,14 @@ describe.skipIf(!process.env.S4_TEST_STATE)('S6 authoritative PostgreSQL store',
    const issues=reports.filter(r=>r.command==='SELECT')[0].rows;expect(issues).toHaveLength(mode==='valid'?0:mode==='duplicate'?2:1);
    if(mode!=='valid')expect(issues.every(r=>mode==='duplicate'?r.duplicate_key:r.invalid_shape)).toBe(true);
    await db.query('savepoint legacy');
-   const ddl=readFileSync('supabase/migrations/20261005175000_evaluation_intent_fence.sql','utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
+   const ddl=readFileSync('supabase/migrations/'+file,'utf8').replace(/^begin;$/m,'').replace(/^commit;$/m,'');
    if(mode==='valid')await db.query(ddl);
    else{await expect(db.query(ddl)).rejects.toMatchObject({code:mode==='duplicate'?'23505':'23514',constraint:mode==='duplicate'?'research_s6_intent_fence_owner_key':'research_s6_intent_fence_shape'});await db.query('rollback to savepoint legacy');}
    expect((await db.query("select id,payload,payload_hash from research_s4_records where user_id=$1 order by id",[actor.userId])).rows).toEqual(before);
    expect((await db.query("select exists(select 1 from pg_constraint where conname='research_s6_intent_fence_shape') as shape,to_regclass('public.research_s6_intent_fence_owner_key') is not null as idx")).rows[0]).toEqual({shape:mode==='valid',idx:mode==='valid'});
    if(mode==='valid'){await db.query('savepoint live');await expect(insert({...payload,request_key:'bad.key'})).rejects.toMatchObject({code:'23514',constraint:'research_s6_intent_fence_shape'});await db.query('rollback to savepoint live');}
-  }finally{try{await db.query('rollback');}finally{db.release(true);}}
- });
+  });
+ },60000);
  it.each(['cancellation','fence'])('preflight %s refuses RLS-filtered runtime visibility',async name=>{
   const sql=readFileSync('scripts/s6/'+name+'-preflight.sql','utf8').replace(/^begin read only;$/m,'').replace(/^rollback;$/m,'');
   await expect(transaction(actor,db=>db.query(sql))).rejects.toMatchObject({code:'42501'});

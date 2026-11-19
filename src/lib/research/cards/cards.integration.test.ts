@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -27,8 +29,11 @@ describe.skipIf(!enabled)('WP-A8 research_cards on real PostgreSQL',()=>{
   expect(rls.relrowsecurity).toBe(true);
   const policies=(await admin.query(`select policyname from pg_policies where tablename='research_cards'`)).rows.map((p:any)=>p.policyname).sort();
   expect(policies).toEqual(['research_cards self insert','research_cards self select']);
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('enforces one card per (owner, week, thesis, kind) and the value contracts',async()=>{
   await insert();

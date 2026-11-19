@@ -7,7 +7,10 @@
 // T5, U3), restore_reconciled (R1), resolve_lineage_conflict, the reconcile cursor and
 // apply_reconcile_result (T2), grants. Every test owns its issuers (and its `test.<hex>` pair), so
 // suites running in parallel on the shared database never meet.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
+import {basename} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
@@ -23,20 +26,7 @@ const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261107091000_facts_extensions.sql';
 const PLAN2='supabase/migrations/20261106090000_financial_facts.sql';
 
-// Same replay policy as facts.integration.test.ts (not exported there).
 const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);return;}
-  catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 /** body inside one transaction that is ALWAYS rolled back; retried on lock timeout / deadlock (body must be repeatable). */
 async function inRolledBackTx(pool:Pool,body:(c:PoolClient)=>Promise<void>,attempts=10):Promise<void>{
  for(let attempt=1;;attempt++){
@@ -77,12 +67,10 @@ type FactSpec={filing_id:string;fact_id?:string;concept?:string;period_start?:st
 type Envelope={state_rev:number;rows:Record<string,unknown>[];truncated:boolean;row_count:number};
 type LineageEnvelope={state_revs:{issuer_id:string;state_rev:number}[];lineage:string[];rows:Record<string,unknown>[];conflicts:{key:Record<string,string|null>;available_date:string;fact_ids:string[]}[];truncated:boolean;row_count:number};
 
-describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',()=>{
- let admin:Pool;
- const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
+function factFixtures(pool:()=>Pool){
+ const q=async(text:string,values:unknown[]=[])=>(await pool().query(text,values)).rows as Record<string,any>[];
  const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
  const issuer=async(name='ZZ Ext Test')=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,$2)`,[id,name]);return id;};
- const user=async()=>{const id=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@ext.test`]);return id;};
  const batch=async(dataset='facts.us',finished=false)=>{
   const id=randomUUID();await q(`insert into public.ingest_batches(batch_id,producer,dataset) values($1,'ext-test',$2)`,[id,dataset]);
   if(finished)await q(`update public.ingest_batches set status='success',finished_at=now() where batch_id=$1`,[id]);
@@ -99,15 +87,6 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
  const factRow=(f:FactSpec)=>({fact_id:f.fact_id??randomUUID(),filing_id:f.filing_id,concept:f.concept??'revenue',source_concept:'Revenues',statement:f.concept==='total_assets'?'BS':'IS',period_start:f.period_start===undefined?'2023-10-01':f.period_start,period_end:f.period_end??'2023-12-31',duration:f.duration??'3M',value:f.value??'100',unit:f.unit??'USD',consolidation:'consolidated',available_date:f.available_date??'2024-02-01',mapping_version:f.mapping_version??'facts-map/1',raw_hash:'h'});
  const stage=async(run:string,rows:FactSpec[])=>{const full=rows.map(factRow);await one(`select public.stage_facts($1,$2::jsonb) v`,[run,JSON.stringify(full)]);return full.map(r=>r.fact_id);};
  const publish=(run:string,manifest:string[])=>one(`select public.publish_sync_run($1,$2::uuid[]) v`,[run,manifest]);
- const rev=(iss:string,market='US')=>one(`select public.fact_state_rev($1,$2) v`,[iss,market]).then(Number);
- const status=async(id:string)=>(await q(`select status from public.financial_facts where fact_id=$1`,[id]))[0]?.status??null;
- const merge=(s:string,t:string,by:string)=>one(`select public.set_merge($1,$2,$3) v`,[s,t,by]);
- const dissolve=(i:string,by:string)=>q(`select public.set_dissolved($1,$2)`,[i,by]);
- const lineageRead=async(issuers:string[],o:{concepts?:string[];asOf?:string;history?:boolean;limit?:number|null;nonOk?:boolean}={},client:Pool|PoolClient=admin)=>
-  (await client.query(`select public.read_facts_lineage($1::uuid[],'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,[issuers,o.concepts??['revenue','total_assets'],o.asOf??'2030-01-01',o.history??true,o.limit??null,o.nonOk??false])).rows[0].v as LineageEnvelope;
- const factsRead=async(iss:string,o:{concepts?:string[];asOf?:string;history?:boolean;limit?:number|null;nonOk?:boolean}={},client:Pool|PoolClient=admin)=>
-  (await client.query(`select public.read_facts($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,[iss,o.concepts??['revenue','total_assets'],o.asOf??'2030-01-01',o.history??true,o.limit??null,o.nonOk??false])).rows[0].v as Envelope;
- const metric=(v:string,name='gross_margin')=>({metric:name,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[],as_of:'2024-03-01'});
  /** A leased US issuer with one published gen-1 run: f0 (2024-01-01) carries r0 = revenue 90, f (2024-02-01) carries r = revenue 100, same key. state_rev 1. */
  const published=async()=>{
   const iss=await issuer();const b=await batch();expect(await scope(iss)).toBe(1);expect(await claim(iss,b)).toBe(true);
@@ -117,13 +96,28 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
   expect(await publish(run,[f0.id,f.id])).toBe(2);
   return {iss,b,run,f0:f0.id,f:f.id,fRef:f.sourceRef,r0,r};
  };
+ return {q,one,issuer,batch,scope,claim,begin,filing,stage,publish,published};
+}
+
+describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',()=>{
+ let admin:Pool;
+ const {q,one,issuer,batch,scope,claim,begin,filing,stage,publish,published}=factFixtures(()=>admin);
+ const user=async()=>{const id=randomUUID();await q(`insert into auth.users(id,email) values($1,$2)`,[id,`${id}@ext.test`]);return id;};
+ const rev=(iss:string,market='US')=>one(`select public.fact_state_rev($1,$2) v`,[iss,market]).then(Number);
+ const status=async(id:string)=>(await q(`select status from public.financial_facts where fact_id=$1`,[id]))[0]?.status??null;
+ const merge=(s:string,t:string,by:string)=>one(`select public.set_merge($1,$2,$3) v`,[s,t,by]);
+ const dissolve=(i:string,by:string)=>q(`select public.set_dissolved($1,$2)`,[i,by]);
+ const lineageRead=async(issuers:string[],o:{concepts?:string[];asOf?:string;history?:boolean;limit?:number|null;nonOk?:boolean}={},client:Pool|PoolClient=admin)=>
+  (await client.query(`select public.read_facts_lineage($1::uuid[],'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,[issuers,o.concepts??['revenue','total_assets'],o.asOf??'2030-01-01',o.history??true,o.limit??null,o.nonOk??false])).rows[0].v as LineageEnvelope;
+ const factsRead=async(iss:string,o:{concepts?:string[];asOf?:string;history?:boolean;limit?:number|null;nonOk?:boolean}={},client:Pool|PoolClient=admin)=>
+  (await client.query(`select public.read_facts($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,[iss,o.concepts??['revenue','total_assets'],o.asOf??'2030-01-01',o.history??true,o.limit??null,o.nonOk??false])).rows[0].v as Envelope;
+ const metric=(v:string,name='gross_margin')=>({metric:name,period_start:'2023-10-01',period_end:'2023-12-31',duration:'3M',value:v,unit:'ratio',input_unit:'USD',basis:'us_standard',formula_version:'facts-derive/1.0',inputs:[],as_of:'2024-03-01'});
  /** Another published issuer with one revenue row on 2024-02-01 for the same key (value given). */
  const sibling=async(value:string)=>{
   const iss=await issuer();const b=await batch();await scope(iss);await claim(iss,b);
   const run=await begin(iss,b);const f=await filing(run);const [x]=await stage(run,[{filing_id:f.id,value}]);await publish(run,[f.id]);
   return {iss,b,run,f:f.id,x};
  };
- const sql=()=>readFileSync(MIGRATION,'utf8');
 
  beforeAll(async()=>{admin=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
  afterAll(async()=>{await admin?.end();});
@@ -179,33 +173,37 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
   });
 
   it('read_facts is a wrapper of read_facts_lineage with output identical to the plan-2 function in ok / includeNonOk / history modes (T7)',async()=>{
-   const {iss,b,f}=await published();
-   const run2=await begin(iss,b,2);await stage(run2,[{filing_id:f,value:'101'},{filing_id:f,concept:'total_assets',period_start:null,duration:'INSTANT',value:'7'}]);await publish(run2,[f]);
-   const run3=await begin(iss,b,2);const g=await filing(run3,{available:'2024-03-01'});const [qd]=await stage(run3,[{filing_id:g.id,value:'120',available_date:'2024-03-01'}]);
-   const item=randomUUID();
-   await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'facts.us','financial_facts',$2,'same_day_conflict',$3,$4::jsonb)`,[item,`${iss}:US:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-03-01`,b,JSON.stringify({key:{issuer_id:iss,market:'US',concept:'revenue',period_start:'2023-10-01',period_end:'2023-12-31',consolidation:'consolidated',unit:'USD',available_date:'2024-03-01'},fact_ids:[qd],values:[],run_id:run3})]);
-   await one(`select public.quarantine_facts($1,$2::uuid[],$3) v`,[run3,[qd],item]);await publish(run3,[g.id]);
-   const run4=await begin(iss,b,2);await stage(run4,[{filing_id:g.id,concept:'total_assets',period_start:null,duration:'INSTANT',value:'8',available_date:'2024-03-01'}]);   // staged, unpublished
-   const legacyText=(()=>{const s=readFileSync(PLAN2,'utf8');const start=s.indexOf('create or replace function public.read_facts(');const end=s.indexOf('\n$$;',start);return s.slice(start,end+4).replace('create or replace function public.read_facts(','create function pg_temp.read_facts_v8(');})();
-   const c=await admin.connect();
+   const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
    try{
-    await c.query(legacyText);
-    for(const o of [{history:false,nonOk:false},{history:true,nonOk:false},{history:true,nonOk:true},{history:false,nonOk:true},{history:true,nonOk:true,limit:1}]){
-     const args=[iss,['revenue','total_assets'],'2030-01-01',o.history,(o as {limit?:number}).limit??null,o.nonOk];
-     const legacy=(await c.query(`select pg_temp.read_facts_v8($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,args)).rows[0].v as Envelope;
-     const wrapped=(await c.query(`select public.read_facts($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,args)).rows[0].v as Envelope;
-     expect(wrapped).toEqual(legacy);                                                                  // field by field
-     expect((await c.query(`select pg_temp.read_facts_v8($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) = public.read_facts($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,args)).rows[0].v).toBe(true);
-     const lin=await lineageRead([iss],{history:o.history,nonOk:o.nonOk,limit:(o as {limit?:number}).limit??null},c);
-     expect({state_rev:lin.state_revs[0].state_rev,rows:lin.rows,truncated:lin.truncated,row_count:lin.row_count}).toEqual(legacy);
-     expect(lin.conflicts).toEqual([]);expect(lin.lineage).toEqual([iss]);
-    }
-    const nonOk=(await lineageRead([iss],{history:true,nonOk:true},c)).rows.filter(x=>x.status!=='ok');
-    expect(nonOk.length).toBeGreaterThan(0);
-    for(const x of nonOk)expect(x).toMatchObject({disclosure_seq:null,is_current:false,is_revision:false});
-    expect((await lineageRead([iss],{history:false,nonOk:true},c)).rows.every(x=>x.status==='ok')).toBe(true);   // non-ok rows only with history
-   }finally{c.release();}
-  });
+    const {q,one,published,begin,stage,publish,filing}=factFixtures(()=>fresh.pool);
+    const {iss,b,f}=await published();
+    const run2=await begin(iss,b,2);await stage(run2,[{filing_id:f,value:'101'},{filing_id:f,concept:'total_assets',period_start:null,duration:'INSTANT',value:'7'}]);await publish(run2,[f]);
+    const run3=await begin(iss,b,2);const g=await filing(run3,{available:'2024-03-01'});const [qd]=await stage(run3,[{filing_id:g.id,value:'120',available_date:'2024-03-01'}]);
+    const item=randomUUID();
+    await q(`insert into public.dq_quarantine(id,dataset,table_name,natural_key,reason_code,batch_id,payload) values($1,'facts.us','financial_facts',$2,'same_day_conflict',$3,$4::jsonb)`,[item,`${iss}:US:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-03-01`,b,JSON.stringify({key:{issuer_id:iss,market:'US',concept:'revenue',period_start:'2023-10-01',period_end:'2023-12-31',consolidation:'consolidated',unit:'USD',available_date:'2024-03-01'},fact_ids:[qd],values:[],run_id:run3})]);
+    await one(`select public.quarantine_facts($1,$2::uuid[],$3) v`,[run3,[qd],item]);await publish(run3,[g.id]);
+    const run4=await begin(iss,b,2);await stage(run4,[{filing_id:g.id,concept:'total_assets',period_start:null,duration:'INSTANT',value:'8',available_date:'2024-03-01'}]);   // staged, unpublished
+    const legacyText=(()=>{const s=readFileSync(PLAN2,'utf8');const start=s.indexOf('create or replace function public.read_facts(');const end=s.indexOf('\n$$;',start);return s.slice(start,end+4).replace('create or replace function public.read_facts(','create function pg_temp.read_facts_v8(');})();
+    const c=await fresh.pool.connect();
+    try{
+     await c.query(legacyText);
+     for(const o of [{history:false,nonOk:false},{history:true,nonOk:false},{history:true,nonOk:true},{history:false,nonOk:true},{history:true,nonOk:true,limit:1}]){
+      const args=[iss,['revenue','total_assets'],'2030-01-01',o.history,(o as {limit?:number}).limit??null,o.nonOk];
+      const legacy=(await c.query(`select pg_temp.read_facts_v8($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,args)).rows[0].v as Envelope;
+      const wrapped=(await c.query(`select public.read_facts($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,args)).rows[0].v as Envelope;
+      expect(wrapped).toEqual(legacy);                                                                  // field by field
+      expect((await c.query(`select pg_temp.read_facts_v8($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) = public.read_facts($1,'US',$2::text[],$3::date,null,null,$4,$5,$6) v`,args)).rows[0].v).toBe(true);
+      const lin=await lineageRead([iss],{history:o.history,nonOk:o.nonOk,limit:(o as {limit?:number}).limit??null},c);
+      expect({state_rev:lin.state_revs[0].state_rev,rows:lin.rows,truncated:lin.truncated,row_count:lin.row_count}).toEqual(legacy);
+      expect(lin.conflicts).toEqual([]);expect(lin.lineage).toEqual([iss]);
+     }
+     const nonOk=(await lineageRead([iss],{history:true,nonOk:true},c)).rows.filter(x=>x.status!=='ok');
+     expect(nonOk.length).toBeGreaterThan(0);
+     for(const x of nonOk)expect(x).toMatchObject({disclosure_seq:null,is_current:false,is_revision:false});
+     expect((await lineageRead([iss],{history:false,nonOk:true},c)).rows.every(x=>x.status==='ok')).toBe(true);   // non-ok rows only with history
+    }finally{c.release();}
+   }finally{await fresh.drop();}
+  },60000);
 
   it('read_facts_lineage: two members suppress a cross-issuer same-day disagreement into conflicts (ok rows only) and the earlier disclosure becomes current; equal values are no conflict; anon sees ok only',async()=>{
    const {iss:t,r0,r}=await published();
@@ -258,19 +256,19 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
   });
 
   it('upgrade on a database with data: the first replay adds based_on_lineage and backfills it once; a second replay leaves newer evidence untouched',async()=>{
-   const {iss}=await published();
-   expect(await one(`select public.replace_financial_metrics($1,'US',1,$2::jsonb) v`,[iss,JSON.stringify([metric('0.5')])])).toBe(1);
-   await inRolledBackTx(admin,async c=>{
-    await c.query("select pg_advisory_xact_lock(hashtext('test:migration-replay'))");   // serialise with every other replay
-    await c.query(`alter table public.financial_metrics drop column based_on_lineage`);   // back to the plan-2 shape (its constraint goes with it)
-    await c.query(`insert into public.financial_metrics(issuer_id,market,metric,period_start,period_end,duration,value,unit,input_unit,basis,formula_version,inputs,based_on_rev,as_of) values($1,'US','legacy_metric','2023-10-01','2023-12-31','3M',1,'ratio','USD','us_standard','facts-derive/1.0','[]',7,'2024-03-01')`,[iss]);
-    await c.query(sql());
-    const read=async()=>(await c.query(`select metric,based_on_lineage from public.financial_metrics where issuer_id=$1 order by metric`,[iss])).rows;
+   const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl,basename(MIGRATION));
+   try{
+    const {published,one}=factFixtures(()=>fresh.pool);
+    const {iss}=await published();
+    expect(await one(`select public.replace_financial_metrics($1,'US',1,$2::jsonb) v`,[iss,JSON.stringify([metric('0.5')])])).toBe(1);
+    await fresh.pool.query(`insert into public.financial_metrics(issuer_id,market,metric,period_start,period_end,duration,value,unit,input_unit,basis,formula_version,inputs,based_on_rev,as_of) values($1,'US','legacy_metric','2023-10-01','2023-12-31','3M',1,'ratio','USD','us_standard','facts-derive/1.0','[]',7,'2024-03-01')`,[iss]);
+    await replayFiles(fresh.pool,[MIGRATION]);
+    const read=async()=>(await fresh.pool.query(`select metric,based_on_lineage from public.financial_metrics where issuer_id=$1 order by metric`,[iss])).rows;
     expect(await read()).toEqual([{metric:'gross_margin',based_on_lineage:[{issuer_id:iss,state_rev:1}]},{metric:'legacy_metric',based_on_lineage:[{issuer_id:iss,state_rev:7}]}]);
-    await c.query(`update public.financial_metrics set based_on_lineage=jsonb_build_array(jsonb_build_object('issuer_id',issuer_id,'state_rev',99)) where issuer_id=$1 and metric='legacy_metric'`,[iss]);
-    await c.query(sql());                                                                                       // replay: guarded, no second backfill
+    await fresh.pool.query(`update public.financial_metrics set based_on_lineage=jsonb_build_array(jsonb_build_object('issuer_id',issuer_id,'state_rev',99)) where issuer_id=$1 and metric='legacy_metric'`,[iss]);
+    await replayFiles(fresh.pool,[MIGRATION]);                                                                                       // replay: guarded, no second backfill
     expect((await read())[1]).toEqual({metric:'legacy_metric',based_on_lineage:[{issuer_id:iss,state_rev:99}]});
-   });
+   }finally{await fresh.drop();}
   },60000);
 
   it('topology guard (S1): a fresh connection cannot write status/merged_into; after set_merge returns inside a transaction a direct update is still refused; the setting is restored on the error path',async()=>{
@@ -367,7 +365,10 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
     for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});
     expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
    }
-   await expect(replayMigration(admin,sql())).resolves.toBeUndefined();
+   const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+   try{
+    await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+   }finally{await fresh.drop();}
   },60000);
  });
  describe('8b: promotion predicates, adopt_candidate, restore_reconciled, resolve_lineage_conflict',()=>{
@@ -990,7 +991,6 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
      mergerPid=Number((await c2.query(`select pg_backend_pid() p`)).rows[0].p);
      expect((await c2.query(`select public.set_merge($1,$2,$3) v`,[s1,t1,by])).rows[0].v).toEqual({repointed:0});
     },1);merger.catch(()=>{});
-    // Parallel migration replays may also wait behind this transaction. Observe only our merger.
     await stillBlockedBehind(admin,pid,merger,()=>mergerPid);
     expect(await q(`select distinct l.locktype from pg_locks l where not l.granted and l.pid=$2 and $1 = any(pg_blocking_pids(l.pid))`,[pid,mergerPid])).toEqual([{locktype:'advisory'}]);   // the merge waits on the advisory lock, not on a row
     opened=await openC(c,LINEAGE,lid(),[{issuer_id:t1,market:'US',expected_keys:[{naturalKey:'k',locator:{}}]}],[]);   // re-entrant advisory lock; cursor insert on t1
@@ -1103,7 +1103,10 @@ describe.skipIf(!enabled)('F3-4 facts extensions migration on real PostgreSQL',(
     expect(await fn('service_role',sig)).toBe(true);
    }
    for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.reconcile_fence_lock(jsonb)')).toBe(false);
-   await expect(replayMigration(admin,sql())).resolves.toBeUndefined();
+   const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+   try{
+    await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+   }finally{await fresh.drop();}
   },60000);
  });
 

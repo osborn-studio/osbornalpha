@@ -4,6 +4,8 @@
 // function-backed triggers; block 3 (A3) public views under the real anon/authenticated roles;
 // block 4 (A5) the pgBrokerResearchDb contract. Rows are never cleaned up: test:db builds a fresh
 // database per run and every test seeds its own licence/document/report.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -19,22 +21,10 @@ import {CLAIM_METHODOLOGY_VERSION,DISCLOSURE_VERSION,RULES_VERSION,UPSIDE_FORMUL
 
 const enabled=!!process.env.S4_TEST_STATE;
 const M1='supabase/migrations/20261202090000_broker_research.sql';
+const M2='supabase/migrations/20261202091000_broker_research_functions.sql';
+const M3='supabase/migrations/20261202092000_broker_research_views.sql';
 const TABLES=['broker_research_settings','broker_report_licences','broker_report_upload_intents','broker_report_documents','broker_report_runs','broker_research_reports','broker_report_targets','broker_report_target_overrides','broker_report_fields','broker_report_snippets','broker_report_summaries','broker_report_publications','broker_report_rule_receipts','broker_purge_steps','research_institutions','research_rating_scales','research_analysts','broker_report_analysts','broker_report_access_log','broker_eval_receipts','broker_outbox','broker_storage_writes'];
 
-// Same replay policy as facts.integration.test.ts (not exported there).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);return;}
-  catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 /** broker_research_settings is one global row (public_enabled, approved_gold_corpus_hash). Every describe that reads its
  * defaults or toggles it holds this session-level advisory lock from beforeAll to afterAll (pipeline.integration.test.ts
  * does the same), so parallel test files never interleave. The release restores the defaults, then unlocks. */
@@ -112,7 +102,7 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
  beforeAll(async()=>{admin=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});s=seeds(admin);unlock=await lockSettings(admin);},60000);
  afterAll(async()=>{await unlock?.();await admin?.end();});
 
- it('creates 22 RLS tables, the private bucket, service-role-only grants, the settings singleton, and replays',async()=>{
+ it('creates 22 RLS tables, the private bucket, and service-role-only grants',async()=>{
   const rows=await s.q(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relname=any($1)`,[TABLES]);
   expect(rows.map(r=>r.relname).sort()).toEqual([...TABLES].sort());for(const r of rows)expect(r.relrowsecurity).toBe(true);
   expect(await s.q(`select id,public,file_size_limit,allowed_mime_types from storage.buckets where id='broker-research'`)).toEqual([{id:'broker-research',public:false,file_size_limit:'52428800',allowed_mime_types:['application/pdf','application/json','image/png']}]);
@@ -126,10 +116,6 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
    expect({t,ok:await priv('service_role',t,'INSERT')}).toEqual({t,ok:dml});
    expect({t,ok:await priv('service_role',t,'DELETE')}).toEqual({t,ok:dml});
   }
-  expect(await s.q(`select id,public_enabled,approved_gold_corpus_hash from public.broker_research_settings`)).toEqual([{id:1,public_enabled:false,approved_gold_corpus_hash:null}]);
-  expect((await fails(s.q(`insert into public.broker_research_settings(id) values(2)`))).message).toMatch(/broker_research_settings_singleton/);
-  await expect(replayMigration(admin,readFileSync(M1,'utf8'))).resolves.toBeUndefined();
-  expect(await s.one(`select count(*)::int v from public.broker_research_settings`)).toBe(1);
  },60000);
 
  it('constraints: sha/storage path, intents staging path, lease pair, field shapes, corrected payload, effective uniqueness, snippet length',async()=>{
@@ -384,7 +370,6 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
 
 // ---- shared by blocks 2–4 (A2 writes these; A3/A5 reuse them). Each block's beforeAll rebinds
 // the pool; describes run sequentially within this file, so the module-level bindings are safe.
-const M2='supabase/migrations/20261202091000_broker_research_functions.sql';
 let pool:Pool;let s:ReturnType<typeof seeds>;
 const bind=()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});s=seeds(pool);};
  const J=(v:unknown)=>JSON.stringify(v);
@@ -552,7 +537,7 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   expect(await blockers(q.rep)).toEqual([]);
  },120000);
 
- it('function grants: module RPCs are service_role only, internal helpers no client role; migration replays',async()=>{
+ it('function grants: module RPCs are service_role only, internal helpers no client role',async()=>{
   const fn=(role:string,sig:string)=>s.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
   const fnOid=(role:string,oid:number)=>s.one(`select has_function_privilege($1::name,$2::int::oid,'EXECUTE') v`,[role,oid]);   // inventory: by OID (P-R4-01)
   const rpcs=['public.broker_document_withdraw(uuid,text,boolean,uuid)','public.broker_field_effective(jsonb,text,numeric,text,text,date)','public.broker_report_materialize(uuid)','public.broker_field_review(uuid,text,jsonb,uuid)','public.broker_field_add(uuid,jsonb,uuid)','public.broker_target_override(uuid,text,text,uuid,uuid,text)','public.broker_extract_commit(uuid,uuid,uuid,jsonb)','public.broker_report_publish_blockers(uuid)','public.broker_report_publish(uuid,uuid)','public.broker_report_unpublish(uuid,uuid,text)','public.broker_quarantine_resolve(uuid,text,uuid,jsonb)','public.broker_document_claim_lease(uuid,uuid,integer)','public.broker_document_fenced_update(uuid,uuid,jsonb,boolean)','public.broker_run_finish(uuid,uuid,jsonb)','public.broker_outbox_mark(uuid,boolean,text)','public.broker_purge_step_record(uuid,text,boolean,text)','public.broker_report_disclosure_digest(uuid)','public.broker_report_disclosure_recheck(uuid,uuid,jsonb)','public.broker_summary_commit(uuid,uuid,uuid,jsonb)','public.broker_title_commit(uuid,uuid,uuid,jsonb)'];
@@ -569,7 +554,6 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   const oids=new Set(all.map(r=>Number(r.oid)));
   for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])
    expect({trig,inInventory:oids.has(Number(await s.one(`select $1::regprocedure::oid::int v`,[trig])))}).toEqual({trig,inInventory:true});   // compared by OID, never by display text
-  await expect(replayMigration(pool,readFileSync(M2,'utf8'))).resolves.toBeUndefined();
  },60000);
 
  it('broker_field_effective: a present corrected key wins (explicit null clears), a missing key inherits',async()=>{
@@ -964,7 +948,6 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
 });
 
 describe.skipIf(!enabled)('A3 public views under the real anon and authenticated roles',()=>{
- const M3='supabase/migrations/20261202092000_broker_research_views.sql';
  const VIEWS=['broker_reports_public_v','broker_report_targets_public_v','broker_report_citations_v','broker_report_snippets_public_v','broker_report_summaries_public_v','broker_analysts_public_v','broker_rating_history_v','broker_spread_latest_v','research_institutions_public_v','research_rating_scales_public_v'];
  let unlock:(()=>Promise<void>)|undefined;
  beforeAll(async()=>{bind();unlock=await lockSettings(pool);},60000);        // toggles public_enabled; ready() sets the gold hash
@@ -1011,7 +994,7 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
   return {...w,pub,analyst:an,analystField:af,snippet:sn};
  };
 
- it('ten views: owner rights, security_invoker=false, security_barrier=true; select-only for both roles; base tables and RPCs unreachable; replays',async()=>{
+ it('ten views: owner rights, security_invoker=false, security_barrier=true; select-only for both roles; base tables and RPCs unreachable',async()=>{
   const rows=await s.q(`select c.relname,c.reloptions from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='v' and c.relname=any($1)`,[VIEWS]);
   expect(rows.map(r=>r.relname).sort()).toEqual([...VIEWS].sort());
   for(const r of rows)expect({v:r.relname,o:[...r.reloptions].sort()}).toEqual({v:r.relname,o:['security_barrier=true','security_invoker=false']});
@@ -1034,7 +1017,6 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
    expect((await fails(asRole(role,c=>c.query(`select public.broker_report_publish(gen_random_uuid(),gen_random_uuid())`))))).toMatchObject({code:'42501'});
    expect((await fails(asRole(role,c=>c.query(`select public.broker_field_effective(null,'x',null,null,null,null)`))))).toMatchObject({code:'42501'});
   }
-  await expect(replayMigration(pool,readFileSync(M3,'utf8'))).resolves.toBeUndefined();
  },120000);
 
  it('visibility: the published report is in every view for both roles; public_enabled=false empties every view',async()=>{
@@ -1261,4 +1243,31 @@ describe.skipIf(!enabled)('A5 pgBrokerResearchDb',()=>{
    }
   });
  });
+});
+
+describe.skipIf(!enabled)('broker research migration replays',()=>{
+ it('seeds and enforces the settings singleton and preserves it on tables migration replay',async()=>{
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   const s=seeds(fresh.pool);
+   expect(await s.q(`select id,public_enabled,approved_gold_corpus_hash from public.broker_research_settings`)).toEqual([{id:1,public_enabled:false,approved_gold_corpus_hash:null}]);
+   expect((await fails(s.q(`insert into public.broker_research_settings(id) values(2)`))).message).toMatch(/broker_research_settings_singleton/);
+   await expect(replayFiles(fresh.pool,[M1])).resolves.toBeUndefined();
+   expect(await s.one(`select count(*)::int v from public.broker_research_settings`)).toBe(1);
+  }finally{await fresh.drop();}
+ },60000);
+
+ it('replays the broker research functions migration',async()=>{
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[M2])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
+
+ it('replays the broker research views migration',async()=>{
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[M3])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },120000);
 });

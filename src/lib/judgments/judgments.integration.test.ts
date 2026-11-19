@@ -8,6 +8,8 @@
 // test uses its own methodology id. Active judgments that are not claimed carry the far-future
 // target 2099-01-01, and every claim runs under pg_advisory_lock(F4_CLAIM_LOCK) so the other
 // judgments suites (judgments-db.integration, settle.integration) never take this file's queue rows.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -29,8 +31,6 @@ const PRIVATE=['judgment_settle_queue','judgment_job_state','judgment_calibratio
 const TRIGGER_FNS=['judgment_methodologies_limited_update()','judgments_append_only()','judgment_settlements_sequence()'];
 const ROLES=['anon','authenticated','service_role'];
 const F4_CLAIM_LOCK=20261109;
-/** Schema-change mutex shared with pgJudgmentsDb (db-contract.ts F4_SCHEMA_LOCK): replayMigration holds it exclusively, every pg-judgments-db call shared. */
-const F4_SCHEMA_LOCK=20261110;
 const JSONB=new Set(['producer_ref','inputs','claim','condition','horizon','target','realized','evidence','params','params_json','upstream','metrics','reliability','isotonic_segments','query_bounds','state','last_detail','override','retrospective_hint']);
 const H=(c:string)=>c.repeat(64);
 const hex64=()=>`${randomUUID()}${randomUUID()}`.replaceAll('-','');
@@ -39,23 +39,6 @@ const INPUT={kind:'macro_observation',ref:{series_id:'CPI',period_end:'2026-01-3
 const CONDITION={resolver:'macro_regime_replay',params:{region:'US',reference_period:'2026-01',macro_methodology_version:'v1',catalog_version:'c1'},predicate:{op:'eq',rhs:'recovery'},text:{zh:'复苏',en:'recovery'}};
 const CLAIM={p:0.6,event:{zh:'复苏',en:'recovery'}};
 
-// Same replay policy as facts.integration.test.ts (not exported there): one transaction, short
-// lock_timeout, jittered retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; select pg_advisory_xact_lock(${F4_SCHEMA_LOCK}); set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 type PgErr={message:string;code?:string};
 /** Resolves with the rejection (message + SQLSTATE) so tests can assert both. */
 const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
@@ -117,8 +100,11 @@ describe.skipIf(!enabled)('F4 judgments migration: tables, checks, triggers, RLS
    for(const role of ROLES)expect({f,role,ok:await one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,`public.${f}`])}).toEqual({f,role,ok:false});
    expect({f,public:await one(`select exists(select 1 from pg_proc p, aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a where p.oid=$1::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE') v`,[`public.${f}`])}).toEqual({f,public:false});
   }
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
- },30000);
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('checks: judgment shape, inputs, settle order, public subject and producer kinds, FKs; settlement outcome/reason/actor/key; calibration state by kind; events; queue; job keys',async()=>{
   const m=await methodology();const b=await batch();
@@ -377,8 +363,11 @@ const claim=async(limit=100,lease=600)=>q(CLAIM_ROWS('$1,$2'),[limit,lease]);
   expect(await fails(asRole(admin,'anon',c=>c.query(`select public.set_job_state('x',null,'{}')`)))).toMatchObject({code:'42501'});
   for(const role of ['anon','authenticated'])expect(await fails(asRole(admin,role,c=>c.query(`select public.resolve_closed_judgment_quarantine(null,null,'{}',null,'{}')`)))).toMatchObject({code:'42501'});
   expect(await one(`select public.judgments_server_time() = now() v`)).toBe(true);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
- },30000);
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('sync_methodology: registered, resynced, status_changed, publishable_changed (two events when both change); created_at fixed; formula_hash_drift; methodology_state_at',async()=>{
   const row=methodologyRow({status:'draft'});const m=String(row.methodology_id);
