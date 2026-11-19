@@ -51,13 +51,15 @@ export function formatSlot(s:Slot,locale:Locale):string{
 function ctx(f:Fact,locale:Locale,names:NameLookup){
  const raw=(k:string):Slots[string]=>{const v=f.slots[k];if(v===undefined)throw new Error(`missing_slot:${f.template}:${k}`);return v;};
  const str=(k:string):string=>{const v=raw(k);if(typeof v!=='string')throw new Error(`slot_not_text:${f.template}:${k}`);return v;};
- const num=(k:string):string=>{const v=raw(k);if(typeof v==='string')throw new Error(`slot_not_value:${f.template}:${k}`);return formatSlot(v,locale);};
+ // TOPICS ↓
+ const num=(k:string,format:typeof formatSlot=formatSlot):string=>{const v=raw(k);if(typeof v==='string')throw new Error(`slot_not_value:${f.template}:${k}`);return format(v,locale);};
  const name=(k:string):string=>{const id=str(k);return names(id)?.[locale]??id;};
  const word=(table:Record<string,Bilingual>,k:string):string=>{const v=str(k);return table[v]?.[locale]??v;};
  const range=(lo:string,hi:string):string=>{const a=raw(lo),b=raw(hi);return typeof a!=='string'&&typeof b!=='string'&&a.value_text===b.value_text?num(hi):`${num(lo)}–${num(hi)}`;};
- return {str,num,name,word,range};
+ return {str,num,name,word,range,locale,has:(k:string)=>Object.hasOwn(f.slots,k)};
 }
-type Renderer=(c:ReturnType<typeof ctx>)=>string;
+export type Renderer=(c:ReturnType<typeof ctx>)=>string;
+// TOPICS ↑
 /** Template id → zh / en renderer. Every template produced by facts.ts and review.ts is listed here (test enforces). */
 export const TEMPLATES:Record<string,Record<Locale,Renderer>>={
  level:{zh:c=>`${c.name('series')}（${c.str('period')}）为 ${c.num('value')}。`,en:c=>`${c.name('series')} (${c.str('period')}) was ${c.num('value')}.`},
@@ -79,6 +81,15 @@ export const TEMPLATES:Record<string,Record<Locale,Renderer>>={
  catalog_unavailable:{zh:c=>`${c.name('series')} 目录状态：${c.word(STATUS,'status')}。`,en:c=>`${c.name('series')} catalog status: ${c.word(STATUS,'status')}.`},
 };
 export const TEMPLATE_IDS=Object.keys(TEMPLATES);
+// TOPICS ↓
+export function registerTemplates(ns:string,t:Record<string,Record<Locale,Renderer>>):void{
+ for(const id of Object.keys(t)){
+  if(!id.startsWith(ns+'.'))throw new Error(`invalid_template_namespace:${id}`);
+  if(Object.hasOwn(TEMPLATES,id))throw new Error(`duplicate_template:${id}`);
+ }
+ Object.assign(TEMPLATES,t);
+}
+// TOPICS ↑
 export function renderFact(f:Fact,locale:Locale,names:NameLookup):string{
  const t=TEMPLATES[f.template];if(!t)throw new Error(`unknown_template:${f.template}`);
  return t[locale](ctx(f,locale,names));

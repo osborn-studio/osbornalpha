@@ -36,8 +36,13 @@ export const NUMERAL_PATTERNS:readonly RegExp[]=[
 ];
 const escapeRe=(s:string)=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 const termPattern=(t:string):RegExp=>/^[\x00-\x7f]+$/.test(t)?new RegExp(`\\b${t.split(' ').map(escapeRe).join('\\s+')}\\b`,'i'):new RegExp(escapeRe(t),'u');
-const FORBIDDEN_PATTERNS=FORBIDDEN_TERMS.map(termPattern);
-const REGIME_PATTERNS=REGIME_TERMS.map(termPattern);
+// TOPICS ↓
+export interface ValidationPolicy{forbidden:readonly string[];regime:readonly string[];advice:readonly string[];singleSentence:boolean}
+export const MACRO_POLICY:ValidationPolicy={forbidden:FORBIDDEN_TERMS,regime:REGIME_TERMS,advice:[],singleSentence:false};
+export type PolicyFailureCode=FailureCode|'multi_sentence';
+type PolicyFailure=Omit<ValidationFailure,'code'>&{code:PolicyFailureCode;detail?:'advice'};
+type PolicyResult={ok:true;output:ModelOutput;failures:[]}|{ok:false;codes:PolicyFailureCode[];failures:PolicyFailure[]};
+// TOPICS ↑
 
 const item=(textKey:'hypothesis'|'text')=>({type:'object',additionalProperties:false,required:['fact_ids',textKey],properties:{
  fact_ids:{type:'array',minItems:1,maxItems:4,items:{type:'string',minLength:1,maxLength:160}},[textKey]:{type:'string',minLength:1,maxLength:240}}});
@@ -51,25 +56,34 @@ export function parseModelContent(content:string):unknown{
 }
 /** Every distinct matched fragment of each rule family in one text (already NFKC-normalised by the caller), families in
  *  the order numeral, forbidden_term, regime_term; within a family, pattern order then position (spec §6.3: all failure items). */
+// TOPICS ↓
 export function lexicalFailures(text:string):{code:'numeral'|'forbidden_term'|'regime_term';match:string}[]{
- const out:{code:'numeral'|'forbidden_term'|'regime_term';match:string}[]=[];
- const all=(code:'numeral'|'forbidden_term'|'regime_term',ps:readonly RegExp[])=>{
+ return policyLexicalFailures(text,MACRO_POLICY);
+}
+function policyLexicalFailures(text:string,policy:ValidationPolicy){
+ const out:{code:'numeral'|'forbidden_term'|'regime_term';match:string;detail?:'advice'}[]=[];
+ const all=(code:'numeral'|'forbidden_term'|'regime_term',ps:readonly RegExp[],detail?:'advice')=>{
   const seen=new Set<string>();
-  for(const p of ps)for(const m of text.matchAll(new RegExp(p.source,p.flags.includes('g')?p.flags:`${p.flags}g`)))if(!seen.has(m[0])){seen.add(m[0]);out.push({code,match:m[0]});}
+  for(const p of ps)for(const m of text.matchAll(new RegExp(p.source,p.flags.includes('g')?p.flags:`${p.flags}g`)))if(!seen.has(m[0])){seen.add(m[0]);out.push({code,match:m[0],...(detail?{detail}:{})});}
  };
- all('numeral',NUMERAL_PATTERNS);all('forbidden_term',FORBIDDEN_PATTERNS);all('regime_term',REGIME_PATTERNS);
+ all('numeral',NUMERAL_PATTERNS);all('forbidden_term',policy.forbidden.map(termPattern));all('regime_term',policy.regime.map(termPattern));
+ all('forbidden_term',policy.advice.map(termPattern),'advice');
  return out;
 }
-export function validateExplanation(raw:unknown,factIds:ReadonlySet<string>):ValidationResult{
- const fail=(failures:ValidationFailure[]):ValidationResult=>({ok:false,codes:[...new Set(failures.map(x=>x.code))].sort(),failures});
+export function validateHypotheses(raw:unknown,factIds:ReadonlySet<string>,policy:ValidationPolicy):PolicyResult{
+ const fail=(failures:PolicyFailure[]):PolicyResult=>({ok:false,codes:[...new Set(failures.map(x=>x.code))].sort(),failures});
  if(raw===undefined)return fail([{code:'parse',section:'output',index:null,match:null}]);
  if(!validateShape(raw))return fail([{code:'schema',section:'output',index:null,match:validateShape.errors?.[0]?.instancePath||null}]);
  const output:ModelOutput={points:raw.points,counterpoints:raw.counterpoints??[]};
- const failures:ValidationFailure[]=[];
+ const failures:PolicyFailure[]=[];
  const sections:[ 'points'|'counterpoints',{fact_ids:string[];text:string}[]][]=[['points',output.points.map(p=>({fact_ids:p.fact_ids,text:p.hypothesis}))],['counterpoints',output.counterpoints]];
  for(const [section,items] of sections)items.forEach((x,index)=>{
   for(const id of x.fact_ids)if(!factIds.has(id))failures.push({code:'unknown_fact',section,index,match:id});
-  for(const l of lexicalFailures(x.text.normalize('NFKC')))failures.push({...l,section,index});
+  const text=x.text.normalize('NFKC');
+  if(policy.singleSentence&&text.split(/[。！？.!?；;]/u).filter(part=>part.trim()).length>1)failures.push({code:'multi_sentence',section,index,match:text});
+  for(const l of policyLexicalFailures(text,policy))failures.push({...l,section,index});
  });
  return failures.length?fail(failures):{ok:true,output,failures:[]};
 }
+export const validateExplanation=(raw:unknown,factIds:ReadonlySet<string>):ValidationResult=>validateHypotheses(raw,factIds,MACRO_POLICY) as ValidationResult;
+// TOPICS ↑

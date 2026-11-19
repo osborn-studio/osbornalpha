@@ -1,4 +1,12 @@
 {
+  "summaryTemplates": {
+    "macro_level": "{name} was {value} in {period}",
+    "fact_value": "{company} {concept} was {value} in {period}",
+    "industry_value": "{industry} {metric} was {value} in {period} ({n_with_data}/{n_members} members with data)",
+    "reconstruction": " (reconstruction)",
+    "citation": "See {title}, page {page}",
+    "judgment_ref": "See F4 judgment card {method}"
+  },
   "entry": {
     "title": "Topics",
     "titleEn": "专题研究",
