@@ -152,6 +152,17 @@ it('publishes an approved summary only with provider confirmation',async()=>{
   expect((await c.query(sql,args)).rows[0].r.version_no).toBe(1);
  }finally{await c.query('rollback');c.release();}
 });
+it('preserves billing RPC overload counts and client execute privileges',async()=>{
+ const functions=['reserve_llm_daily_budget','create_cap_exempt_llm_audit','begin_usage_run','finalize_usage_run'];
+ for(const name of ['record_usage_event',...functions]){
+  const {rows}=await pool.query(`select count(*)::int as overloads,
+   count(*) filter (where has_function_privilege('anon',p.oid,'execute')
+    or has_function_privilege('authenticated',p.oid,'execute'))::int as client_executable
+   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+   where n.nspname='public' and p.proname=$1`,[name]);
+  expect(rows[0],name).toEqual({overloads:name==='record_usage_event'?0:1,client_executable:0});
+ }
+});
 it('accepts topic_summary usage and rejects an unknown feature',async()=>{
  const c=await pool.connect(),user=randomUUID();
  try{
