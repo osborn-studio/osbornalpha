@@ -1,9 +1,11 @@
 // Local PostgreSQL only: S4_TEST_STATE is produced by scripts/s4/local-db.ts.
 // Real RLS/table reads and RPC SQL; the HTTP envelope alone is simulated.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase} from '../../documents/fresh-db';
 import {createClient} from '@supabase/supabase-js';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
-import {Pool,type PoolClient} from 'pg';
+import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it,vi} from 'vitest';
 import {MACRO_CATALOG} from '../catalog';
 import {buildCycleTableManifest} from './cycle-table';
@@ -19,7 +21,7 @@ const enabled=!!process.env.S4_TEST_STATE;
 const asOf='1901-11-07T00:00:00.000Z';
 const fixtureBounds={from:'1901-08-31',to:'1901-10-31'};
 describe.skipIf(!enabled)('strategy history RPC on PostgreSQL with public-read projection',()=>{
- let pool:Pool,c:PoolClient;
+ let fresh:Awaited<ReturnType<typeof freshMigratedDatabase>>,c:PoolClient;
  let legacy:ReturnType<typeof macroDbStrategyPort>,rpc:ReturnType<typeof macroDbStrategyPort>;
  let read:ReturnType<typeof strategyHistoriesReader>;
  let fixtureSeries:string[],historySeries:string,bondSeries:string,capSeries:string,emptySeries:string;
@@ -46,8 +48,8 @@ describe.skipIf(!enabled)('strategy history RPC on PostgreSQL with public-read p
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   // Never accept a remote database, even if a state file is accidentally supplied.
   if(!['localhost','127.0.0.1','[::1]'].includes(new URL(state.adminUrl).hostname))throw new Error('local database required');
-  pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});c=await pool.connect();
-  await c.query('begin');
+  fresh=await freshMigratedDatabase(state.adminUrl);c=await fresh.pool.connect();
+  await c.query("begin; set local statement_timeout='10s'");
   const catalogVersion=`macro-catalog/${randomBytes(6).toString('hex')}`;
   const upsert=await c.query('select public.macro_upsert_catalog($1,$2,$3::jsonb) n',[catalogVersion,'test-rules',JSON.stringify(MACRO_CATALOG)]);
   expect(upsert.rows[0].n).toBe(MACRO_CATALOG.length);
@@ -119,11 +121,11 @@ describe.skipIf(!enabled)('strategy history RPC on PostgreSQL with public-read p
   const client=createClient('https://fixture.invalid','anon-fixture',{global:{fetch:fetcher},auth:{persistSession:false,autoRefreshToken:false}});
   const db=supabaseMacroDb({admin:client,anon:client});read=strategyHistoriesReader(client);
   legacy=macroDbStrategyPort(db);rpc=macroDbStrategyPort(db,{historiesReader:async(ids,bounds)=>{rpcCalls++;return read(ids,bounds);}});
- },30000);
+ },60000);
  // Catalog, batches, evidence, observations and migration replay all stay uncommitted.
  afterAll(async()=>{
   try{if(c)await c.query('rollback');}
-  finally{c?.release();await pool?.end();}
+  finally{try{c?.release();}finally{await fresh?.drop();}}
  });
  it('matches legacy visible rows, raw counts, empty series and inclusive bounds in multi-series calls',async()=>{
   for(const bounds of [fixtureBounds,{...fixtureBounds,from:'1901-09-01'},{...fixtureBounds,to:'1901-08-31'},{from:'1901-08-31',to:'1901-09-30'}]){

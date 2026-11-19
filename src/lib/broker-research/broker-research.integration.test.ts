@@ -4,6 +4,8 @@
 // function-backed triggers; block 3 (A3) public views under the real anon/authenticated roles;
 // block 4 (A5) the pgBrokerResearchDb contract. Rows are never cleaned up: test:db builds a fresh
 // database per run and every test seeds its own licence/document/report.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -21,20 +23,6 @@ const enabled=!!process.env.S4_TEST_STATE;
 const M1='supabase/migrations/20261202090000_broker_research.sql';
 const TABLES=['broker_research_settings','broker_report_licences','broker_report_upload_intents','broker_report_documents','broker_report_runs','broker_research_reports','broker_report_targets','broker_report_target_overrides','broker_report_fields','broker_report_snippets','broker_report_summaries','broker_report_publications','broker_report_rule_receipts','broker_purge_steps','research_institutions','research_rating_scales','research_analysts','broker_report_analysts','broker_report_access_log','broker_eval_receipts','broker_outbox','broker_storage_writes'];
 
-// Same replay policy as facts.integration.test.ts (not exported there).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);return;}
-  catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 /** broker_research_settings is one global row (public_enabled, approved_gold_corpus_hash). Every describe that reads its
  * defaults or toggles it holds this session-level advisory lock from beforeAll to afterAll (pipeline.integration.test.ts
  * does the same), so parallel test files never interleave. The release restores the defaults, then unlocks. */
@@ -126,10 +114,14 @@ describe.skipIf(!enabled)('A1 broker research tables, constraints, bucket, grant
    expect({t,ok:await priv('service_role',t,'INSERT')}).toEqual({t,ok:dml});
    expect({t,ok:await priv('service_role',t,'DELETE')}).toEqual({t,ok:dml});
   }
-  expect(await s.q(`select id,public_enabled,approved_gold_corpus_hash from public.broker_research_settings`)).toEqual([{id:1,public_enabled:false,approved_gold_corpus_hash:null}]);
-  expect((await fails(s.q(`insert into public.broker_research_settings(id) values(2)`))).message).toMatch(/broker_research_settings_singleton/);
-  await expect(replayMigration(admin,readFileSync(M1,'utf8'))).resolves.toBeUndefined();
-  expect(await s.one(`select count(*)::int v from public.broker_research_settings`)).toBe(1);
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   const s=seeds(fresh.pool);
+   expect(await s.q(`select id,public_enabled,approved_gold_corpus_hash from public.broker_research_settings`)).toEqual([{id:1,public_enabled:false,approved_gold_corpus_hash:null}]);
+   expect((await fails(s.q(`insert into public.broker_research_settings(id) values(2)`))).message).toMatch(/broker_research_settings_singleton/);
+   await expect(replayFiles(fresh.pool,[M1])).resolves.toBeUndefined();
+   expect(await s.one(`select count(*)::int v from public.broker_research_settings`)).toBe(1);
+  }finally{await fresh.drop();}
  },60000);
 
  it('constraints: sha/storage path, intents staging path, lease pair, field shapes, corrected payload, effective uniqueness, snippet length',async()=>{
@@ -569,7 +561,10 @@ describe.skipIf(!enabled)('A2 broker research SQL functions and function-backed 
   const oids=new Set(all.map(r=>Number(r.oid)));
   for(const trig of ['public.broker_licences_version()','public.broker_report_child_guard()','public.broker_snippets_approval()','public.broker_reports_after_change()'])
    expect({trig,inInventory:oids.has(Number(await s.one(`select $1::regprocedure::oid::int v`,[trig])))}).toEqual({trig,inInventory:true});   // compared by OID, never by display text
-  await expect(replayMigration(pool,readFileSync(M2,'utf8'))).resolves.toBeUndefined();
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[M2])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
  },60000);
 
  it('broker_field_effective: a present corrected key wins (explicit null clears), a missing key inherits',async()=>{
@@ -1034,7 +1029,10 @@ describe.skipIf(!enabled)('A3 public views under the real anon and authenticated
    expect((await fails(asRole(role,c=>c.query(`select public.broker_report_publish(gen_random_uuid(),gen_random_uuid())`))))).toMatchObject({code:'42501'});
    expect((await fails(asRole(role,c=>c.query(`select public.broker_field_effective(null,'x',null,null,null,null)`))))).toMatchObject({code:'42501'});
   }
-  await expect(replayMigration(pool,readFileSync(M3,'utf8'))).resolves.toBeUndefined();
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[M3])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
  },120000);
 
  it('visibility: the published report is in every view for both roles; public_enabled=false empties every view',async()=>{

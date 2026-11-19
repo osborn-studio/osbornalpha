@@ -4,6 +4,8 @@
 // digest / evidence / snapshot / selection functions with two-connection interleavings and the
 // SQL-vs-TS canonical ids (Task 2); the pgCompanyDb contract (Task 4). Rows are never cleaned up:
 // test:db creates a fresh database for every run, and every test uses its own issuers and users.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -40,23 +42,6 @@ const NO_DIRECT_WRITE=['issuer_events','issuer_coverage','company_digest_state',
 type Market='US'|'CN';
 type Role='anon'|'authenticated'|'service_role';
 
-// Same replay policy as src/lib/facts/facts.integration.test.ts (not exported there): one transaction,
-// short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 
 /** One open transaction on its own connection, optionally as a client role with JWT claims (local auth.uid() reads request.jwt.claim.sub; hosted reads request.jwt.claims). */
 interface Tx{c:PoolClient;pid:number;commit():Promise<void>;rollback():Promise<void>}
@@ -193,10 +178,11 @@ describe.skipIf(!enabled)('company research tables on real PostgreSQL',()=>{
   ].sort();
   const actualPolicies=(await fx.q(`select tablename,policyname,cmd,roles::text r from pg_policies where schemaname='public' and tablename=any($1)`,[TABLES])).map(r=>`${r.tablename}|${r.policyname}|${r.cmd}|${r.r}`).sort();
   expect(actualPolicies).toEqual(expectedPolicies);
-  const sql=readFileSync(TABLES_MIGRATION,'utf8');
-  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
-  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[TABLES_MIGRATION,TABLES_MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('constraints and foreign keys: enums, JSON shapes, hex ids, the natural key, batches, filings, coverage, note length, evidence cascade',async()=>{
   const s=await fx.stream([{facts:[{}]}]);const b=await fx.batch();
@@ -423,27 +409,26 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
  ];
 
  it('function inventory: migration-role owner, security mode, empty search_path, execute grants by real role; both migrations replay',async()=>{
-  const owner=await fx.one(`select proowner::regrole::text v from pg_proc where oid='public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean)'::regprocedure`);
-  for(const f of FUNCS){
-   const p=(await fx.q(`select proowner::regrole::text owner, prosecdef, coalesce(proconfig,'{}'::text[]) cfg from pg_proc where oid=$1::regprocedure`,[f.sig]))[0];
-   expect({sig:f.sig,owner:p.owner,definer:p.prosecdef,path:(p.cfg as string[]).includes('search_path=""')}).toEqual({sig:f.sig,owner,definer:f.definer,path:true});
-   for(const role of ALL)expect({sig:f.sig,role,ok:await fx.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,f.sig])}).toEqual({sig:f.sig,role,ok:f.roles.includes(role)});
-  }
-  const s=await fx.stream([{facts:[{}]}]);
-  const calls=[`select public.begin_company_digest_attempt('${s.iss}','US',now())`,`select public.replace_company_digest('${s.iss}','US',gen_random_uuid(),1,gen_random_uuid(),1,false,'[]','{}')`,
-   `select public.mark_company_digest_failed('${s.iss}','US',1,now())`,`select public.replace_company_fact_evidence('${s.iss}','US',1,1,'[]')`,`select public.company_digest_due(now(),10)`,`select public.company_digest_backlog()`];
-  for(const role of ['anon','authenticated'] as const)for(const sql of calls)
-   expect({role,sql,msg:(await fails(inTx(admin,{role},tx=>tx.c.query(sql)))).message}).toEqual({role,sql,msg:expect.stringMatching(/permission denied/)});
-  await expect(replayMigration(admin,readFileSync(TABLES_MIGRATION,'utf8'))).resolves.toBeUndefined();
-  for(let i=0;i<2;i++){   // replay in lock order: the fence migration supersedes the 3-arg evidence writer and the evidence check
-   await expect(replayMigration(admin,readFileSync(FUNCTIONS_MIGRATION,'utf8'))).resolves.toBeUndefined();
-   await expect(replayMigration(admin,readFileSync(FENCE_MIGRATION,'utf8'))).resolves.toBeUndefined();
-   await expect(replayMigration(admin,readFileSync(LOOKUP_MIGRATION,'utf8'))).resolves.toBeUndefined();
-   await expect(replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'))).resolves.toBeUndefined();
-   await expect(replayMigration(admin,readFileSync(CHUNK_MIGRATION,'utf8'))).resolves.toBeUndefined();
-  }
-  expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   const fx=fixtures(fresh.pool);
+   const owner=await fx.one(`select proowner::regrole::text v from pg_proc where oid='public.read_facts(uuid,text,text[],date,date,date,boolean,int,boolean)'::regprocedure`);
+   for(const f of FUNCS){
+    const p=(await fx.q(`select proowner::regrole::text owner, prosecdef, coalesce(proconfig,'{}'::text[]) cfg from pg_proc where oid=$1::regprocedure`,[f.sig]))[0];
+    expect({sig:f.sig,owner:p.owner,definer:p.prosecdef,path:(p.cfg as string[]).includes('search_path=""')}).toEqual({sig:f.sig,owner,definer:f.definer,path:true});
+    for(const role of ALL)expect({sig:f.sig,role,ok:await fx.one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,f.sig])}).toEqual({sig:f.sig,role,ok:f.roles.includes(role)});
+   }
+   const s=await fx.stream([{facts:[{}]}]);
+   const calls=[`select public.begin_company_digest_attempt('${s.iss}','US',now())`,`select public.replace_company_digest('${s.iss}','US',gen_random_uuid(),1,gen_random_uuid(),1,false,'[]','{}')`,
+    `select public.mark_company_digest_failed('${s.iss}','US',1,now())`,`select public.replace_company_fact_evidence('${s.iss}','US',1,1,'[]')`,`select public.company_digest_due(now(),10)`,`select public.company_digest_backlog()`];
+   for(const role of ['anon','authenticated'] as const)for(const sql of calls)
+    expect({role,sql,msg:(await fails(inTx(fresh.pool,{role},tx=>tx.c.query(sql)))).message}).toEqual({role,sql,msg:expect.stringMatching(/permission denied/)});
+   await expect(replayFiles(fresh.pool,[TABLES_MIGRATION])).resolves.toBeUndefined();
+   for(let i=0;i<2;i++)
+    await expect(replayFiles(fresh.pool,[FUNCTIONS_MIGRATION,FENCE_MIGRATION,LOOKUP_MIGRATION,RETRY_MIGRATION,CHUNK_MIGRATION])).resolves.toBeUndefined();
+   expect(await fx.one(`select to_regprocedure('public.replace_company_fact_evidence(uuid,text,jsonb)') is null v`)).toBe(true);
+  }finally{await fresh.drop();}
+ },60000);
 
  it('chunked writer caps calls at 500, guards null prune and clamps backlog limits',async()=>{
   const s=await fx.stream([{facts:[{}]}]);const a=await fx.one(`select public.begin_company_digest_attempt($1,'US',now()) v`,[s.iss]);
@@ -458,17 +443,21 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
  });
 
  it('retry migration preserves the sweep function identity, owner, ACL and security on replay',async()=>{
-  const properties=()=>fx.q(`select oid, proowner, proacl::text, prosecdef, provolatile, proconfig, prolang
-   from pg_proc where oid='public.company_sweep_due(timestamptz,timestamptz,int,text)'::regprocedure`);
-  const before=await properties();
-  for(let n=0;n<2;n++){
-   await replayMigration(admin,readFileSync(RETRY_MIGRATION,'utf8'));
-   expect(await properties()).toEqual(before);
-  }
-  for(const role of ['anon','authenticated'] as const)
-   expect((await fails(inTx(admin,{role},tx=>tx.c.query(`select public.company_sweep_due(now(),now(),1)`)))).code).toBe('42501');
-  expect(await inTx(admin,{role:'service_role'},async tx=>(await tx.c.query(`select public.company_sweep_due(now(),now(),0) v`)).rows[0].v)).toEqual([]);
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   const fx=fixtures(fresh.pool);
+   const properties=()=>fx.q(`select oid, proowner, proacl::text, prosecdef, provolatile, proconfig, prolang
+    from pg_proc where oid='public.company_sweep_due(timestamptz,timestamptz,int,text)'::regprocedure`);
+   const before=await properties();
+   for(let n=0;n<2;n++){
+    await replayFiles(fresh.pool,[RETRY_MIGRATION]);
+    expect(await properties()).toEqual(before);
+   }
+   for(const role of ['anon','authenticated'] as const)
+    expect((await fails(inTx(fresh.pool,{role},tx=>tx.c.query(`select public.company_sweep_due(now(),now(),1)`)))).code).toBe('42501');
+   expect(await inTx(fresh.pool,{role:'service_role'},async tx=>(await tx.c.query(`select public.company_sweep_due(now(),now(),0) v`)).rows[0].v)).toEqual([]);
+  }finally{await fresh.drop();}
+ },60000);
 
  it('company_canonical_json is byte-identical to canonicalJson; replace stores eventIdOf / payloadHashOf',async()=>{
   const SAMPLES:unknown[]=[

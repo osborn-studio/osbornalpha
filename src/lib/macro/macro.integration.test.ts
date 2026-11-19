@@ -19,6 +19,8 @@
 // Rows are never cleaned up (append-only by design; test:db creates a fresh database per run);
 // every test uses its own series ids. Publish state rows (US/CN) are shared, so publish tests
 // always read the current state right before publishing.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -59,23 +61,6 @@ const SERVICE_RPCS=[
 ];
 const READ_RPCS=['public.macro_latest_observations(text[],timestamptz,date)','public.macro_snapshots_since(timestamptz,uuid,int)','public.macro_batch_eligible(uuid)'];
 
-// Same replay policy as facts.integration.test.ts (not exported there): one transaction, short
-// lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 
 type PgErr={message:string;code?:string};
 const fails=(p:Promise<unknown>)=>p.then(()=>{throw new Error('expected rejection');},e=>e as PgErr);
@@ -92,9 +77,9 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
  const sid=(p='T')=>`${p}_${randomBytes(5).toString('hex').toUpperCase()}`;
  const src=(key:string)=>({adapter:'fred_csv',fetchHost:'fred.stlouisfed.org',publisher:{zh:'美国劳工统计局',en:'BLS'},via:{zh:'FRED（圣路易斯联储）',en:'FRED (St. Louis Fed)'},seriesKey:key,rights:'public_domain',attribution:{zh:'来源：BLS，经 FRED',en:'Source: BLS via FRED'}});
  const def=(id:string,o:Record<string,unknown>={})=>({id,region:'US',role:'indicator',type:'labor_rate',name:{zh:id,en:id},unit:'pct',nativeFrequency:'monthly',period:'month',adjustment:'sa',status:'active',source:src(id),revisionPolicy:'revisable',weight:0,changeKind:'pp',definitionVersion:1,...o});
- const catalog=async(defs:Record<string,unknown>[])=>{
+ const catalog=async(defs:Record<string,unknown>[],pool=admin)=>{
   const v=`macro-catalog/${randomBytes(6).toString('hex')}`;
-  expect(await one(`select public.macro_upsert_catalog($1,'macro-rules/1',$2::jsonb) v`,[v,JSON.stringify(defs)])).toBe(defs.length);
+  expect((await pool.query(`select public.macro_upsert_catalog($1,'macro-rules/1',$2::jsonb) v`,[v,JSON.stringify(defs)])).rows[0].v).toBe(defs.length);
   return v;
  };
  /** A running batch (status default 'running'), as startBatch leaves it. */
@@ -190,20 +175,26 @@ describe.skipIf(!enabled)('macro workbench migration on real PostgreSQL',()=>{
   const fn=(role:string,sig:string)=>one(`select has_function_privilege($1,$2,'EXECUTE') v`,[role,sig]);
   for(const sig of SERVICE_RPCS){for(const role of ['anon','authenticated'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:false});expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});}
   for(const sig of READ_RPCS)for(const role of ['anon','authenticated','service_role'])expect({sig,role,ok:await fn(role,sig)}).toEqual({sig,role,ok:true});
-  const before=await q(`select region,revision::text,input_revision::text from public.macro_publish_state order by region`);
-  const sql=readFileSync(MIGRATION,'utf8');
-  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
-  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
-  expect(await q(`select region,revision::text,input_revision::text from public.macro_publish_state order by region`)).toEqual(before);   // the seed never resets state
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await fresh.pool.query("update public.macro_publish_state set revision=7,input_revision=9 where region='US'");
+   const revisions=async()=>(await fresh.pool.query('select region,revision::text,input_revision::text from public.macro_publish_state order by region')).rows;
+   const before=await revisions();
+   await expect(replayFiles(fresh.pool,[MIGRATION,MIGRATION])).resolves.toBeUndefined();
+   expect(await revisions()).toEqual(before);
+  }finally{await fresh.drop();}
  },60000);
 
  it('replays the display frequency migration and validates weekly catalog rows',async()=>{
-  const sql=readFileSync('supabase/migrations/20261127090000_macro_display_frequency.sql','utf8');
-  await replayMigration(admin,sql);await replayMigration(admin,sql);
-  const id=sid('WEEKLY');await catalog([def(id,{nativeFrequency:'weekly',period:'day'})]);
-  expect(await one('select native_frequency v from public.macro_series where id=$1',[id])).toBe('weekly');
-  await expect(catalog([def(sid('BOGUS'),{nativeFrequency:'bogus'})])).rejects.toThrow();
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   const file='supabase/migrations/20261127090000_macro_display_frequency.sql';
+   await expect(replayFiles(fresh.pool,[file,file])).resolves.toBeUndefined();
+   const id=sid('WEEKLY');await catalog([def(id,{nativeFrequency:'weekly',period:'day'})],fresh.pool);
+   expect((await fresh.pool.query('select native_frequency v from public.macro_series where id=$1',[id])).rows[0].v).toBe('weekly');
+   await expect(catalog([def(sid('BOGUS'),{nativeFrequency:'bogus'})],fresh.pool)).rejects.toThrow();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('refuses direct writes and service RPCs to anon and authenticated',async()=>{
   for(const role of ['anon','authenticated']){

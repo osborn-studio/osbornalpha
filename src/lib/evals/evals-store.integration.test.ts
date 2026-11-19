@@ -3,6 +3,8 @@
 // the 20261110090000_dq_eval_runs migration replays, every named constraint rejects, case rows restrict
 // run deletion, anon/authenticated have no access, decimal text columns round-trip byte-identically
 // through pgTableClient. Every row this file writes uses run ids it created and removes them afterwards.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -18,23 +20,6 @@ const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261110090000_dq_eval_runs.sql';
 const TABLES=['dq_eval_runs','dq_eval_case_results'];
 
-// Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
-// short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));   // jittered backoff: other suites hold locks on the shared DB
-  }finally{c.release();}
- }
-}
 
 type Over=Record<string,unknown>;
 const runCols=(run_id:string,o:Over={}):Over=>({
@@ -75,8 +60,10 @@ describe.skipIf(!enabled)('F6 dq_eval_runs / dq_eval_case_results on real Postgr
   for(const r of rows)expect(r.relrowsecurity).toBe(true);
   expect((await admin.query(`select count(*)::int n from pg_policies where schemaname='public' and tablename=any($1)`,[TABLES])).rows[0].n).toBe(0);
   const sql=readFileSync(MIGRATION,'utf8');
-  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
-  await expect(replayMigration(admin,sql)).resolves.toBeUndefined();
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION,MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
   expect(sql.replace(/--.*$/gm,'')).not.toMatch(/dq_reconciliations/);   // the header comment names it; no statement may
  },60000);
 

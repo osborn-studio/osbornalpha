@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -101,11 +103,15 @@ describe.skipIf(!enabled)('WP-A9 weekend flow on real PostgreSQL',()=>{
   expect(counts).toEqual([{arm:'ai_candidate',n:1},{arm:'collab',n:1},{arm:'human_baseline',n:1}]);
  });
  it('ships the analyst identity map with owner RLS and replays',async()=>{
-  await expect(admin.query(readFileSync('supabase/migrations/20260926140000_research_analyst_identities.sql','utf8'))).resolves.toBeDefined();
-  await admin.query("insert into public.research_analyst_identities(user_id,channel,external_id,analyst_id) values($1,'feishu','ou_123',$2)",[actor.userId,randomUUID()]);
-  await expect(admin.query("insert into public.research_analyst_identities(user_id,channel,external_id,analyst_id) values($1,'feishu','ou_123',$2)",[actor.userId,randomUUID()])).rejects.toThrow(/duplicate key/);
-  await expect(admin.query("insert into public.research_analyst_identities(user_id,channel,external_id,analyst_id) values($1,'Bad Channel','x',$2)",[actor.userId,randomUUID()])).rejects.toThrow(/check constraint/);
-  const policies=(await admin.query("select policyname from pg_policies where tablename='research_analyst_identities'")).rows.map((p:any)=>p.policyname).sort();
-  expect(policies).toEqual(['research_analyst_identities self delete','research_analyst_identities self insert','research_analyst_identities self select']);
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await fresh.pool.query('insert into auth.users(id,email) values($1,$2)',[actor.userId,actor.userId+'@example.test']);
+   await expect(replayFiles(fresh.pool,['supabase/migrations/20260926140000_research_analyst_identities.sql'])).resolves.toBeUndefined();
+   await fresh.pool.query("insert into public.research_analyst_identities(user_id,channel,external_id,analyst_id) values($1,'feishu','ou_123',$2)",[actor.userId,randomUUID()]);
+   await expect(fresh.pool.query("insert into public.research_analyst_identities(user_id,channel,external_id,analyst_id) values($1,'feishu','ou_123',$2)",[actor.userId,randomUUID()])).rejects.toThrow(/duplicate key/);
+   await expect(fresh.pool.query("insert into public.research_analyst_identities(user_id,channel,external_id,analyst_id) values($1,'Bad Channel','x',$2)",[actor.userId,randomUUID()])).rejects.toThrow(/check constraint/);
+   const policies=(await fresh.pool.query("select policyname from pg_policies where tablename='research_analyst_identities'")).rows.map((p:any)=>p.policyname).sort();
+   expect(policies).toEqual(['research_analyst_identities self delete','research_analyst_identities self insert','research_analyst_identities self select']);
+  }finally{await fresh.drop();}
+ },60000);
 });

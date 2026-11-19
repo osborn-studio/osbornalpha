@@ -9,6 +9,8 @@
 // publish/activate path with the freeze and the V8 prune, the manifest index, and (Task 4) the
 // pgIndustryDb contract. Isolation: private classification versions 't…' with their own licence rows,
 // random tickers, ts_codes and l1 codes; prune is always scoped to a private version.
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -42,22 +44,6 @@ const FUNCTIONS:Record<string,'read'|'service'|'internal'>={
 };
 const TRIGGER_FUNCTIONS=['issuer_industry_memberships_lifecycle()','industry_source_memberships_immutable()','industry_runs_immutable()','industry_rows_frozen()'];
 
-// Same replay policy as facts.integration.test.ts (not exported there).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s';\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));
-  }finally{c.release();}
- }
-}
 /** Runs body inside one transaction on its own connection (pid known); rolls back only if still open. */
 interface Tx{c:PoolClient;pid:number;commit():Promise<void>}
 async function inTx(pool:Pool,body:(tx:Tx)=>Promise<void>):Promise<void>{
@@ -150,14 +136,12 @@ describe.skipIf(!enabled)('I-0 industry functions on real PostgreSQL',()=>{
   }
   const triggers=(await q(`select tgrelid::regclass::text t,tgname from pg_trigger where not tgisinternal and tgname=any($1) order by 1,2`,[['issuer_industry_memberships_lifecycle','industry_source_memberships_immutable','industry_runs_immutable','industry_metrics_frozen','industry_valuations_frozen','industry_valuation_pairs_frozen']])).map(r=>`${r.t}.${r.tgname}`);
   expect(triggers).toEqual(['industry_metric_runs.industry_runs_immutable','industry_metrics.industry_metrics_frozen','industry_source_memberships.industry_source_memberships_immutable','industry_valuation_pairs.industry_valuation_pairs_frozen','industry_valuation_runs.industry_runs_immutable','industry_valuations.industry_valuations_frozen','issuer_industry_memberships.issuer_industry_memberships_lifecycle']);
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
-  await expect(replayMigration(admin,readFileSync(MIGRATION,'utf8'))).resolves.toBeUndefined();
-  // Restore/replay the forward correction after replaying the historical function migration.
-  await replayMigration(admin,readFileSync(PAIR_TOLERANCE_MIGRATION,'utf8'));
-  await replayMigration(admin,readFileSync(PAIR_TOLERANCE_MIGRATION,'utf8'));
-  await replayMigration(admin,readFileSync(US_AGGREGATES_MIGRATION,'utf8'));
-  await replayMigration(admin,readFileSync(US_AGGREGATES_MIGRATION,'utf8'));
-  expect(await one(`select has_function_privilege('anon','public.apply_observations(text,uuid,jsonb)','EXECUTE') v`)).toBe(false);
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION,MIGRATION])).resolves.toBeUndefined();
+   await expect(replayFiles(fresh.pool,[PAIR_TOLERANCE_MIGRATION,PAIR_TOLERANCE_MIGRATION,US_AGGREGATES_MIGRATION,US_AGGREGATES_MIGRATION])).resolves.toBeUndefined();
+   expect(await one(`select has_function_privilege('anon','public.apply_observations(text,uuid,jsonb)','EXECUTE') v`,[],fresh.pool)).toBe(false);
+  }finally{await fresh.drop();}
  },60000);
 
  it('set_industry_dataset_license records its audit row in the same transaction: a failing audit insert rolls the switch back',async()=>{

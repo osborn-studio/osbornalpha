@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool,Client} from 'pg';
@@ -39,8 +41,11 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
    expect(policies.find((p:any)=>p.tablename===t&&p.policyname==='s4_owner')?.roles).toContain('alpha_s4_runtime');
    expect(policies.filter((p:any)=>p.tablename===t).map((p:any)=>p.policyname)).not.toContain(`${t} self update`);
   }
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('rejects every update and delete, even from the table owner',async()=>{
   const jid=randomUUID(),lid=randomUUID(),did=randomUUID(),oid=randomUUID();
@@ -135,7 +140,12 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
  });
 
  it('E4: links a decision to one of the owner\'s S4 observations and refuses foreign or unknown observations',async()=>{
-  await expect(admin.query(readFileSync('supabase/migrations/20260926130000_research_decisions_observation.sql','utf8'))).resolves.toBeDefined();
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,['supabase/migrations/20260926130000_research_decisions_observation.sql'])).resolves.toBeUndefined();
+   const col=(await fresh.pool.query("select is_nullable from information_schema.columns where table_schema='public' and table_name='research_decisions' and column_name='observation_id'")).rows[0];
+   expect(col?.is_nullable).toBe('YES');
+  }finally{await fresh.drop();}
   const col=(await admin.query("select is_nullable from information_schema.columns where table_schema='public' and table_name='research_decisions' and column_name='observation_id'")).rows[0];
   expect(col?.is_nullable).toBe('YES');
   // Minimal S4 observation state for the owner (binding → source version → candidate → Observation record → state).
@@ -163,7 +173,7 @@ describe.skipIf(!enabled)('WP-A3 judgment ledger on real PostgreSQL',()=>{
   expect(detail.observation_id).toBe(mine);
   const unlinked=await recordDecision(actor,{...base,reason:'no observation yet'});
   expect((await admin.query('select observation_id from public.research_decisions where user_id=$1 and id=$2',[actor.userId,unlinked.id])).rows[0].observation_id).toBeNull();
- });
+ },60000);
 
  it('records outcomes only against the owner\'s existing decisions',async()=>{
   const decision=await recordDecision(actor,{thesis_id:thesisId,week_of:'2026-09-21',arm:'ai_candidate',action:'shadow',reason:'shadow run'});

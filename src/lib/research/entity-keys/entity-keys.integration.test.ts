@@ -1,3 +1,5 @@
+// Migration replays take DDL locks, so they run in a private database (see fresh-db.ts).
+import {freshMigratedDatabase,replayFiles} from '../../documents/fresh-db';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
@@ -26,8 +28,11 @@ describe.skipIf(!enabled)('WP-A2 entity keys on real PostgreSQL',()=>{
   for(const t of TABLES) for(const op of ['select','insert','update','delete']) expect(policies.some((p:any)=>p.tablename===t&&p.policyname===`${t} self ${op}`)).toBe(true);
   const grants=(await admin.query(`select table_name,privilege_type from information_schema.role_table_grants where grantee='alpha_s4_runtime' and table_name=any($1)`,[TABLES])).rows;
   expect(grants.map((g:any)=>g.privilege_type)).toEqual(['SELECT','SELECT']);
-  await expect(admin.query(readFileSync(MIGRATION,'utf8'))).resolves.toBeDefined();
- });
+  const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION])).resolves.toBeUndefined();
+  }finally{await fresh.drop();}
+ },60000);
 
  it('binds keys and securities to the owner\'s entity and enforces shape, uniqueness and validity windows',async()=>{
   await admin.query(`insert into public.research_entity_keys(user_id,entity_id,lei,usci,home_market,in_scope,names_zh,names_en) values($1,$2,'3003003LS77D1DRDDE25','913300002539329145','A',true,'["恒生电子"]','["Hundsun Technologies Inc."]')`,[owner,entityId]);
