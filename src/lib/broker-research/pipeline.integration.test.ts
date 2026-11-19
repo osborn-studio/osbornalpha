@@ -46,6 +46,7 @@ describe.skipIf(!enabled)('broker research pipeline (critical, real PostgreSQL)'
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
   pool=new Pool({connectionString:state.adminUrl});
   lock=await pool.connect();
+  // Wait for the other broker research suites to release the settings lock.
   await lock.query(`select pg_advisory_lock(hashtext('broker_research_settings'))`);   // session-level; released in afterAll
   await pool.query(`insert into auth.users(id,email) values($1,'broker-admin@test.invalid') on conflict do nothing`,[ADMIN_ID]);
   await pool.query(`insert into public.stocks_universe(ticker,name,market) values($1,'ZZ Robotics Inc','US') on conflict (ticker) do nothing`,[PIPELINE_TICKER]);
@@ -55,7 +56,7 @@ describe.skipIf(!enabled)('broker research pipeline (critical, real PostgreSQL)'
   deps={db:pgBrokerResearchDb(pool),storage:memoryBrokerStorage(),tables:pgTableClient(pool),f3:fakeF3Port((i)=>pipelineExtraction(i.sha256)),
    llm:recordedLlmPort((req)=>req.system.startsWith('You write')?SUMMARY_RESPONSE:EXTRACT_RESPONSE),now:()=>new Date(),codeVersion:'pipeline-test',newId:randomUUID};
   prior=await deps.db.getSettings();
- });
+ },120000);
  afterAll(async()=>{
   if(lock){
    try{await lock.query(`update public.broker_research_settings set public_enabled=$1,approved_gold_corpus_hash=$2,approved_gold_corpus_by=$3,approved_gold_corpus_at=$4 where id=1`,
