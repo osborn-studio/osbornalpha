@@ -6,12 +6,12 @@ export type VersionRow=Awaited<ReturnType<typeof loadVersionRows>>[number];
 export type Preview=Awaited<ReturnType<typeof previewDraft>>;
 export type Receipt={passed:boolean;draft_hash:string;checks:DisclosureCheck[]};
 export const COUNT_ORDER=['ok','withheld','missing','not_served','retracted','unsupported'] as const;
-export function publishModel(i:{receipt:Receipt|null;draftHash:string;versions:{version_no:number;status:string}[];preview:{counts:EvidenceCounts;evidence:number;expected_slots:number}|null;retired:boolean}){
+export function publishModel(i:{receipt:Receipt|null;draftHash:string;versions:{version_no:number;status:string}[];preview:{counts:EvidenceCounts;evidence:number;expected_slots:number;summary?:boolean}|null;retired:boolean}){
  const totals={block:0,warn:0,pass:0};
  for(const check of i.receipt?.checks??[])totals[check.result]++;
  const reason=i.retired?'retired':!i.receipt?'no_receipt':i.receipt.draft_hash!==i.draftHash?'stale_receipt':!i.receipt.passed||totals.block?'blocked':'ok';
  const nextVersion=i.versions.reduce((max,row)=>Math.max(max,row.version_no),0)+1;
- const preview=i.preview,dialog=preview?{evidence:preview.evidence,slots:preview.expected_slots,summary:false as const,
+ const preview=i.preview,dialog=preview?{evidence:preview.evidence,slots:preview.expected_slots,summary:preview.summary??false,
   distribution:COUNT_ORDER.filter(state=>preview.counts[state]>0).map(state=>({state,n:preview.counts[state]}))}:null;
  return {canPublish:reason==='ok',reason,remaining:totals.block,totals,nextVersion,dialog} as const;
 }
@@ -28,4 +28,18 @@ export function driftDetail(row:TopicEvidenceDriftRow){
 export function lastVerification(audit:readonly TopicAuditRow[],versionNo:number){
  const last=audit.findLast(e=>e.action==='replay_verify'&&e.detail.version_no===versionNo);
  return last&&Array.isArray(last.detail.mismatched)?{time:last.created_at,mismatches:last.detail.mismatched.length}:null;
+}
+
+export type SummaryRun=Omit<ReturnType<typeof import('@/lib/topics/summary/db').projectSummaryRun>,'run_id'>;
+export function summaryRunModel(run:SummaryRun|null){
+ if(run?.state==='rejected'){
+  const failures=run.validation?.failures,first=Array.isArray(failures)?failures[0]:null;
+  return {kind:'rejected',code:first?.code??run.failure_codes[0]??null,match:first?.match??null} as const;
+ }
+ if(run?.state==='failed'||run?.state==='abandoned')return {kind:'error',code:run.failure_codes[0]??run.state} as const;
+ if(run?.state==='running')return {kind:'running'} as const;
+ const s=run?.summary;
+ if(!s||s.status==='discarded')return {kind:'empty'} as const;
+ return {kind:s.status==='approved'?'approved':'accepted',id:s.summary_id,
+  facts:s.rendered.facts.length,points:s.rendered.points.length,counterpoints:s.rendered.counterpoints.length} as const;
 }

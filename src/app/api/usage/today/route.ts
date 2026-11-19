@@ -1,13 +1,18 @@
 import { NextResponse } from 'next/server';
 import { getServerSupabase } from '@/lib/supabase/server';
 import { getAdminSupabase } from '@/lib/supabase/admin';
-import { dayWindowUtc8, limitFor, type QuotaFeature } from '@/lib/billing/quota';
+import { dayWindowUtc8, limitFor } from '@/lib/billing/quota';
+// TOPICS ↓
+import type { UsageFeature } from '@/lib/supabase/database.types';
+// TOPICS ↑
 import { effectivePlan } from '@/lib/billing/plan';
 import { getBudgetConfig } from '@/lib/billing/cost-budget';
 
 export const dynamic = 'force-dynamic';
 
-const FEATURES: QuotaFeature[] = ['copilot', 'perspectives', 'brief_preview'];
+// TOPICS ↓
+const FEATURES: UsageFeature[] = ['copilot', 'perspectives', 'brief_preview'];
+// TOPICS ↑
 
 interface CostReservationRow {
   status: string;
@@ -83,11 +88,13 @@ export async function GET() {
   const now = new Date();
   const { startIso, endIso } = dayWindowUtc8(now);
 
-  const usage: Record<QuotaFeature, { used: number; limit: number }> = {
+  // TOPICS ↓
+  const usage: Record<UsageFeature, { used: number; limit: number }> = {
     copilot: { used: 0, limit: 0 },
     perspectives: { used: 0, limit: 0 },
     brief_preview: { used: 0, limit: 0 },
   };
+  // TOPICS ↑
 
   for (const feature of FEATURES) {
     const limit = limitFor(feature, plan, role);

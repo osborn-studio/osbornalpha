@@ -18,22 +18,31 @@ import {aggregateMeteredUsage,meteredUsageFromError,runMeteredLlmCall,type Meter
 import {getBudgetConfig} from '@/lib/billing/cost-budget';
 import {createConcurrencyLimiter,createPersonaConcurrencyLimiter,PERSONA_CONCURRENCY_HARD_CAP,type ConcurrencyLimiter} from '@/lib/billing/llm-concurrency';
 import {PRICING_VERSION} from '@/lib/billing/llm-pricing';
+// TOPICS ↓
+import {costErrorCode} from './validated-run';
+// TOPICS ↑
 import {LlmCallError,type LlmDeps} from './explain-request';
 export const EXPLAIN_MAX_OUTPUT_TOKENS=1200;
 export const EXPLAIN_TIMEOUT_MS=30_000;
 export const EXPLAIN_TEMPERATURE=0.2;
 const isMeteredUsage=(v:unknown):v is MeteredUsage=>typeof v==='object'&&v!==null&&'status' in v&&'usage' in v&&'costMicrormb' in v;
-export function productionLlmDeps(userId:string):LlmDeps{
+// TOPICS ↓
+export function productionLlmDeps(userId:string,feature:'perspectives'|'topic_summary'='perspectives',resolveProvider=resolveLlm):LlmDeps{
+// TOPICS ↑
  let llm:ResolvedLlm|null=null,limiter:ConcurrencyLimiter|null=null,budgetExempt=false;
  const resolved=():ResolvedLlm=>{if(!llm)throw new Error('llm_not_resolved');return llm;};
  return {
   async resolve(){
-   llm=await resolveLlm();
+    // TOPICS ↓
+   llm=await resolveProvider();
+    // TOPICS ↑
    return llm?{provider:llm.provider,model:llm.model,byo:llm.source==='user'}:null;
   },
   async checkQuota(){
-   try{const q=await checkQuota('perspectives');budgetExempt=q.limit===-1;return {allowed:q.allowed,used:q.used,limit:q.limit};}
+    // TOPICS ↓
+   try{const q=await checkQuota(feature);budgetExempt=q.limit===-1;return {allowed:q.allowed,used:q.used,limit:q.limit};}
    catch(e){if(e instanceof Error&&e.message==='not authenticated')throw e;return null;}
+    // TOPICS ↑
   },
   async begin(usageAuditKey){
    const r=resolved(),byo=r.source==='user';
@@ -41,18 +50,25 @@ export function productionLlmDeps(userId:string):LlmDeps{
     ?createPersonaConcurrencyLimiter({provider:r.provider,model:r.model,maxOutputTokens:EXPLAIN_MAX_OUTPUT_TOKENS})
     :createConcurrencyLimiter(PERSONA_CONCURRENCY_HARD_CAP);
    const budget=getBudgetConfig();
-   await beginUsageRun(userId,usageAuditKey,'perspectives',{provider:r.provider,model:r.model,
+    // TOPICS ↓
+   await beginUsageRun(userId,usageAuditKey,feature,{provider:r.provider,model:r.model,
     pricingVersion:byo?undefined:PRICING_VERSION,usdCnyMicros:byo?undefined:budget.usdCnyMicros,byo});
+    // TOPICS ↑
   },
   async call(system,user){
    const r=resolved();
    if(!limiter)throw new Error('usage_run_not_started');
    try{
-    const metered=await limiter.runWithBudgetRetry(()=>runMeteredLlmCall({feature:'perspectives',provider:r,userId,budgetExempt,maxOutputTokens:EXPLAIN_MAX_OUTPUT_TOKENS,
+    // TOPICS ↓
+    const metered=await limiter.runWithBudgetRetry(()=>runMeteredLlmCall({feature,provider:r,userId,budgetExempt,maxOutputTokens:EXPLAIN_MAX_OUTPUT_TOKENS,
      call:()=>chatResolved(r,{system,messages:[{role:'user',content:user}],max_tokens:EXPLAIN_MAX_OUTPUT_TOKENS,temperature:EXPLAIN_TEMPERATURE,timeoutMs:EXPLAIN_TIMEOUT_MS,responseJson:true})}));
+    // TOPICS ↑
     return {content:metered.value.content,accounting:metered.accounting};
    }catch(e){
-    throw new LlmCallError(e instanceof Error?e.message:String(e),meteredUsageFromError(e)??null);
+    // TOPICS ↓
+    const message=feature==='topic_summary'?(costErrorCode(e)??'provider_error'):(e instanceof Error?e.message:String(e));
+    throw new LlmCallError(message,meteredUsageFromError(e)??null);
+    // TOPICS ↑
    }
   },
   finalizePayload(status,accounting){
@@ -71,7 +87,9 @@ export function productionLlmDeps(userId:string):LlmDeps{
    return JSON.parse(JSON.stringify(body)) as Record<string,unknown>;
   },
   async finalize(usageAuditKey,payload){
-   await finalizeUsageRun(userId,usageAuditKey,'perspectives',payload as unknown as RecordUsageMeta);
+    // TOPICS ↓
+   await finalizeUsageRun(userId,usageAuditKey,feature,payload as unknown as RecordUsageMeta);
+    // TOPICS ↑
   },
  };
 }

@@ -101,3 +101,32 @@ describe('remote adapter boundaries (spec §4.9)',()=>{
   await expect(db.settings()).rejects.toThrow('client_unavailable');
  });
 });
+
+describe('summary run lifecycle',()=>{
+ it('expires only claims older than ten minutes and preserves durable completion',async()=>{
+  const {db,t}=await draft();
+  const start=Date.parse('2026-11-12T00:00:00Z');db.now(new Date(start));
+  const i={actor,topicId:t.topic_id,draftHash:t.draft_hash,requestId:randomUUID(),payloadHash:t.draft_hash,
+   locale:'en' as const,manifest:{},promptVersion:'p1',validatorVersion:'v1'};
+  const run=await db.claimSummary(i);
+  await db.recordSummaryCompletion({runId:run.run_id,rawOutput:'content',finalizePayload:{status:'completed'}});
+  db.now(new Date(start+600000));expect(await db.expireSummaries(actor)).toBe(0);
+  db.now(new Date(start+600001));expect(await db.expireSummaries(actor)).toBe(1);
+  expect(await db.expireSummaries(actor)).toBe(0);
+  expect(await db.claimSummary(i)).toMatchObject({state:'abandoned',raw_output:'content',finalize_payload:{status:'completed'}});
+ });
+ it('projects the same validation failure on finish and replay without exposing raw output',async()=>{
+  const {db,t}=await draft();
+  const {summaryRunStore}=await import('./summary/db');
+  const store=summaryRunStore(db,{topicId:t.topic_id,draftHash:t.draft_hash,locale:'en',manifest:{},promptVersion:'p1',validatorVersion:'v1'});
+  const id=randomUUID(),hash=t.draft_hash;
+  expect(await store.replay(actor,id,hash)).toEqual({kind:'none'});
+  const claim=await store.claim(actor,id,hash);
+  const projection=await store.finish(claim,{state:'rejected',rawOutput:{content:'raw'},provider:'test',model:'test',
+   failureCodes:['numeral'],validation:{failures:[{code:'numeral'}]},rendered:null,accounting:null,finalizePayload:{}});
+  expect(projection).toMatchObject({state:'rejected',failure_codes:['numeral'],validation:{failures:[{code:'numeral'}]}});
+  expect(projection).not.toHaveProperty('raw_output');
+  expect(await store.replay(actor,id,hash)).toEqual({kind:'replay',response:projection});
+  expect(await store.replay(actor,id,'other')).toEqual({kind:'conflict'});
+ });
+});

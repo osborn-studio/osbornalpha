@@ -7,10 +7,20 @@ import {
   type NormalizedUsage,
 } from './llm-pricing';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { Database, UsageFeature } from '@/lib/supabase/database.types';
+import type { Database } from '@/lib/supabase/database.types';
 
-type ReserveBudgetArgs = Database['public']['Functions']['reserve_llm_daily_budget']['Args'];
-type CreateCapExemptAuditArgs = Database['public']['Functions']['create_cap_exempt_llm_audit']['Args'];
+// TOPICS ↓
+import type { QuotaFeature } from './quota';
+
+type BudgetFunctions = Database['public']['Functions'];
+type ExtendedBudgetFunctions = {
+  [K in keyof BudgetFunctions]: K extends 'reserve_llm_daily_budget' | 'create_cap_exempt_llm_audit'
+    ? Omit<BudgetFunctions[K], 'Args'> & { Args: Omit<BudgetFunctions[K]['Args'], 'p_feature'> & { p_feature: QuotaFeature } }
+    : BudgetFunctions[K];
+};
+type ReserveBudgetArgs = ExtendedBudgetFunctions['reserve_llm_daily_budget']['Args'];
+type CreateCapExemptAuditArgs = ExtendedBudgetFunctions['create_cap_exempt_llm_audit']['Args'];
+// TOPICS ↑
 type MarkIncurredArgs = Database['public']['Functions']['mark_llm_budget_incurred']['Args'];
 type SettleBudgetArgs = Database['public']['Functions']['settle_llm_budget']['Args'];
 type FinalizeIncurredArgs = Database['public']['Functions']['finalize_llm_budget_incurred']['Args'];
@@ -35,7 +45,9 @@ type BudgetDatabase = {
       Relationships: [];
     }>;
     Views: Record<string, { Row: Record<string, unknown>; Relationships: [] }>;
-    Functions: Database['public']['Functions'];
+    // TOPICS ↓
+    Functions: ExtendedBudgetFunctions;
+    // TOPICS ↑
   };
 };
 
@@ -91,7 +103,9 @@ export interface BudgetConfig {
 }
 
 export interface CostBudgetRequest {
-  feature: UsageFeature;
+  // TOPICS ↓
+  feature: QuotaFeature;
+  // TOPICS ↑
   provider: string;
   model: string;
   maxInputTokens: number;
@@ -177,7 +191,9 @@ type TerminalResponse = 'valid' | 'settled' | 'incurred' | 'invalid';
 interface ExpectedReservation {
   reservationId: string;
   userId: string;
-  feature: UsageFeature;
+  // TOPICS ↓
+  feature: QuotaFeature;
+  // TOPICS ↑
   provider: string;
   model: string;
   reservedMicrormb: number;

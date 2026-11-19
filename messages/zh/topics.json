@@ -1,4 +1,12 @@
 {
+  "summaryTemplates": {
+    "macro_level": "{period} {name}为 {value}",
+    "fact_value": "{company} {period} {concept}为 {value}",
+    "industry_value": "{period} {industry} {metric}为 {value}（{n_with_data}/{n_members} 家有数据）",
+    "reconstruction": "（重建口径）",
+    "citation": "见《{title}》第 {page} 页",
+    "judgment_ref": "见 F4 判断卡 {method}"
+  },
   "entry": {
     "title": "专题研究",
     "titleEn": "Topics",

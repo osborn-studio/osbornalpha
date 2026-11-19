@@ -5,7 +5,9 @@ import { useTranslations } from 'next-intl';
 import { isSupabaseConfigured } from '@/lib/supabase/client';
 import { costUsageRows, type PlatformCostUsage } from './usage-today-format';
 
-type Feature = 'copilot' | 'perspectives' | 'brief_preview';
+// TOPICS ↓
+import type { UsageFeature as Feature } from '@/lib/supabase/database.types';
+// TOPICS ↑
 
 interface UsageResp {
   plan: string;

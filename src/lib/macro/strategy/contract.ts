@@ -3,6 +3,9 @@
 // WP-S6 they are the real types from src/lib/macro/{types,judgment-contract,events}. Types the strategy code only partly
 // needs are narrowed projections (Pick / Omit) of the real ones, so P1 drift fails typecheck; contract.types.test.ts pins
 // the relation both ways. RulesView / RuleRow are this module's own projection of P1 regime.ts RULES.
+// TOPICS ↓
+import type {EvidenceRef} from '@/lib/evidence/ref';
+// TOPICS ↑
 import type * as P1 from '../types';
 import type {EventInput as P2EventInput,PolicyEvent as P2PolicyEvent} from '../events';
 import {REGIMES as P1_REGIMES,type Regime as P1Regime} from '../judgment-contract';
@@ -83,7 +86,9 @@ export type CycleCell={status:'ok';from:ObsRef;to:ObsRef;change_raw:number|null;
 export interface CycleColumn{id:string;label:Bilingual;change_kind:'pct'|'bp';daily_series:string|null;monthly_series:string|null;restricted:boolean}
 export interface CycleTableView{version:string;episodes_version:string;boundary:Boundary;manifest_id:string;cutoff:string;episodes:Episode[];columns:CycleColumn[];cells:Record<string,Record<string,CycleCell>>;gaps:EventGap[]}  // cells[episodeIndex][columnId]
 export type FactKind='level'|'change'|'policy_event'|'derived'|'response_cell'|'revision'|'release'|'timeliness'|'episode'|'asset_move'|'coverage';
-export interface Fact{fact_id:string;kind:FactKind;template:string;slots:Record<string,{value_text:string;unit:string}|string>;series_id?:string;period_end?:string;source_inputs:string[]}
+// TOPICS ↓
+export interface Fact{evidence?:EvidenceRef[];fact_id:string;kind:FactKind;template:string;slots:Record<string,{value_text:string;unit:string}|string>;series_id?:string;period_end?:string;source_inputs:string[]}
+// TOPICS ↑
 export interface ReviewFacts{
  region:Region;month:string;cutoff:string;baseline_cutoff:string;snapshot_id:string|null;baseline_snapshot_id:string|null;baseline_missing:boolean;
  releases:Fact[];revisions:Fact[];timeliness:Fact[];policy_events:Fact[];episode_changes:Fact[];asset_moves:Fact[];coverage:Fact[];

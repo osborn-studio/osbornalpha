@@ -1,5 +1,7 @@
 import { getAdminSupabase } from '@/lib/supabase/admin';
-import type { UsageFeature } from '@/lib/supabase/database.types';
+// TOPICS ↓
+import type { QuotaFeature } from './quota';
+// TOPICS ↑
 import {
   createCapExemptCostAudit,
   getBudgetConfig,
@@ -34,7 +36,9 @@ export interface MeteredCallResult<T> {
 }
 
 interface RunMeteredLlmCallArgs<T extends { usage: NormalizedUsage }> {
-  feature: UsageFeature;
+  // TOPICS ↓
+  feature: QuotaFeature;
+  // TOPICS ↑
   provider: MeteredLlmProvider;
   /** Must be read from the authenticated server session, never request input. */
   userId?: string;

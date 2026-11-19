@@ -24,7 +24,7 @@ export function DisclosureTable({receipt,totals,editorHref,disabled,running,onRu
   <div className="overflow-x-auto"><table className={TABLE}><thead><tr><th>#</th>{['item','result','detail'].map(k=><th key={k}>{t('publish.'+k)}</th>)}</tr></thead>
    <tbody>{receipt?receipt.checks.map(c=><tr key={c.id}><td className={MONO}>{c.id}</td><td>{t('publish.check.'+c.key)}</td>
     <td><span className={`${CHIP} ${c.result==='block'?'text-danger':c.result==='warn'?'text-warn':'text-text-dim'}`}>{t('publish.'+c.result)}</span></td>
-    <td>{!c.codes.length&&t('publish.clear.'+c.key)}
+    <td>{!c.codes.length&&t(c.key==='summary'&&c.detail.attached?'publish.withSummary':'publish.clear.'+c.key)}
      {c.codes.map(code=>{const count=countFor(c,code);return <p key={code}>{t('publish.code.'+code)} <code className={MONO}>{code}</code> {count!==undefined&&<span className={MONO}>{t('publish.count',{n:count})}</span>}</p>;})}
      {c.key==='evidence_audience'&&typeof c.detail.withheld==='number'&&typeof c.detail.total==='number'&&<p className={MONO}>{t('publish.audienceCount',{withheld:c.detail.withheld,total:c.detail.total})}</p>}
      {c.key==='empty_dossier'&&typeof c.detail.evidence==='number'&&typeof c.detail.expected_slots==='number'&&<p className={MONO}>{t('publish.dossierCount',{evidence:c.detail.evidence,expected_slots:c.detail.expected_slots})}</p>}

@@ -7,7 +7,9 @@ import { getAdminSupabase } from '@/lib/supabase/admin';
 import type { UsageFeature } from '@/lib/supabase/database.types';
 import { effectivePlan } from '@/lib/billing/plan';
 
-export type QuotaFeature = UsageFeature;
+// TOPICS ↓
+export type QuotaFeature = UsageFeature | 'topic_summary';
+// TOPICS ↑
 
 type MeteredPlan = 'free' | 'pro';
 
@@ -16,11 +18,17 @@ const PLAN_LIMITS: Record<MeteredPlan, Record<QuotaFeature, number>> = {
     copilot: 20,
     perspectives: 5,
     brief_preview: 2,
+    // TOPICS ↓
+    topic_summary: 0,
+    // TOPICS ↑
   },
   pro: {
     copilot: 100,
     perspectives: 50,
     brief_preview: 20,
+    // TOPICS ↓
+    topic_summary: 20,
+    // TOPICS ↑
   },
 };
 

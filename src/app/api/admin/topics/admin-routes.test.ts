@@ -165,3 +165,27 @@ it('gates replay verification and returns the persisted version result',async()=
  const result=await call();expect(result.status).toBe(200);expect(await result.json()).toEqual({version_no:1,matched:3,skipped:1,mismatched:[]});
  expect((await (await versions(req({}),ctx(topicId))).json()).versions[0].verification).toEqual({time:deps.now().toISOString(),mismatches:0});
 });
+
+it('gates all summary operations before dependencies and scopes decisions to the topic',async()=>{
+ const {POST:generate}=await import('./[id]/summary/route');
+ const {POST:approve}=await import('./[id]/summary/[summaryId]/approve/route');
+ const {POST:discard}=await import('./[id]/summary/[summaryId]/discard/route');
+ const {deps,topicId}=await scenario();vi.mocked(adminDeps).mockResolvedValue(deps).mockClear();
+ const decide=(id=topicId,summaryId=actor)=>({params:Promise.resolve({id,summaryId})});
+ const gen=()=>generate(req({request_id:crypto.randomUUID(),locale:'en'}),ctx(topicId));
+ const calls=[gen,()=>approve(req({}),decide()),()=>discard(req({}),decide())];
+ vi.stubEnv('TOPICS_ENABLED',undefined);
+ for(const call of calls){const r=await call();expect(r.status).toBe(404);expect(await r.json()).toMatchObject({error:{code:'topics_disabled'}});}
+ vi.stubEnv('TOPICS_ENABLED','1');
+ const {AdminUnauthenticated}=await import('@/lib/admin/auth');
+ for(const call of calls){vi.mocked(requireAdminUser).mockRejectedValueOnce(new AdminUnauthenticated());expect((await call()).status).toBe(401);}
+ expect(adminDeps).not.toHaveBeenCalled();
+ vi.stubEnv('TOPICS_E2E_FIXTURES','1');
+ const generated=await gen();expect(generated.status).toBe(200);
+ const data=await generated.json();expect(data).toMatchObject({state:'accepted',summary:{status:'generated'}});
+ const id=data.summary.summary_id;
+ expect((await approve(req({}),decide(actor,id))).status).toBe(404);
+ for(const [route,status] of [[approve,'approved'],[discard,'discarded']] as const){
+  const result=await route(req({}),decide(topicId,id));expect(result.status).toBe(200);expect(await result.json()).toEqual({status});
+ }
+});
