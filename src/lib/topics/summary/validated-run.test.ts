@@ -1,6 +1,6 @@
 import {expect,it} from 'vitest';
-import type {LlmDeps} from './explain-request';
-import {runValidatedExplanation,type ValidatedRunStore,type ValidatedRunSubject} from './validated-run';
+import type {LlmDeps} from '@/lib/macro/strategy/explain-request';
+import {runValidatedExplanation,type ValidatedRunStore,type ValidatedRunSubject} from '@/lib/macro/strategy/validated-run';
 
 function fixture(mode:'accepted'|'rejected'|'error'|'prior'|'quota'){
  const calls:string[]=[];

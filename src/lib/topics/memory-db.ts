@@ -53,6 +53,11 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    receipts.push({receipt_id,topic_id:i.topicId,draft_hash:i.draftHash,checks:copy(i.checks),passed:i.passed,code_version:i.codeVersion,actor:i.actor,created_at:now()});
    audit(i.topicId,i.actor,'disclosure_check',{receipt_id,passed:i.passed,blocked:i.checks.filter(c=>c.result==='block').flatMap(c=>c.codes)});return receipt_id;
   },
+  async latestSummaryRun(id,locale){
+   const r=runs.findLast(run=>run.topic_id===id&&run.locale===locale);
+   return r?copy({run_id:r.run_id,draft_hash:r.draft_hash,state:r.state,validation:r.validation}):null;
+  },
+  async summaryById(id,summaryId){return copy(summaries.find(s=>s.topic_id===id&&s.summary_id===summaryId)??null);},
   async summaryRunByRequest(actor,id){
    const run=runs.find(r=>r.actor===actor&&r.request_id===id);
    return run?{payload_hash:run.payload_hash}:null;

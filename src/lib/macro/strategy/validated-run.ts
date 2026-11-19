@@ -39,7 +39,9 @@ export interface ValidatedRunStore<Claim>{
 export interface ValidatedRunSubject{
  system:string;user:string;usageMeta:Record<string,unknown>;
  validate(raw:unknown):{ok:true;output:unknown}|{ok:false;codes:string[];failures:unknown};
- render(output:unknown):unknown;
+ // TOPICS ↓
+ render(output:unknown,provider:{provider:string;model:string}):unknown;
+ // TOPICS ↑
  versions?:{prompt_version:string;validator_version:string};
 }
 type RunDeps<C>={store:ValidatedRunStore<C>;llm:LlmDeps;now():Date};
@@ -112,7 +114,9 @@ export async function runValidatedExplanation<C>(d:RunDeps<C>|DeferredDeps<C>,a:
   const result=subject.validate(parseModelContent(content));
   const validation={...(subject.versions?{validator_version:subject.versions.validator_version}:{}),ok:result.ok,failures:result.ok?[]:result.failures,elapsed_ms:d.now().getTime()-started};
   projection=await store.finish(claim,result.ok
-   ?{...base,state:'accepted',rawOutput,validation,rendered:subject.render(result.output),failureCodes:[],accounting,finalizePayload:payload}
+   // TOPICS ↓
+   ?{...base,state:'accepted',rawOutput,validation,rendered:subject.render(result.output,base),failureCodes:[],accounting,finalizePayload:payload}
+   // TOPICS ↑
    :{...base,state:'rejected',rawOutput,validation,rendered:null,failureCodes:result.codes,accounting,finalizePayload:payload});
  }finally{await settle(payload);}
  return {status:200,body:projection};

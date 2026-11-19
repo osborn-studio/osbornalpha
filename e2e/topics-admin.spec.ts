@@ -122,4 +122,52 @@ test.describe.serial('publication',()=>{
   await expect(row).toContainText('已取消发布',{timeout:15000});
   await expect(row).toContainText('隐私',{timeout:15000});
  });
+ test('approved summary is attached in the publish confirmation',async({page})=>{
+  // The other seed starts empty. Give it one public fact without touching the rates editor test's draft.
+  await page.goto('/admin/topics');
+  await page.getByRole('row').filter({hasText:'cn-company'}).getByRole('link',{name:'编辑',exact:true}).click();
+  await expect(page).toHaveURL(editorUrl,{timeout:15000});
+  await ready(page);
+  const outline=page.getByRole('region',{name:'分节与证据'});
+  if(await outline.getByText('ev:1',{exact:true}).count()===0){
+   await page.getByRole('button',{name:'新增分节'}).click();
+   const picker=page.getByRole('region',{name:'证据选择器'});
+   await picker.getByLabel('序列 id').fill('US_UNRATE');
+   await picker.getByLabel('数据期').fill('2026-08-31');
+   await picker.getByRole('button',{name:'查找',exact:true}).click();
+   await picker.getByRole('button',{name:'加入',exact:true}).click();
+   await page.getByRole('button',{name:'保存草稿',exact:true}).click();
+   await expect(page.getByRole('button',{name:'1 保存 ✓',exact:true})).toBeEnabled({timeout:15000});
+  }
+  await page.getByRole('link',{name:'2 披露检查'}).click();
+  await expect(page).toHaveURL(/\/publish#disclosure$/,{timeout:15000});
+  await ready(page);
+  const summary=page.locator('#summary'),generate=summary.getByRole('button',{name:'生成摘要',exact:true});
+  // A retry can reuse the fixture process and its previous accepted or approved summary.
+  const discard=summary.getByRole('button',{name:'丢弃',exact:true});
+  if(await discard.count())await discard.click();
+  await expect(generate).toBeVisible({timeout:15000});
+  await expect(summary.getByText(/^摘要暂不能对外/)).toBeVisible();
+  await generate.click();
+  await expect(summary.getByText('已接受',{exact:true})).toBeVisible({timeout:15000});
+  await expect(summary.getByText('事实句 1 · 假设 1 · 反方 0',{exact:true})).toBeVisible();
+  await summary.getByRole('button',{name:'批准',exact:true}).click();
+  await expect(summary.getByText('已批准',{exact:true})).toBeVisible({timeout:15000});
+
+  // Disclosure requires confirmation of the summary provider, even for the fixture.
+  const url='/api/admin/topics/settings',settingsResponse=await page.request.get(url);
+  await expect(settingsResponse).toBeOK();
+  const {settings}=await settingsResponse.json();
+  expect(settings.public_enabled).toBe(false);
+  try{
+   await expect(await page.request.post(url,{data:{...settings,summary_public_enabled:true,summary_provider_note:'fixture'}})).toBeOK();
+   await page.getByRole('button',{name:'运行披露检查'}).click();
+   await expect(page.getByRole('region',{name:'披露检查',exact:true})).toContainText('阻断 0',{timeout:15000});
+   await page.getByRole('button',{name:'发布',exact:true}).click();
+   const dialog=page.getByRole('dialog',{name:'发布 中国公司 为 v1？'});
+   await expect(dialog.locator('dt').filter({hasText:/^摘要$/}).locator('+ dd')).toHaveText('附带',{timeout:15000});
+  }finally{
+   await expect(await page.request.post(url,{data:settings})).toBeOK();
+  }
+ });
 });

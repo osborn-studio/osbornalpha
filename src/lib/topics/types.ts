@@ -45,6 +45,8 @@ export interface TopicsDb{
  draftOf(topicId:string):Promise<TopicDraftRow|null>;
  saveDraft(i:{topicId:string;expectedRevision:number;body:DraftBody;actor:string}):Promise<{revision:number;draft_hash:string}>;
  recordDisclosure(i:{topicId:string;draftHash:string;checks:DisclosureCheck[];passed:boolean;codeVersion:string;actor:string}):Promise<string>;
+ latestSummaryRun(topicId:string,locale:'zh'|'en'):Promise<Pick<TopicSummaryRunRow,'run_id'|'draft_hash'|'state'|'validation'>|null>;
+ summaryById(topicId:string,summaryId:string):Promise<TopicSummaryRow|null>;
  summaryRunByRequest(actor:string,requestId:string):Promise<Pick<TopicSummaryRunRow,'payload_hash'>|null>;
  claimSummary(i:SummarySubject&{actor:string;requestId:string;payloadHash:string}):Promise<SummaryClaim>;
  recordSummaryCompletion(i:{runId:string;rawOutput:unknown;finalizePayload:Record<string,unknown>}):Promise<void>;

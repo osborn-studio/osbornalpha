@@ -70,3 +70,36 @@ it('A7 audits matching and changed replays and quarantines just the changed ordi
  expect((await deps.db.auditOf(topicId)).filter(e=>e.action==='replay_verify')).toMatchObject([{actor,detail:{mismatched:[]}},{actor,detail:changed}]);
  expect(await deps.db.versionById(v.version_id)).toEqual(frozen);
 });
+
+it('previews before terms confirmation, freezes the approved summary, and masks its dependent hypothesis',async()=>{
+ const {deps,pub,topicId,slug}=await scenario(true),draftHash=await hashOf(deps,topicId);
+ const publish=()=>publishTopic(deps,{topicId,actor,expectedDraftHash:draftHash});
+ await checkDraft(deps,{topicId,actor});
+ const {handleSummaryRequest}=await import('./summary/request'),{fixtureSummaryLlm}=await import('./fixtures/summary');
+ const result=await handleSummaryRequest({...deps,llm:fixtureSummaryLlm('en')},actor,{topicId,request_id:crypto.randomUUID(),locale:'en'});
+ expect(result).toMatchObject({status:200,body:{state:'accepted'}});
+ const [summary]=await deps.db.summariesOf(topicId,draftHash),rendered=summary.rendered;
+ await deps.db.approveSummary({summaryId:summary!.summary_id,actor,decision:'approve'});
+ const {previewDraft}=await import('./publish');
+ expect((await previewDraft(deps,{topicId,actor})).dossier.summary).toMatchObject(rendered);
+ const settings=(enabled:boolean,note:string)=>deps.db.setPublicEnabled({actor,publicEnabled:false,summaryPublicEnabled:enabled,summaryProviderNote:note,licenceConfirmations:{}});
+ await expect(publish()).rejects.toMatchObject({code:'publish_blocked:summary_provider_unconfirmed'});
+ await settings(true,'Other terms');await expect(publish()).rejects.toThrow('publish_blocked:summary_provider_mismatch');
+ expect(await deps.db.versionsOfTopic(topicId)).toEqual([]);
+ await settings(true,'Fixture terms');
+ // Access can change without a draft edit. A new public projection must still support the frozen sentences.
+ const resolver={...deps.resolver,resolve:async(...args:Parameters<typeof deps.resolver.resolve>)=>{
+  const result=await deps.resolver.resolve(...args);
+  if(args[1].audience==='public'){result.resolved[0].state='withheld';result.resolved[0].display.fact=null;}
+  return result;
+ }};
+ const restricted={...deps,resolver};
+ expect((await previewDraft(restricted,{topicId,actor})).dossier.summary).toBeNull();
+ await expect(publishTopic(restricted,{topicId,actor,expectedDraftHash:draftHash})).rejects.toThrow('publish_blocked:summary_mismatch');
+ const version=await publish();
+ expect(await deps.db.versionById(version.version_id)).toMatchObject({summary_id:summary!.summary_id,version_no:1,snapshot:{summary:rendered}});
+ await setPublicEnabled(deps,{...settingsBody,summary_public_enabled:true,summary_provider_note:'Fixture terms',licence_confirmations:confirmations(['macro:attribution'])},actor);
+ expect((await readTopic(pub(),slug,{})).summary).toEqual({...rendered,hidden_points:0});
+ await deps.db.upsertDrift([{version_id:version.version_id,ordinal:1,drift:'now_withheld',current_identity:null}],deps.now().toISOString(),true,null);
+ expect((await readTopic(pub(),slug,{})).summary).toMatchObject({facts:[{text:''}],points:[],hidden_points:1});
+});

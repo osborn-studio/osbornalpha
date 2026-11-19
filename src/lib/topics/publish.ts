@@ -3,6 +3,9 @@ import {driftDetail,lastVerification} from '@/components/topics/admin/publish/pu
 import type {AdminDeps} from './admin-deps';
 import type {TopicRow,TopicVersionRow} from './database-types';
 import {assemble,type Assembled} from './assemble';
+import {canonicalJson} from '@/lib/evidence/hash';
+import {factSentences,topicFacts} from './summary/facts';
+import {publicationSummary} from './summary/workflow';
 import {runDisclosure} from './disclosure';
 import {TopicError} from './errors';
 import {formatSlot} from '@/lib/macro/strategy/explain-render';
@@ -12,16 +15,28 @@ import type {DossierDto} from './public-dto';
 import {licenceProblems,withLicenceCheck} from './settings';
 import {TopicsDbError,UNPUBLISH_REASONS,type DriftRow,type TopicsDb,type UnpublishReason} from './types';
 
-async function load(d:AdminDeps,topicId:string){
+export async function loadDraft(d:AdminDeps,topicId:string){
  const [topic,draft]=await Promise.all([d.db.topicById(topicId),d.db.draftOf(topicId)]);
  if(!topic)throw new TopicError('not_found');
  if(topic.status==='retired')throw new TopicError('topic_retired');
  if(!draft)throw new TopicError('not_found');
  return {topic:{slug:topic.topic_slug,category:topic.category},currentVersionId:topic.current_version_id,draft:draft.body,draftHash:draft.draft_hash,summary:null,cutoff:d.now().toISOString()};
 }
+async function load(d:AdminDeps,topicId:string){
+ const draft=await loadDraft(d,topicId),candidate=await publicationSummary(d.db,topicId,draft.draftHash);
+ const approved=candidate?.status==='approved'&&candidate.draft_hash===draft.draftHash?candidate:null;
+ return {...draft,candidate,summary:approved?.rendered??null,summaryId:approved?.summary_id??null};
+}
+function summaryMatches(input:Awaited<ReturnType<typeof load>>,assembled:Assembled){
+ if(!input.summary||!input.candidate)return true;
+ const {facts}=topicFacts(assembled.snapshot);
+ return canonicalJson(input.summary.facts)===canonicalJson(factSentences(facts,input.candidate.locale));
+}
 async function disclose(d:AdminDeps,input:Awaited<ReturnType<typeof load>>,assembled:Assembled,actor:string){
  const [privateIds,settings]=await Promise.all([d.privateIds(actor),d.db.settings()]);
- return runDisclosure({...input,assembled,privateIds,settings,licences:new Map()});
+ const row=input.candidate;
+ const summary=row&&{factsMatch:summaryMatches(input,assembled),status:row.status,draft_hash:row.draft_hash,provider:row.rendered.provider,model:row.rendered.model};
+ return runDisclosure({...input,summary,assembled,privateIds,settings,licences:new Map()});
 }
 export async function checkDraft(d:AdminDeps,i:{topicId:string;actor:string}){
  const input=await load(d,i.topicId),assembled=await assemble(d,input);
@@ -40,7 +55,7 @@ function previewText(r:Resolved){
 export async function previewDraft(d:AdminDeps,i:{topicId:string;actor:string}){
  const input=await load(d,i.topicId);
  const [assembled,versions]=await Promise.all([assemble(d,input),d.db.versionsOfTopic(i.topicId)]);
- const {snapshot:s,adminResolved,maskedInPublic,degraded}=assembled,{summary,evidence}=maskSnapshot(s,new Map(),'current');
+ const {snapshot:s,adminResolved,maskedInPublic,degraded}=assembled,{summary,evidence}=maskSnapshot(summaryMatches(input,assembled)?s:{...s,summary:null},new Map(),'current');
  const version_no=versions.reduce((max,v)=>Math.max(max,v.version_no),0)+1;
  const keys=new Set<string>();
  for(const {resolved} of s.evidence){
@@ -69,8 +84,12 @@ export async function publishTopic(d:AdminDeps,i:{topicId:string;expectedDraftHa
   const problems=licenceProblems(assembled.snapshot.evidence);
   if(problems.length)throw new TopicError('publish_blocked:licence_unconfirmed',{problems});
   const {blocked}=await disclose(d,input,assembled,i.actor);
-  if(blocked.length)throw new TopicError('publish_blocked:'+blocked.join(','));
-  const version=await d.db.publish({...i,cutoff:input.cutoff,snapshotText:assembled.snapshotText,evidence:assembled.evidence,summaryId:null,receiptId:receipt.receipt_id});
+  if(blocked.length){
+   // A provider note is required once summary publication is enabled. Report the closed switch first.
+   const codes=blocked.includes('summary_provider_unconfirmed')?blocked.filter(c=>c!=='summary_provider_mismatch'):blocked;
+   throw new TopicError('publish_blocked:'+codes.join(','));
+  }
+  const version=await d.db.publish({...i,cutoff:input.cutoff,snapshotText:assembled.snapshotText,evidence:assembled.evidence,summaryId:input.summaryId,receiptId:receipt.receipt_id});
   return {...version,evidence:assembled.evidence.length,counts:assembled.snapshot.counts};
  }catch(e){throw transitionError(e);}
 }

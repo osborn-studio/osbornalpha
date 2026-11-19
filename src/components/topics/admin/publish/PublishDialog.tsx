@@ -18,7 +18,7 @@ export function PublishDialog({title,n,summary,busy,error,onClose,onConfirm}:Dia
  return <Modal title={t('publishTitle',{title,n})} busy={busy} onClose={onClose}>
   <dl className="grid grid-cols-2 gap-2 text-sm"><dt>{t('frozen')}</dt><dd className={MONO}>{t('evidenceCount',{n:summary.evidence})}</dd>
    <dt>{t('distribution')}</dt><dd>{summary.distribution.map(({state,n})=><span className="mr-2 inline-block" key={state}>{t('state.'+state)} <b className={MONO}>{n}</b></span>)}</dd>
-   <dt>{t('slots')}</dt><dd className={MONO}>{t('slotCount',{n:summary.slots})}</dd><dt>{t('summary')}</dt><dd>{t('noSummary')}</dd></dl>
+   <dt>{t('slots')}</dt><dd className={MONO}>{t('slotCount',{n:summary.slots})}</dd><dt>{t('summary')}</dt><dd>{t(summary.summary?'withSummary':'noSummary')}</dd></dl>
   <p>{t('immutable')}</p>{error}<div className="flex gap-2"><button className={`${BUTTON} border-accent text-accent ${MONO}`} disabled={busy} onClick={onConfirm}>{t('publishVersion',{n})}</button>
    <button className={BUTTON} disabled={busy} onClick={onClose}>{t('cancel')}</button></div>
  </Modal>;

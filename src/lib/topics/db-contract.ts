@@ -114,6 +114,8 @@ export function topicsDbContract(label:string,setup:()=>Promise<TopicsContractHa
     await h.db.markSummaryFinalized(run_id);
     const summary=(await h.db.summariesOf(i.topicId,i.draftHash)).find(s=>s.run_id===run_id)!;
     expect(summary).toMatchObject({status:'generated',rendered});
+    expect(await h.db.latestSummaryRun(i.topicId,locale)).toMatchObject({run_id,draft_hash:i.draftHash,state:'accepted'});
+    expect(await h.db.summaryById(i.topicId,summary.summary_id)).toEqual(summary);
     await h.db.approveSummary({summaryId:summary.summary_id,decision:'approve',actor});
     expect(await h.db.approvedSummary(i.topicId,i.draftHash,locale)).toMatchObject({run_id,status:'approved',approved_by:actor});
    }

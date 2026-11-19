@@ -1,3 +1,4 @@
+import {renderFact,type Locale} from '@/lib/macro/strategy/explain-render';
 import type {EvidenceRef} from '@/lib/evidence/ref';
 import {catalogById} from '@/lib/macro/catalog';
 import type {Fact} from '@/lib/macro/strategy/contract';
@@ -31,4 +32,8 @@ export function topicFacts(snapshot:Pick<TopicSnapshot,'evidence'>):{facts:Topic
   }
  }
  return {facts,incomparable};
+}
+
+export function factSentences(facts:readonly TopicFact[],locale:Locale){
+ return facts.map(f=>({fact_id:f.fact_id,refs:f.refs,text:renderFact(f,locale,id=>catalogById(id)?.name??null)}));
 }

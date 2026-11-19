@@ -6,28 +6,30 @@ import {adminJson} from '@/app/(app)/admin/topics/_shared/admin-fetch';
 import type {Bilingual} from '@/lib/topics/types';
 import {BUTTON,FlowBar,PANEL} from '../editor/FlowBar';
 import {DisclosureTable,MONO} from './DisclosureTable';
+import {SummaryBlock} from './SummaryBlock';
 import {PreviewBlock} from './PreviewBlock';
 import {PublishDialog} from './PublishDialog';
 import {UnpublishDialog,type Withdrawal} from './UnpublishDialog';
 import {RetireDialog} from './RetireDialog';
 import {VersionsTable} from './VersionsTable';
-import {publishModel,type Preview,type Receipt,type VersionRow} from './publish-model';
-type Initial={id:string;slug:string;revision:number;draft_hash:string;title:Bilingual;retired:boolean;versions:VersionRow[];
+import {publishModel,type SummaryRun,type Preview,type Receipt,type VersionRow} from './publish-model';
+type Initial={summaryRun:SummaryRun|null;summaryEnabled:boolean;id:string;slug:string;revision:number;draft_hash:string;title:Bilingual;retired:boolean;versions:VersionRow[];
  receipt:(Pick<Receipt,'passed'|'checks'>&{created_at:string;receipt_id:string})|null};
 type Dialog='publish'|'unpublish'|'retire';
 export function PublishClient({initial}:{initial:Initial}){
  const [hydrated,setHydrated]=useState(false);
  useEffect(()=>{setHydrated(true);},[]);
- const t=useTranslations('topicsAdmin'),title=initial.title[useLocale().startsWith('zh')?'zh':'en'];
+ const t=useTranslations('topicsAdmin'),locale=useLocale().startsWith('zh')?'zh':'en',title=initial.title[locale];
  const base='/'+initial.id,editorHref='/admin/topics'+base;
  const [receipt,setReceipt]=useState<Receipt|null>(initial.receipt&&{...initial.receipt,draft_hash:initial.draft_hash});
  const [versions,setVersions]=useState(initial.versions),[retired,setRetired]=useState(initial.retired);
+ const [summary,setSummary]=useState(initial.summaryRun),[summaryError,setSummaryError]=useState('');
  const [preview,setPreview]=useState<Preview|null>(null),[dialog,setDialog]=useState<Dialog|null>(null);
  const [pending,setPending]=useState<string|null>(null),[error,setError]=useState(''),[status,setStatus]=useState('');
  const [reload,setReload]=useState(false),lock=useRef(false),opener=useRef<HTMLButtonElement|null>(null);
  const restoreFocus=useRef(false),workspace=useRef<HTMLDivElement>(null);
  const busy=pending!==null,disabled=busy||retired||reload;
- const model=publishModel({receipt,versions,retired,draftHash:initial.draft_hash,preview:preview&&{counts:preview.counts,evidence:preview.difference.length,expected_slots:preview.dossier.expected_slots.length}});
+ const model=publishModel({receipt,versions,retired,draftHash:initial.draft_hash,preview:preview&&{summary:!!preview.dossier.summary,counts:preview.counts,evidence:preview.difference.length,expected_slots:preview.dossier.expected_slots.length}});
  const current=versions.find(v=>v.status==='current'),previous=versions.find(v=>v.status==='superseded');
  useEffect(()=>{
   if(dialog||busy||!restoreFocus.current)return;
@@ -47,6 +49,19 @@ export function PublishClient({initial}:{initial:Initial}){
   if(lock.current||retired||reload)return;
   lock.current=true;setPending(action);setError('');setStatus('');
   try{await fn();}finally{lock.current=false;setPending(null);}
+ }
+ async function generateSummary(){
+  setSummaryError('');
+  const result=await adminJson<SummaryRun>('POST',base+'/summary',{request_id:crypto.randomUUID(),locale});
+  if(!result.ok){setSummaryError(result.code);return;}
+  setSummary(result.data);setPreview(null);setReceipt(null);
+ }
+ async function decide(id:string,decision:'approve'|'discard'){
+  setSummaryError('');
+  const result=await adminJson<{status:'approved'|'discarded'}>('POST',base+'/summary/'+id+'/'+decision);
+  if(!result.ok){setSummaryError(result.code);return;}
+  setSummary(prior=>prior?.summary?{...prior,summary:{...prior.summary,status:result.data.status}}:prior);
+  setPreview(null);setReceipt(null);
  }
  async function check(){
   const result=await adminJson<Receipt>('POST',base+'/disclosure-check');
@@ -99,8 +114,8 @@ export function PublishClient({initial}:{initial:Initial}){
   {!dialog&&errorNode}{reload&&<button className={BUTTON} onClick={()=>window.location.reload()}>{t('editor.reload')}</button>}
   <div className="grid items-start gap-4 lg:grid-cols-2">
    <DisclosureTable receipt={receipt} totals={model.totals} editorHref={editorHref} disabled={disabled} running={pending==='check'} onRun={()=>void run('check',check)}/>
-   <div className="min-w-0 space-y-4"><section id="summary" className={PANEL}><h2 className="font-semibold">{t('publish.summary')}</h2>
-    <p>{t('publish.summaryOff')}</p><p className="text-sm text-text-dim">{t('publish.summaryHint')}</p></section>
+   <div className="min-w-0 space-y-4"><SummaryBlock run={summary} enabled={initial.summaryEnabled} disabled={disabled} generating={pending==='summary'} error={summaryError}
+    onGenerate={()=>void run('summary',generateSummary)} onDecision={(id,decision)=>void run(decision,()=>decide(id,decision))}/>
     <PreviewBlock preview={preview} disabled={disabled} onGenerate={()=>void run('preview',async()=>{await generate();})}/></div>
    <section id="publish" className={PANEL}><h2 className="font-semibold">{t('publish.confirm')}</h2>
     <button className={`${BUTTON} border-accent text-accent`} disabled={disabled||!model.canPublish||preview?.degraded} onClick={e=>openFrom('publish',e.currentTarget)}>{t('publish.action')}</button>

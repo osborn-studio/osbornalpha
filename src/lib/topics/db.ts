@@ -39,6 +39,8 @@ export function topicsAdapter(t:TopicsTransport):TopicsDb{
   draftOf:id=>one('topic_drafts',{topic_id:id},['draft_id']),
   saveDraft:i=>t.rpc('topic_save_draft',{p_topic_id:i.topicId,p_expected_revision:i.expectedRevision,p_body_text:canonicalJson(i.body),p_actor:i.actor}),
   recordDisclosure:i=>t.rpc('topic_record_disclosure',{p_topic_id:i.topicId,p_draft_hash:i.draftHash,p_checks:i.checks,p_passed:i.passed,p_code_version:i.codeVersion,p_actor:i.actor}),
+  latestSummaryRun:(id,locale)=>one('topic_summary_runs',{topic_id:id,locale},['claimed_at','run_id'],{desc:true,columns:['run_id','draft_hash','state','validation']}),
+  summaryById:(id,summaryId)=>one('topic_summaries',{topic_id:id,summary_id:summaryId},['summary_id']),
   summaryRunByRequest:(actor,id)=>one('topic_summary_runs',{actor,request_id:id},['run_id'],{columns:['payload_hash']}),
   claimSummary:i=>t.rpc('topic_claim_summary',{p_actor:i.actor,p_request_id:i.requestId,p_payload_hash:i.payloadHash,p_topic_id:i.topicId,p_draft_hash:i.draftHash,
    p_locale:i.locale,p_manifest:i.manifest,p_prompt_version:i.promptVersion,p_validator_version:i.validatorVersion}),

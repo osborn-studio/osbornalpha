@@ -9,7 +9,7 @@ export const DISCLOSURE_VERSION='topic-disclosure/1';
 export const CHECK_KEYS=['evidence_kind','evidence_audience','private_fingerprint','unreviewed_block','lexical','excerpt','slots','summary','resolver_health','empty_dossier'] as const;
 export const EXCERPT_CAPS={zhChars:120,enWords:60,fragments:3} as const;
 export interface DisclosureInput{draft:DraftBody;assembled:Pick<Assembled,'snapshot'|'degraded'>;privateIds:ReadonlySet<string>;
- summary:{status:'generated'|'approved'|'discarded';draft_hash:string;provider:string;model:string}|null;draftHash:string;
+ summary:{factsMatch?:boolean;status:'generated'|'approved'|'discarded';draft_hash:string;provider:string;model:string}|null;draftHash:string;
  settings:Pick<TopicSettingsRow,'summary_public_enabled'|'summary_provider_note'>;licences:ReadonlyMap<string,{status:'pending'|'approved'|'revoked';permits:Record<string,unknown>}>}
 const unique=(codes:string[])=>[...new Set(codes)];
 function excerptInvalid(e:Extract<DraftEntry,{entry_type:'licensed_excerpt'}>,i:DisclosureInput):boolean{
@@ -47,7 +47,7 @@ export function runDisclosure(i:DisclosureInput):{checks:DisclosureCheck[];passe
  add(dangling.length?['dangling_slot']:[],{findings:dangling});
  const summaryCodes:string[]=[];
  if(i.summary){
-  if(i.summary.draft_hash!==i.draftHash||i.summary.status!=='approved')summaryCodes.push('summary_mismatch');
+  if(i.summary.draft_hash!==i.draftHash||i.summary.status!=='approved'||i.summary.factsMatch===false)summaryCodes.push('summary_mismatch');
   if(!i.settings.summary_public_enabled)summaryCodes.push('summary_provider_unconfirmed');
   if(!i.summary.provider.trim()||!i.settings.summary_provider_note?.toLowerCase().includes(i.summary.provider.toLowerCase()))summaryCodes.push('summary_provider_mismatch');
  }
