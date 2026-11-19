@@ -347,7 +347,7 @@ journeys.macro = async function macro() {
 // 05 topics fetch their public API, get no 200 (`/api/broker-research/reports` 500, `/api/topics` 401) and render
 // notServed with no link. Topics switched off (TOPICS_ENABLED unset, no fixtures): /intel/topics, the dossier
 // (+ /v/<n>) and /admin/topics render the app 404 page; `/api/topics` → 401 unauthenticated (session is checked
-// first); `/api/admin/topics` → 404 topics_disabled.
+// first); `/api/admin/topics` and the summary POSTs (#287) → 404 topics_disabled.
 journeys['intel-hub'] = async function intelHub() {
   const HUB = {
     zh: { locale: 'zh-CN', heading: '研究', notServed: '未服务', macroDown: '宏观数据暂不可用', topicsTitle: '专题研究' },
@@ -409,6 +409,18 @@ journeys['intel-hub'] = async function intelHub() {
   const adm = await getJson('/api/admin/topics');
   save('api-admin-topics-guest.json', adm);
   check('GET /api/admin/topics (topics off) → 404 topics_disabled', adm.status === 404 && adm.body?.error?.code === 'topics_disabled', `${adm.status} ${JSON.stringify(adm.body)}`);
+  // Topic summary admin actions (#287): adminPost checks the switch before the session and body, so with topics off
+  // generate / approve / discard all answer 404 topics_disabled (no LLM call, no write).
+  const tid = '00000000-0000-4000-8000-000000000001', sid = '00000000-0000-4000-8000-000000000002';
+  const summary = {};
+  for (const p of [`/api/admin/topics/${tid}/summary`, `/api/admin/topics/${tid}/summary/${sid}/approve`, `/api/admin/topics/${tid}/summary/${sid}/discard`]) {
+    const r = await fetch(BASE + p, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ locale: 'zh', request_id: '00000000-0000-4000-8000-000000000003' }), signal: AbortSignal.timeout(60_000) });
+    let body = null; try { body = await r.json(); } catch {}
+    summary[p] = { status: r.status, body };
+    check(`POST ${p.replace(tid, '<id>').replace(sid, '<summaryId>')} (topics off) → 404 topics_disabled`, r.status === 404 && body?.error?.code === 'topics_disabled', `${r.status} ${JSON.stringify(body)}`);
+  }
+  save('api-admin-topics-summary-guest.json', summary);
 };
 
 const ORDER = ['landing', 'watchlist', 'stock', 'quote-api', 'auth-gate', 'macro', 'intel-hub'];
