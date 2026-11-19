@@ -116,7 +116,7 @@
     },
     "replayMismatch": {
       "title": "Replay mismatch",
-      "body": "The manifest recomputes to a different value than the stored one. The cell is not treated as replayable: the page keeps the stored value with an anomaly badge, and a manifest_mismatch quarantine item is open."
+      "body": "The manifest recomputes to a different value than the stored one. The cell is not treated as replayable: the page keeps the stored value with an anomaly badge, and a quarantine item (manifest self-check failed) is open."
     },
     "officialUnavailable": {
       "title": "Official comparison value unavailable",
@@ -131,7 +131,7 @@
       "body": "Lifecycle stage, prosperity and over/under-valuation are judgments, not facts. They appear here only once registered in F4 with a falsifiable condition that can be settled; uncalibrated ones show only their category and a badge."
     },
     "currentOnly": {
-      "title": "Current value only (current_only)",
+      "title": "Current only",
       "body": "SEC publishes only the current SIC, with no inclusion or exclusion history: the in-date column is the first observation date and dates before it have no members."
     },
     "noMembers": {
@@ -145,12 +145,12 @@
     }
   },
   "missing": {
-    "empty_set": "No usable data (empty_set)",
-    "zero_denominator": "Zero denominator (zero_denominator)",
-    "no_members": "No members (no_members)",
-    "financial_excluded": "Excluded by method: no gross margin for financials (financial_excluded)",
-    "unresolved_over_limit": "Too many unresolved members (unresolved_over_limit)",
-    "manifest_mismatch": "Manifest self-check failed (manifest_mismatch)",
+    "empty_set": "No usable data",
+    "zero_denominator": "Zero denominator",
+    "no_members": "No members",
+    "financial_excluded": "Excluded by method: no gross margin for financials",
+    "unresolved_over_limit": "Too many unresolved members",
+    "manifest_mismatch": "Manifest self-check failed",
     "absent": "Row missing from the expected grid"
   },
   "roles": {
@@ -348,9 +348,9 @@
     "membershipUpstreamSw": "SWS Research → Tushare index_member_all",
     "membershipUpstreamSic": "SEC submissions (sic field)",
     "availableDateLabel": "Available",
-    "availabilityAssumed": "assumed at the inclusion date (effective_date_assumed)",
-    "availabilityObserved": "first observation date (observed)",
-    "availabilityEvidenced": "announcement evidence (evidenced)",
+    "availabilityAssumed": "assumed at the inclusion date",
+    "availabilityObserved": "first observation date",
+    "availabilityEvidenced": "announcement evidence",
     "path": "Path",
     "sourceRecord": "Source record",
     "rawHash": "raw_hash",

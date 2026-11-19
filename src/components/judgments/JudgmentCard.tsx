@@ -73,7 +73,7 @@ function Body({ body, href }: { body: CardBody; href: string }) {
     case 'abstained':
       return (
         <div className="rounded-md border border-dashed border-[var(--border)] p-3 text-sm">
-          <p>{t('ui.card.abstained', { reason: body.reason })}</p>
+          <p>{t('ui.card.abstained', { reason: t.has(`ui.abstainReason.${body.reason}`) ? t(`ui.abstainReason.${body.reason}`) : body.reason })}</p>
           {body.missing.length > 0 && <p className="num mt-1 text-[11px] text-[var(--text-dim)]">{t('ui.card.missing', { items: body.missing.join(', ') })}</p>}
         </div>
       );
@@ -126,8 +126,8 @@ export function JudgmentCard({ card }: { card: AnyCard }) {
         </p>
         {card.lifecycle !== 'abstained' && (
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-dim)] hover:text-[var(--text)]" onClick={() => setDrawer('inputs')}>{t('ui.card.inputs', { count: card.inputs.length })}</button>
-            <button type="button" className="rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-dim)] hover:text-[var(--text)]" onClick={() => setDrawer('timeline')}>{t('ui.card.timeline')}</button>
+            <button type="button" className="inline-flex min-h-11 items-center sm:min-h-0 rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-dim)] hover:text-[var(--text)]" onClick={() => setDrawer('inputs')}>{t('ui.card.inputs', { count: card.inputs.length })}</button>
+            <button type="button" className="inline-flex min-h-11 items-center sm:min-h-0 rounded border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--text-dim)] hover:text-[var(--text)]" onClick={() => setDrawer('timeline')}>{t('ui.card.timeline')}</button>
           </div>
         )}
       </div>

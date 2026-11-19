@@ -285,6 +285,16 @@
       "evaluatedSpearman": "评估 Spearman {rho}（n {n}）",
       "selfAssessed": "自评"
     },
+    "abstainReason": {
+      "binding_missing": "缺少口径绑定",
+      "input_not_public": "输入未公开",
+      "input_unavailable": "输入数据不可用",
+      "metric_missing": "缺少指标",
+      "snapshot_missing": "缺少快照",
+      "snapshot_unclassified": "快照未分类",
+      "subject_not_issuer": "主体不是发行人",
+      "target_unresolvable": "目标期无法确定"
+    },
     "inputKind": {
       "financial_fact": "事实",
       "financial_metric": "派生指标",
@@ -354,6 +364,7 @@
       "title": "结算时间线",
       "registered": "登记",
       "target": "目标",
+      "targetDetail": "{target} · 结算截止 {date}",
       "settledHit": "结算 · 命中",
       "settledMiss": "结算 · 未命中",
       "void": "作废",
@@ -362,7 +373,7 @@
       "pending": "等待结算",
       "pendingFill": "等待成交价",
       "abstained": "弃权",
-      "asKnownNote": "历史视图（as_known）只显示截止时刻之前已知的结算与校准。"
+      "asKnownNote": "历史视图只显示截止时刻之前已知的结算与校准。"
     },
     "reliability": {
       "title": "可靠性",

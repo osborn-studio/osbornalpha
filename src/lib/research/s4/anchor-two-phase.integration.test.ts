@@ -1,5 +1,5 @@
-import {beforeAll,afterAll,describe,it,expect} from 'vitest';
-import {readFileSync,mkdtempSync,appendFileSync,writeFileSync,mkdirSync,existsSync,statSync} from 'node:fs';
+import {beforeAll,afterAll,afterEach,describe,it,expect} from 'vitest';
+import {readFileSync,mkdtempSync,rmSync,appendFileSync,writeFileSync,mkdirSync,existsSync,statSync} from 'node:fs';
 import {open,type FileHandle} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -17,6 +17,11 @@ import {ZERO_HASH,fileAnchorStore} from './anchor-store';
 import type {RunnerManifest} from './anchor-manifest';
 import {digest,canonicalize} from '../ingest/pa-v1/json.js';
 
+const tempDirs:string[]=[];
+function tempDir(prefix:string){
+ const dir=mkdtempSync(join(tmpdir(),prefix));tempDirs.push(dir);return dir;
+}
+afterEach(()=>{for(const dir of tempDirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 const enabled=!!process.env.S4_TEST_STATE;
 /** This suite owns a disposable cluster of its own. It installs BEFORE UPDATE triggers on the
  * outbox and seeds 200 000 synthetic rows; on the harness database shared by the parallel
@@ -43,7 +48,7 @@ describe.skipIf(!enabled)('S4 two-phase anchor drain (local only)',()=>{
   return {store_id:randomUUID(),database_identity:randomUUID(),deployment_generation:generation,authorized_owner_scope:[digest(a.userId)],format_version:1};
  }
  function setup(a:S4Actor,extra:Partial<TwoPhaseOptions>={}):TwoPhaseOptions{
-  return {root:mkdtempSync(join(tmpdir(),'s4-two-phase-')),manifest:manifestFor(a),...extra};
+  return {root:tempDir('s4-two-phase-'),manifest:manifestFor(a),...extra};
  }
  const journalOf=(o:TwoPhaseOptions,a:S4Actor)=>join(o.root,digest(a.userId),'receipts.jsonl');
  async function outbox(a:S4Actor){return (await admin.query('select sequence,anchored_at,receipt_hash from research_s4_outbox where user_id=$1 order by sequence',[a.userId])).rows;}
@@ -103,16 +108,17 @@ describe.skipIf(!enabled)('S4 two-phase anchor drain (local only)',()=>{
     return new Proxy(real,{get(target,key){if(key==='sync')return()=>{stalls++;return new Promise<void>(()=>{});};const v=Reflect.get(target,key);return typeof v==='function'?v.bind(target):v;}}) as FileHandle;
   };
   const o=setup(actor,{openFile,watchdogMs:300});
-  const paused=await drainOutboxTwoPhase(actor,o);
-  expect(paused).toEqual(expect.objectContaining({status:'paused',reason:'flush_timeout',appended:0,acknowledged:0}));
-  expect(stalls).toBe(1);
-  expect((await outbox(actor)).every(r=>r.anchored_at===null)).toBe(true);
-  await transaction(actor,async()=>{});
-  await expect(drainOutboxTwoPhase(actor,o)).rejects.toThrow('anchor_paused');
-  await expect(drainOutboxTwoPhase(actor,{...o,openFile:undefined})).rejects.toThrow('anchor_paused');
-  expect(stalls).toBe(1);
-  expect((await outbox(actor)).every(r=>r.anchored_at===null)).toBe(true);
-  for(const h of handles)await h.close().catch(()=>{});
+  try{
+   const paused=await drainOutboxTwoPhase(actor,o);
+   expect(paused).toEqual(expect.objectContaining({status:'paused',reason:'flush_timeout',appended:0,acknowledged:0}));
+   expect(stalls).toBe(1);
+   expect((await outbox(actor)).every(r=>r.anchored_at===null)).toBe(true);
+   await transaction(actor,async()=>{});
+   await expect(drainOutboxTwoPhase(actor,o)).rejects.toThrow('anchor_paused');
+   await expect(drainOutboxTwoPhase(actor,{...o,openFile:undefined})).rejects.toThrow('anchor_paused');
+   expect(stalls).toBe(1);
+   expect((await outbox(actor)).every(r=>r.anchored_at===null)).toBe(true);
+  }finally{for(const h of handles)await h.close().catch(()=>{});}
  });
 
  it('V09: an ACK that outlives the watchdog closes the session and pauses without a second append',async()=>{
@@ -185,10 +191,12 @@ describe.skipIf(!enabled)('S4 two-phase anchor drain (local only)',()=>{
 
  it('V10: two concurrent two-phase drains export once, and a two-phase drain racing the oracle exports once',async()=>{
   const {actor,candidateId}=await owner();const o=setup(actor);
-  const pair=await Promise.all([drainOutboxTwoPhase(actor,o),drainOutboxTwoPhase(actor,o)]);
+  const twoPhaseDrains=[drainOutboxTwoPhase(actor,o),drainOutboxTwoPhase(actor,o)];
+  const pair=await Promise.all(twoPhaseDrains).finally(()=>Promise.allSettled(twoPhaseDrains));
   expect(pair.filter(r=>r.appended>0)).toHaveLength(1);expect(pair.every(r=>r.status==='drained')).toBe(true);
   await controlEvents(actor,candidateId,4);
-  const mixed=await Promise.all([drainOutboxTwoPhase(actor,o),drainOutbox(actor,o.root)]);
+  const mixedDrains=[drainOutboxTwoPhase(actor,o),drainOutbox(actor,o.root)];
+  const mixed=await Promise.all(mixedDrains).finally(()=>Promise.allSettled(mixedDrains));
   expect(mixed.map(r=>r.appended).sort()).toEqual([0,4]);
   const lines=readFileSync(journalOf(o,actor),'utf8').trim().split('\n');
   expect(new Set(lines.map(l=>JSON.parse(l).sequence)).size).toBe(lines.length);
@@ -268,17 +276,19 @@ describe.skipIf(!enabled)('S4 two-phase anchor drain (local only)',()=>{
    const {actor,candidateId}=await owner();const o=setup(actor);
    expect((await drainOutboxTwoPhase(actor,o)).remaining).toBe(0);
    await seedTier(actor,candidateId,total);
-   const tierOptions={...o,root:mkdtempSync(join(tmpdir(),'s4-tier-root-'))};
-   const journal=await extendJournal(actor,journalOf(o,actor),tierOptions.root,500);
-   const scanned=await holdingOwnerLock(actor,()=>verifyAnchorChain(actor,tierOptions));
-   expect(scanned.entries).toBe(journal.entries);expect(scanned.recovered).toEqual([]);expect(scanned.pending).toBe(500);
-   expect(scanned.scan_ms).toBeGreaterThan(0);
-   const storeOnly=await fileAnchorStore(tierOptions.root,digest(actor.userId)).verify();expect(storeOnly.entries).toBe(journal.entries);
-   const drained=await drainOutboxTwoPhase(actor,tierOptions);
-   expect(drained).toEqual(expect.objectContaining({status:'drained',appended:500,acknowledged:500,remaining:0}));
-   console.log(JSON.stringify({anchor_capacity:tier,journal_entries:journal.entries,journal_bytes:journal.bytes,store_verify_ms:storeOnly.scan_ms,
-    phase_a_ms_under_foreign_lock:scanned.scan_ms,drain_phase_a_ms:drained.phase_a_ms,phase_b_lock_hold_ms:drained.lock_hold_ms,attempts:drained.attempts}));
-   expect(await drainOutbox(actor,tierOptions.root)).toEqual(expect.objectContaining({appended:0,acknowledged:0,remaining:0,last_hash:drained.last_hash}));
+   const tierOptions={...o,root:tempDir('s4-tier-root-')};
+   try{
+    const journal=await extendJournal(actor,journalOf(o,actor),tierOptions.root,500);
+    const scanned=await holdingOwnerLock(actor,()=>verifyAnchorChain(actor,tierOptions));
+    expect(scanned.entries).toBe(journal.entries);expect(scanned.recovered).toEqual([]);expect(scanned.pending).toBe(500);
+    expect(scanned.scan_ms).toBeGreaterThan(0);
+    const storeOnly=await fileAnchorStore(tierOptions.root,digest(actor.userId)).verify();expect(storeOnly.entries).toBe(journal.entries);
+    const drained=await drainOutboxTwoPhase(actor,tierOptions);
+    expect(drained).toEqual(expect.objectContaining({status:'drained',appended:500,acknowledged:500,remaining:0}));
+    console.log(JSON.stringify({anchor_capacity:tier,journal_entries:journal.entries,journal_bytes:journal.bytes,store_verify_ms:storeOnly.scan_ms,
+     phase_a_ms_under_foreign_lock:scanned.scan_ms,drain_phase_a_ms:drained.phase_a_ms,phase_b_lock_hold_ms:drained.lock_hold_ms,attempts:drained.attempts}));
+    expect(await drainOutbox(actor,tierOptions.root)).toEqual(expect.objectContaining({appended:0,acknowledged:0,remaining:0,last_hash:drained.last_hash}));
+   }finally{rmSync(tierOptions.root,{recursive:true,force:true});}
   },tier==='20k'?180000:900000);
  }
 });

@@ -131,12 +131,24 @@ export function registeredValue(c:JudgmentCard,judgment:{claim:unknown}|null):{t
 }
 
 // ── settlement timeline ──
-export interface Step{key:string;at:string|null;detail:string|null;tone:Tone;done:boolean}
+const ABSTAIN_REASONS:ReadonlySet<string>=new Set([
+ 'binding_missing','input_not_public','input_unavailable','metric_missing',
+ 'snapshot_missing','snapshot_unclassified','subject_not_issuer','target_unresolvable',
+]);
+export interface Step{key:string;at:string|null;detail:string|null;detailMsg?:Msg;tone:Tone;done:boolean}
 const SETTLEMENT_KEY=(s:Pick<SettlementRow,'kind'|'outcome'>)=>s.kind==='settled'?(s.outcome==='miss'?'ui.timeline.settledMiss':'ui.timeline.settledHit'):`ui.timeline.${s.kind}`;
 export function timelineSteps(c:JudgmentCard,settlements:SettlementRow[]|undefined,locale:Locale):Step[]{
  const steps:Step[]=[{key:'ui.timeline.registered',at:c.registered_at,detail:`${c.methodology.id}@${c.methodology.version} · ${c.inputs.length}`,tone:'neutral',done:true}];
- if(c.lifecycle==='abstained')return [...steps,{key:'ui.timeline.abstained',at:null,detail:c.abstain_reason??null,tone:'neutral',done:true}];
- if(c.condition)steps.push({key:'ui.timeline.target',at:c.condition.settle_after,detail:`${targetText(c.condition.target)} · settle_by ${day(c.condition.settle_by)}`,tone:'neutral',done:false});
+ if(c.lifecycle==='abstained'){
+  const reason=c.abstain_reason??null;
+  const step:Step={key:'ui.timeline.abstained',at:null,detail:reason,tone:'neutral',done:true};
+  if(reason&&ABSTAIN_REASONS.has(reason))step.detailMsg={key:`ui.abstainReason.${reason}`};
+  return [...steps,step];
+ }
+ if(c.condition){
+  const target=targetText(c.condition.target);
+  steps.push({key:'ui.timeline.target',at:c.condition.settle_after,detail:target,detailMsg:{key:'ui.timeline.targetDetail',values:{target,date:day(c.condition.settle_by)}},tone:'neutral',done:false});
+ }
  const rows=settlements&&settlements.length?[...settlements].sort((a,b)=>a.seq-b.seq).map(s=>({kind:s.kind,outcome:s.outcome,at:s.settled_at,detail:s.realized?String(s.realized.label??s.realized.value):s.reason}))
   :c.settlement?[{kind:c.settlement.kind,outcome:c.settlement.outcome,at:c.settlement.settled_at,detail:c.settlement.evidence_summary[locale]}]:[];
  for(const r of rows)steps.push({key:SETTLEMENT_KEY(r),at:r.at,detail:r.detail,tone:r.kind==='settled'?(r.outcome==='miss'?'down':'up'):'neutral',done:true});

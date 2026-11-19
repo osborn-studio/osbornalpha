@@ -19,7 +19,7 @@ export function SettlementTimeline({ card, settlements }: { card: JudgmentCard; 
               <strong className={`text-sm ${s.tone === 'neutral' ? '' : TONE[s.tone]}`}>{t(s.key)}</strong>
               {s.at && <time className="num text-[11px] text-[var(--text-dim)]" dateTime={s.at}>{minute(s.at)}</time>}
             </div>
-            {s.detail && <p className="break-words text-xs text-[var(--text-dim)]">{s.detail}</p>}
+            {(s.detailMsg || s.detail) && <p className="break-words text-xs text-[var(--text-dim)]">{s.detailMsg ? t(s.detailMsg.key, s.detailMsg.values) : s.detail}</p>}
           </div>
         </li>
       ))}

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 // Industry research pages (spec §13.5): three routes + source drawer + table view + unlicensed +
 // reconstruction badge + mobile viewport. Runs against a dev server in fixture mode only:
@@ -122,3 +122,26 @@ test('bare list defaults to the SIC fixture view', async ({ page }) => {
   await expect(heatmap).toBeVisible();
   await expect(heatmap.getByRole('button', { name: /^Semiconductors & Related Devices · 2025-12-31/ })).toBeVisible();
 });
+
+async function shot(page: Page, name: string) {
+  if (process.env.UI_SHOT_DIR) await page.screenshot({ path: `${process.env.UI_SHOT_DIR}/${name}.png`, fullPage: true });
+}
+
+for (const [vw, viewport] of [['desktop', { width: 1280, height: 800 }], ['phone', { width: 390, height: 844 }]] as const)
+  for (const locale of ['zh-CN', 'en-US'] as const) test.describe(`SIC notices · ${vw} · ${locale}`, () => {
+    test.use({ viewport, locale });
+    test('omits the raw code on both pages and localizes the constituents notice', async ({ page }) => {
+      for (const [name, url] of [['sic', '/intel/industries?scheme=sic'], ['constituents', '/intel/industries/sic/3674/constituents']]) {
+        await page.goto(url);
+        if (name === 'constituents') {
+          const notice = page.locator('[data-state="currentOnly"]');
+          await expect(notice).toBeVisible();
+          const label = await notice.innerText();
+          expect.soft(label).toContain(locale === 'zh-CN' ? '仅当前值' : 'Current only');
+          expect.soft(label).not.toContain('current_only');
+        }
+        expect.soft(await page.locator('body').innerText()).not.toContain('current_only');
+        await shot(page, `industries-${name}-${vw}-${locale}`);
+      }
+    });
+  });

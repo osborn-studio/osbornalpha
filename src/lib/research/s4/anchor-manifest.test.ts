@@ -1,10 +1,15 @@
-import {describe,it,expect} from 'vitest';
-import {mkdtempSync,writeFileSync,symlinkSync,chmodSync} from 'node:fs';
+import {afterEach,describe,it,expect} from 'vitest';
+import {mkdtempSync,rmSync,writeFileSync,symlinkSync,chmodSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {parseRunnerManifest,readRunnerManifest} from './anchor-manifest';
 
+const tempDirs:string[]=[];
+function tempDir(){
+ const dir=mkdtempSync(join(tmpdir(),'s4-manifest-'));tempDirs.push(dir);return dir;
+}
+afterEach(()=>{for(const dir of tempDirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 const valid=()=>({store_id:randomUUID(),database_identity:randomUUID(),deployment_generation:3,
   authorized_owner_scope:['a'.repeat(64),'b'.repeat(64)],format_version:1});
 
@@ -45,7 +50,7 @@ describe('runner manifest parser',()=>{
 
 describe('runner manifest file',()=>{
  it('reads only an absolute, operator-owned 0600 regular file',async()=>{
-  const dir=mkdtempSync(join(tmpdir(),'s4-manifest-'));const path=join(dir,'manifest.json');
+  const dir=tempDir();const path=join(dir,'manifest.json');
   writeFileSync(path,JSON.stringify(valid()),{mode:0o600});
   expect(await readRunnerManifest(path)).toEqual(expect.objectContaining({format_version:1}));
   await expect(readRunnerManifest('manifest.json')).rejects.toThrow('scope_denied');
@@ -55,7 +60,7 @@ describe('runner manifest file',()=>{
   await expect(readRunnerManifest(join(dir,'missing.json'))).rejects.toThrow();
  });
  it('rejects a file whose content fails the strict parser',async()=>{
-  const dir=mkdtempSync(join(tmpdir(),'s4-manifest-'));const path=join(dir,'manifest.json');
+  const dir=tempDir();const path=join(dir,'manifest.json');
   writeFileSync(path,JSON.stringify({...valid(),extra:true}),{mode:0o600});
   await expect(readRunnerManifest(path)).rejects.toThrow('invalid_schema');
  });

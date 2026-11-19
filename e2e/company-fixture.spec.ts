@@ -8,7 +8,7 @@ import * as f from './fixtures/company';
 // Judgment-layer-off is covered by unit tests only. Synthetic layout data, read-only:
 // every /api/** request is fulfilled here, including shell analytics; no backend writes.
 // Next internals (/_next/**) are unaffected. Never run against a production deployment.
-type Scenario={judgments?:'cards'|'none'|'failed'|'mismatch';events?:'failed'|'empty'|'withheld';inbox?:'partial'|'failed'};
+type Scenario={judgments?:'cards'|'gallery'|'loading'|'none'|'failed'|'mismatch';events?:'failed'|'empty'|'withheld';inbox?:'partial'|'failed'};
 type ApiMock={scenario:Scenario;perIssuer:string[]};
 const test=base.extend<{api:ApiMock}>({
   api:[async({page},use)=>{
@@ -40,7 +40,16 @@ const test=base.extend<{api:ApiMock}>({
         if(s.inbox==='failed'||id===f.watches.watches[1].issuerId)return fail();
         return ok(id===f.US?f.inboxA:f.emptyInbox);
       }
-      if(p==='/api/judgments')return s.judgments==='failed'?fail():ok(s.judgments==='none'?f.emptyJudgments:f.judgments);
+      if(p==='/api/judgments'){
+        if(s.judgments==='loading'){
+          await new Promise(resolve=>setTimeout(resolve,4000));
+          try{return await ok(f.judgments);}catch(error){if(!page.isClosed())throw error;return;}
+        }
+        if(s.judgments==='failed')return fail();
+        return ok(s.judgments==='gallery'?f.judgmentGallery:s.judgments==='none'?f.emptyJudgments:f.judgments);
+      }
+      const detail=p.match(/^\/api\/judgments\/([^/]+)$/);
+      if(detail)return s.judgments==='failed'?fail():ok(f.judgmentDetail(detail[1]));
       if(p==='/api/companies/FIXT/overview')return ok(f.overview);
       if(p==='/api/companies/FIXT/statements')return ok(f.statements);
       if(p==='/api/companies/999999.SH/statements')return ok(f.cnStatements);
@@ -246,6 +255,15 @@ test.describe('公司夹具 · 中文',()=>{
   });
 });
 
+async function shot(page:Page,name:string,fullPage=true){
+  if(process.env.UI_SHOT_DIR)await page.screenshot({path:`${process.env.UI_SHOT_DIR}/${name}.png`,fullPage});
+}
+async function touchHeight(control:Locator){
+  expect.soft((await boxOf(control)).height,`touch height of ${control}`).toBeGreaterThanOrEqual(44);
+}
+async function pageWidth(page:Page,width:number){
+  expect.soft(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+}
 async function boxOf(locator:Locator){
   await expect(locator).toBeVisible();
   const box=await locator.boundingBox();
@@ -301,13 +319,27 @@ test.describe('390px tab row and action row',()=>{
         expect(await link.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
       }
       const more=await boxOf(page.getByTestId('company-more'));
-      const replay=await boxOf(page.getByTestId('company-tabs').locator('button:not([data-testid="company-more"])'));
+      const tabs=page.getByTestId('company-tabs'),opener=tabs.locator('button:not([data-testid="company-more"])');
+      const replay=await boxOf(opener);
       const bounds=await boxOf(strip);
       expect(more.top).toBeGreaterThanOrEqual(bounds.bottom-1);
       for(const control of [more,replay]){
         expect(control.top>=bounds.bottom||control.bottom<=bounds.top||
           control.left>=bounds.right||control.right<=bounds.left).toBe(true);
       }
+      expect.soft(replay.height).toBeGreaterThanOrEqual(44);
+      await shot(page,`company-tabs-390-${locale}`);
+      await opener.click();
+      const apply=tabs.getByRole('button',{name:locale==='zh-CN'?'应用':'Apply',exact:true});
+      const cancel=tabs.getByRole('button',{name:locale==='zh-CN'?'取消':'Cancel',exact:true});
+      for(const control of [tabs.locator('input[type=date]'),apply,cancel])await touchHeight(control);
+      await expect(links).toHaveCount(6);
+      const tops=await links.evaluateAll(els=>els.map(el=>el.getBoundingClientRect().top));
+      expect.soft(Math.max(...tops)-Math.min(...tops)).toBeLessThanOrEqual(1);
+      await pageWidth(page,390);
+      await shot(page,`company-replay-open-390-${locale}`);
+      await cancel.click();
+      await expect(opener).toBeVisible();
       const menu=await openMoreInsideViewport(page);
       await page.keyboard.press('Escape');
       await expect(menu).toBeHidden();
@@ -324,6 +356,16 @@ test.describe('390px tab row and action row',()=>{
       await expect(menuLinks.first()).toBeVisible();
       for(const link of await menuLinks.all())expect((await boxOf(link)).height).toBeGreaterThanOrEqual(44);
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    });
+    test('replay bar controls fit and have full touch targets',async({page})=>{
+      await page.goto('/stock/FIXT?asOf=2026-01-31');
+      const bar=page.getByTestId('replay-bar'),bounds=await boxOf(bar);
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.right).toBeLessThanOrEqual(page.viewportSize()!.width);
+      await touchHeight(bar.locator('input[type=date]'));
+      for(const button of await bar.locator('button:visible').all())await touchHeight(button);
+      await pageWidth(page,390);
+      await shot(page,`company-replay-bar-390-${locale}`);
     });
   });
 });
@@ -360,4 +402,63 @@ test.describe('company fixtures · English',()=>{
     const drawer=await assertSource(page);
     for(const title of ['Identity','Source','Times','Transform','Licence','Links'])await expect(drawer.getByRole('heading',{level:3,name:new RegExp(` · ${title}$`)})).toBeVisible();
   });
+});
+
+const rawCodes=['pending_fill','self_assessed','insufficient','first_observed','cutoff_vintage','trading_sessions','session_index','financial_fact','financial_metric','price_bar','settle_by','settle_after','as_known','input_unavailable'];
+async function assertNoRawCodes(container:Locator){
+  const text=await container.innerText();
+  expect.soft(rawCodes.filter(code=>new RegExp(`\\b${code}\\b`).test(text))).toEqual([]);
+}
+
+test.describe('judgments states',()=>{
+  for(const [vw,viewport] of [['desktop',{width:1280,height:800}],['phone',{width:390,height:844}]] as const)
+    for(const locale of ['zh-CN','en-US'] as const)test.describe(`${vw} · ${locale}`,()=>{
+      test.use({viewport,locale});
+      for(const state of ['loading','none','failed','replayMismatch'] as const)test(state,async({page,api})=>{
+        api.scenario.judgments=state==='replayMismatch'?'mismatch':state;
+        await page.goto(`/stock/FIXT?view=judgments${state==='replayMismatch'?'&asOf=2026-01-31':''}`);
+        const container=page.locator(`[data-judgments-state="${state}"]`);
+        await expect(container).toBeVisible();
+        await pageWidth(page,viewport.width);
+        if(vw==='phone')for(const button of await container.locator('button:visible').all())await touchHeight(button);
+        await shot(page,`judgments-${state}-${vw}-${locale}`);
+      });
+      test('gallery, inputs and timeline',async({page,api})=>{
+        api.scenario.judgments='gallery';
+        await page.goto('/stock/FIXT?view=judgments');
+        const container=page.locator('[data-judgments-state="cards"]'),articles=container.locator('article');
+        await expect(container).toBeVisible();
+        await expect(container.locator('[data-mark="judgment"]')).toHaveCount(f.judgmentGallery.cards.length);
+        await expect(articles).toHaveCount(f.judgmentGallery.cards.length);
+        if(vw==='phone')for(const article of await articles.all()){
+          await article.locator(':scope > button[aria-expanded="false"]').click();
+          await expect(article.locator(':scope > button[aria-expanded="true"]')).toBeVisible();
+        }
+        await pageWidth(page,viewport.width);
+        for(const article of await articles.all()){
+          const bounds=await boxOf(article);
+          expect.soft(bounds.left).toBeGreaterThanOrEqual(0);
+          expect.soft(bounds.right).toBeLessThanOrEqual(viewport.width);
+        }
+        if(vw==='phone')for(const button of await container.locator('button:visible').all())await touchHeight(button);
+        await assertNoRawCodes(container);
+        await shot(page,`judgments-cards-${vw}-${locale}`);
+        await articles.first().getByRole('button',{name:locale==='zh-CN'?/^输入 \d+$/:/^Inputs \d+$/}).click();
+        const dialog=page.getByRole('dialog'),bounds=await boxOf(dialog);
+        expect.soft(bounds.left).toBeGreaterThanOrEqual(0);
+        expect.soft(bounds.top).toBeGreaterThanOrEqual(0);
+        expect.soft(bounds.right).toBeLessThanOrEqual(viewport.width);
+        expect.soft(bounds.bottom).toBeLessThanOrEqual(viewport.height);
+        await pageWidth(page,viewport.width);
+        await assertNoRawCodes(dialog);
+        await shot(page,`judgments-drawer-inputs-${vw}-${locale}`,false);
+        const timeline=dialog.getByRole('tab').nth(1);
+        await timeline.click();
+        await expect(timeline).toHaveAttribute('aria-selected','true');
+        await assertNoRawCodes(dialog);
+        await shot(page,`judgments-drawer-timeline-${vw}-${locale}`,false);
+        await page.keyboard.press('Escape');
+        await expect(dialog).toBeHidden();
+      });
+    });
 });
