@@ -11,6 +11,7 @@ import {Pool} from 'pg';
 import type {PoolClient} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import {pgTableClient} from '../db/pg-table-client';
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {quarantine} from '../dq/quarantine';
 import {factInsert,factsDbContract,filingInsert} from './db-contract';
 import type {ContractHarness} from './db-contract';
@@ -18,29 +19,9 @@ import {pgFactsDb} from './pg-facts-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
 const MIGRATION='supabase/migrations/20261106090000_financial_facts.sql';
-// Plan 3 (20261107091000) redefines fact_promote_rows, filings_limited_update, read_facts and
-// replace_financial_metrics: replaying the plan-2 file alone would expose the plan-2 versions to
-// suites running in parallel, so both files replay in one transaction.
+// Replay the extensions second so the private database ends on the extension versions.
 const EXTENSIONS='supabase/migrations/20261107091000_facts_extensions.sql';
 const TABLES=['fact_sync_runs','filings','financial_facts','financial_metrics','fact_sync_scope'];
-
-// Same replay policy as dq-foundation.integration.test.ts (not exported there): one transaction,
-// short lock_timeout, retry on lock timeout (55P03) and deadlock (40P01).
-const RETRYABLE=new Set(['55P03','40P01']);
-async function replayMigration(pool:Pool,sql:string,attempts=10):Promise<void>{
- for(let attempt=1;;attempt++){
-  const c=await pool.connect();
-  try{
-   await c.query(`begin; set local lock_timeout='3s'; set local deadlock_timeout='50ms'; select pg_advisory_xact_lock(hashtext('test:migration-replay'));\n${sql}\n;commit;`);
-   return;
-  }catch(e){
-   await c.query('rollback').catch(()=>{});
-   const code=(e as {code?:string}).code;
-   if(attempt>=attempts||!code||!RETRYABLE.has(code))throw e;
-   await new Promise(r=>setTimeout(r,250*attempt+Math.floor(Math.random()*250)));   // jittered backoff: other suites hold locks on the shared DB
-  }finally{c.release();}
- }
-}
 
 /** Runs body inside one transaction on its own connection (pid known); rolls back only if still open, and discards the connection if even that fails. */
 interface Tx{c:PoolClient;pid:number;commit():Promise<void>}
@@ -74,7 +55,7 @@ type FactSpec={filing_id:string;fact_id?:string;concept?:string;period_start?:st
 type Envelope={state_rev:number;rows:Record<string,unknown>[];truncated:boolean;row_count:number};
 
 describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()=>{
- let admin:Pool;
+ let admin:Pool;let adminUrl:string;
  const q=async(text:string,values:unknown[]=[])=>(await admin.query(text,values)).rows as Record<string,any>[];
  const one=async(text:string,values:unknown[]=[])=>(await q(text,values))[0]?.v;
  const issuer=async()=>{const id=randomUUID();await q(`insert into public.issuers(issuer_id,canonical_name_en) values($1,'ZZ Facts Test')`,[id]);return id;};
@@ -118,7 +99,7 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
 
  beforeAll(async()=>{
   const state=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
-  admin=new Pool({connectionString:state.adminUrl});
+  adminUrl=state.adminUrl;admin=new Pool({connectionString:adminUrl});
  });
  afterAll(async()=>{await admin?.end();});
 
@@ -145,7 +126,16 @@ describe.skipIf(!enabled)('F2-0 financial facts migration on real PostgreSQL',()
    expect({sig,ok:await fn('service_role',sig)}).toEqual({sig,ok:true});
   }
   for(const role of ['anon','authenticated','service_role'])expect(await fn(role,'public.fact_promote_rows(uuid,text,uuid[])')).toBe(false);
-  await expect(replayMigration(admin,`${readFileSync(MIGRATION,'utf8')}\n${readFileSync(EXTENSIONS,'utf8')}`)).resolves.toBeUndefined();
+  // Replays take DDL locks, so fresh-db.ts keeps them in a private database away from shared tables.
+  const fresh=await freshMigratedDatabase(adminUrl);
+  try{
+   await expect(replayFiles(fresh.pool,[MIGRATION,EXTENSIONS])).resolves.toBeUndefined();
+   const replayed=(await fresh.pool.query(`select c.relname,c.relrowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname=any($1)`,[TABLES])).rows;
+   expect(replayed.map(r=>r.relname).sort()).toEqual([...TABLES].sort());for(const r of replayed)expect(r.relrowsecurity).toBe(true);
+   const grants=(await fresh.pool.query(`select has_function_privilege('service_role','public.begin_sync_run(uuid,text,uuid,int)','EXECUTE') service,
+    has_function_privilege('anon','public.begin_sync_run(uuid,text,uuid,int)','EXECUTE') anon`)).rows[0];
+   expect(grants).toEqual({service:true,anon:false});
+  }finally{await fresh.drop();}
  },60000);
 
  it('enforces the candidate key (nulls not distinct), both composite foreign keys, the period checks, and keeps 20-digit values exact',async()=>{

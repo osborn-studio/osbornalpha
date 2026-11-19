@@ -142,7 +142,9 @@ function fixtures(pool:Pool){
    values($1,$2,$3,$4,$5,'2024-02-01',$6::jsonb,$7,1,gen_random_uuid(),$8,$9)`,[id,iss,market,o.kind??'filing_published',o.natural_key??randomUUID(),JSON.stringify(o.payload??{}),hex('p'),b,o.filing_id??null]);
   return id;
  };
- return {q,one,issuer,issuers,user,batch,scope,publish,stream,rev,rawEvent};
+ // One statement reads the stable backlog function and subtracts other issuers' failed streams in the same snapshot.
+ const ownBacklog=(own:string[])=>one(`select public.company_digest_backlog() - (select count(*)::int from public.company_digest_state where last_status='failed' and issuer_id<>all($1::uuid[])) v`,[own]).then(Number);
+ return {q,one,issuer,issuers,user,batch,scope,publish,stream,rev,rawEvent,ownBacklog};
 }
 
 describe.skipIf(!enabled)('company research tables on real PostgreSQL',()=>{
@@ -646,9 +648,9 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   const empty=await fx.issuer();await fx.scope(empty,'US');                                   // state_rev 0: never due, never swept
   const mine=new Set([behind1.iss,behind2.iss,current.iss,backoff.iss,empty]);
   const now=Date.now();const iso=(ms:number)=>new Date(now+ms).toISOString();
-  const backlog0=Number(await fx.one(`select public.company_digest_backlog() v`));
+  expect(await fx.ownBacklog([...mine])).toBe(0);
   expect(await fail(backoff.iss,ba,iso(0))).toBe(true);
-  expect(Number(await fx.one(`select public.company_digest_backlog() v`))).toBe(backlog0+1);
+  expect(await fx.ownBacklog([...mine])).toBe(1);
   type Due={issuerId:string;market:string;stateRev:number;digestedRev:number};
   const due=async(at:string,limit=100000)=>((await fx.one(`select public.company_digest_due($1::timestamptz,$2) v`,[at,limit])) as Due[]).filter(x=>mine.has(x.issuerId));
   expect(await due(iso(0))).toEqual([{issuerId:behind2.iss,market:'US',stateRev:2,digestedRev:0},{issuerId:behind1.iss,market:'US',stateRev:1,digestedRev:0}]);
@@ -682,12 +684,12 @@ describe.skipIf(!enabled)('company research functions on real PostgreSQL',()=>{
   expect(await code(fail(s.iss,99,T))).toMatchObject({message:'invalid_attempt'});
   // (e) attempts 1 and 2 begin; 2 fails; 1 succeeds → materialisation recorded, failure state kept, swept_at not advanced
   const e=await fx.stream([{facts:[{}]}]);const e1=await begin(e.iss);const e2=await begin(e.iss);
-  const backlog0=Number(await fx.one(`select public.company_digest_backlog() v`));
+  expect(await fx.ownBacklog([e.iss])).toBe(0);
   expect(await fail(e.iss,e2,T)).toBe(true);
   expect(await replace({iss:e.iss,batch:b,attempt:e1,rev:1,sweep:true,events:[await filingEvent(e.filingIds[0])]})).toMatchObject({upserted:1});
   expect(await state(e.iss)).toMatchObject({dr:1,ls:1,lf:2,st:'failed',cf:1,sw:null});
   expect(await gap(e.iss)).toBe(3600);
-  expect(Number(await fx.one(`select public.company_digest_backlog() v`))).toBe(backlog0+1);
+  expect(await fx.ownBacklog([e.iss])).toBe(1);
   // (f) attempts 1 and 2 begin; 2 succeeds; 1 reports failure → ignored
   const f=await fx.stream([{facts:[{}]}]);const f1=await begin(f.iss);const f2=await begin(f.iss);
   await replace({iss:f.iss,batch:b,attempt:f2,rev:1,events:[]});
