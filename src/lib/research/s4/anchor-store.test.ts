@@ -1,5 +1,5 @@
 import {afterEach,describe,it,expect} from 'vitest';
-import {mkdtempSync,readFileSync,statSync,appendFileSync,writeFileSync,mkdirSync,chmodSync,symlinkSync} from 'node:fs';
+import {mkdtempSync,rmSync,readFileSync,statSync,appendFileSync,writeFileSync,mkdirSync,chmodSync,symlinkSync} from 'node:fs';
 import {open,type FileHandle} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -17,6 +17,10 @@ export function syntheticEntries(count:number,start=1,previous=ZERO_HASH,ownerSc
   }
   return out;
 }
+const tempDirs:string[]=[];
+function root(){
+ const dir=mkdtempSync(join(tmpdir(),'s4-store-'));tempDirs.push(dir);return dir;
+}
 const opened:FileHandle[]=[];
 const trackingOpen:OpenFile=async(path,flags,mode)=>{
  const handle=await open(path,flags,mode);opened.push(handle);return handle;
@@ -26,9 +30,9 @@ afterEach(async()=>{
  // The store holds the journal open until flush, and Node turns a GC-closed FileHandle into an uncaught error.
  const leaked=opened.splice(0).filter(handle=>handle.fd!==-1);
  await Promise.all(leaked.map(handle=>handle.close()));
+ for(const dir of tempDirs.splice(0))rmSync(dir,{recursive:true,force:true});
  expect(leaked.length).toBe(0);
 });
-const root=()=>mkdtempSync(join(tmpdir(),'s4-store-'));
 
 describe('file AnchorStore',()=>{
  it('exposes exactly readCheckpoint, readReceipts, appendExpected, flush and verify',()=>{
