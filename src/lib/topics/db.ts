@@ -5,7 +5,7 @@ import {canonicalJson} from '@/lib/evidence/hash';
 import {TopicsDbError,type TopicsDb} from './types';
 import type {TopicDraftRow,TopicEvidenceDriftRow,TopicPromotionRow,TopicRow,TopicVersionRow} from './database-types';
 type Row=Record<string,unknown>;
-export interface TopicRead{table:string;columns?:string[];public?:boolean;match?:Row;order:string[];desc?:boolean;limit?:number;live?:boolean;after?:{version_id:string;ordinal:number}|null}
+export interface TopicRead{table:string;columns?:string[];public?:boolean;match?:Row;licenceIds?:string[];order:string[];desc?:boolean;limit?:number;live?:boolean;after?:{version_id:string;ordinal:number}|null}
 export interface TopicsTransport{read<T>(q:TopicRead):Promise<T[]>;rpc<T>(name:string,args:Row):Promise<T>}
 export function topicDbError(e:unknown):TopicsDbError{
  if(e instanceof TopicsDbError)return e;
@@ -17,7 +17,8 @@ const numbers=new Set(['id','revision','version_no','ordinal','current_version_n
 export function topicRow<T>(raw:Row):T{
  const row={...raw};
  for(const [key,value] of Object.entries(row))if(value!==null&&value!==undefined){
-  if(timestamps.has(key))row[key]=(value instanceof Date?value:new Date(String(value))).toISOString();
+  if(key==='terms_read_at'&&value instanceof Date)row[key]=[value.getFullYear(),String(value.getMonth()+1).padStart(2,'0'),String(value.getDate()).padStart(2,'0')].join('-');
+  else if(timestamps.has(key))row[key]=(value instanceof Date?value:new Date(String(value))).toISOString();
   else if(numbers.has(key))row[key]=Number(value);
  }
  delete row.topic_versions;
@@ -38,6 +39,9 @@ export function topicsAdapter(t:TopicsTransport):TopicsDb{
   },
   draftOf:id=>one('topic_drafts',{topic_id:id},['draft_id']),
   saveDraft:i=>t.rpc('topic_save_draft',{p_topic_id:i.topicId,p_expected_revision:i.expectedRevision,p_body_text:canonicalJson(i.body),p_actor:i.actor}),
+  licences:()=>read('topic_source_licences',{},['licence_id']),
+  setLicence:i=>t.rpc('topic_set_licence',{p_licence_id:i.licenceId,p_fields:i.fields,p_actor:i.actor}),
+  publicLicenceStatus:ids=>ids.length?read('topic_licence_status_public_v',{},['licence_id'],{public:true,licenceIds:ids}):Promise.resolve([]),
   promotionOf:id=>one('topic_promotions',{topic_id:id},['created_at','promotion_id']),
   recordPromotion:i=>t.rpc('topic_record_promotion',{p_topic_id:i.topicId,p_source_id:i.sourceId,p_source_content_hash:i.sourceContentHash,p_copied:i.copied,p_stripped:i.stripped,p_actor:i.actor}),
   recordDisclosure:i=>t.rpc('topic_record_disclosure',{p_topic_id:i.topicId,p_draft_hash:i.draftHash,p_checks:i.checks,p_passed:i.passed,p_code_version:i.codeVersion,p_actor:i.actor}),
@@ -90,6 +94,7 @@ export function supabaseTopicsDb({admin,session}:{admin?:SupabaseClient;session?
    while(r.limit===undefined||out.length<r.limit){
     let q=client.from(r.table).select(r.live?'*,topic_versions!inner(unpublished_at)':r.columns?.join(',')??'*');
     for(const [key,value] of Object.entries(r.match??{}))q=value===null?q.is(key,null):q.eq(key,value);
+    if(r.licenceIds)q=q.in('licence_id',r.licenceIds);
     if(r.live)q=q.is('topic_versions.unpublished_at',null);
     if(r.after){
      if(!/^[0-9a-f-]{36}$/.test(r.after.version_id)||!Number.isInteger(r.after.ordinal))throw new TopicsDbError('invalid_parameter:cursor');

@@ -103,3 +103,17 @@ it('previews before terms confirmation, freezes the approved summary, and masks 
  await deps.db.upsertDrift([{version_id:version.version_id,ordinal:1,drift:'now_withheld',current_identity:null}],deps.now().toISOString(),true,null);
  expect((await readTopic(pub(),slug,{})).summary).toMatchObject({facts:[{text:''}],points:[],hidden_points:1});
 });
+
+it('A16 revokes excerpts across all public views without changing the snapshot',async()=>{
+ const {testLicence,assertRevokedViews,quoteEntry}=await import('./db-contract');
+ const {topicFacts}=await import('./summary/facts');
+ const {deps,topicId,slug}=await scenario(true),db=deps.db;
+ const licenceId=await db.setLicence({licenceId:null,fields:testLicence,actor}),draft=(await db.draftOf(topicId))!;
+ draft.body.entries=[quoteEntry(licenceId)];
+ await db.saveDraft({actor,topicId,body:draft.body,expectedRevision:draft.revision});
+ expect((await checkDraft(deps,{topicId,actor})).passed).toBe(true);
+ const v=await publishTopic(deps,{topicId,actor,expectedDraftHash:await hashOf(deps,topicId)});
+ expect(JSON.stringify(topicFacts((await db.versionById(v.version_id))!.snapshot))).not.toContain('Quoted 42');
+ await setPublicEnabled(deps,{...settingsBody,licence_confirmations:confirmations(['macro:attribution'])},actor);
+ await assertRevokedViews(db,db,slug,v.version_id,licenceId,actor);
+});

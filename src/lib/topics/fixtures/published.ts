@@ -10,6 +10,7 @@ import type {EvidenceKind,EvidenceRef} from '@/lib/evidence/ref';
 import type {Resolved} from '@/lib/evidence/resolve';
 import {memoryTopicsDb} from '../memory-db';
 import type {DraftBody,TopicSnapshot,UnpublishReason} from '../types';
+import {fixtureExcerpts} from './excerpts';
 const actor='70000000-0000-4000-8000-000000000001';
 const cutoff='2026-11-01T00:00:00.000Z';
 const second='10000000-0000-4000-8000-000000000007';
@@ -71,7 +72,7 @@ function deterministicDb():ReturnType<typeof memoryTopicsDb>{
   if(key==='now'||key==='setPublicFlag')return method;
   return async(...args:unknown[])=>{
    const out:unknown=await Reflect.apply(method,target,args.map(a=>translate(a,reverse)));
-   if(key==='recordDisclosure'&&typeof out==='string')register(out);else visit(out);
+   if((key==='recordDisclosure'||key==='setLicence')&&typeof out==='string')register(out);else visit(out);
    return translate(out,forward);
   };
  }});
@@ -86,6 +87,8 @@ export function publishedFixture(){
   counterpoints:[{text:'其他因素也可能影响经营。',fact_ids:['ev:2'],refs:[2]}],incomparable:[],prompt_version:'fixture/1',validator_version:'fixture/1',provider:'fixture-provider',model:'fixture-model'};
  const ids=new Map<string,string>();
  const ready=(async()=>{
+  const entries=await fixtureExcerpts(store,actor);
+  snapshots['rates-and-banks'][2].entries.push(...entries);
   for(const slug of ['cn-company','rates-and-banks']){
    const s=snapshots[slug][1];
    const body:DraftBody={title:s.topic.title,dek:s.topic.dek,sections:s.sections,evidence:s.evidence.map(e=>({ordinal:e.ordinal,section_key:e.section_key,ref:e.ref})),expected_slots:s.expected_slots,entries:s.entries,blocks_provenance:{note:'owner'}};

@@ -8,7 +8,7 @@ import {fixtureMode} from './e2e-fixture';
 import {supabaseTopicsDb} from './db';
 import type {TopicsDb} from './types';
 import type {PublicTopicRow} from './database-types';
-export interface PublicDeps{db:Pick<TopicsDb,'publicOpen'|'publicTopics'|'publicTopicBySlug'|'publicVersions'|'publicDrift'>;now():Date;preview:boolean}
+export interface PublicDeps{db:Pick<TopicsDb,'publicOpen'|'publicTopics'|'publicTopicBySlug'|'publicVersions'|'publicDrift'|'publicLicenceStatus'>;now():Date;preview:boolean}
 export function serviceDeps(){
  const admin=getAdminSupabase();
  return {tables:supabaseTableClient(admin),db:supabaseTopicsDb({admin}),resolver:productionResolver(),now:()=>new Date()};
@@ -27,6 +27,7 @@ export async function publicDeps():Promise<PublicDeps>{
 }
 export function previewDeps():PublicDeps{
  if(fixtureMode())return fixture??={preview:false,now:()=>new Date('2026-11-15T00:00:00Z'),db:{
+  publicLicenceStatus:async ids=>(await publicDeps()).db.publicLicenceStatus(ids),
   publicOpen:async()=> (await publicDeps()).db.publicOpen(),
   publicTopics:async()=> (await publicDeps()).db.publicTopics(),
   publicTopicBySlug:async slug=> (await publicDeps()).db.publicTopicBySlug(slug),
@@ -46,6 +47,7 @@ export function previewDeps():PublicDeps{
   }));
  };
  return {preview:true,now:()=>new Date(),db:{
+  publicLicenceStatus:async ids=>(await db.licences()).filter(l=>ids.includes(l.licence_id)).map(({licence_id,status})=>({licence_id,status})),
   publicOpen:async()=>true,publicTopics,
   publicTopicBySlug:async slug=>(await publicTopics()).find(t=>t.topic_slug===slug)??null,
   async publicVersions(id){

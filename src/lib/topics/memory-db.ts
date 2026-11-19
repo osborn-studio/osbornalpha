@@ -2,12 +2,13 @@
 import {randomUUID} from 'node:crypto';
 import {canonicalJson,sha256Hex} from '@/lib/evidence/hash';
 import {CATEGORIES,UNPUBLISH_REASONS,TopicsDbError,type TopicsDb,type TopicSnapshot} from './types';
-import type {PublicTopicRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicPromotionRow,TopicRow,TopicSettingsRow,TopicSummaryRunRow,TopicSummaryRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
+import type {TopicSourceLicenceRow,PublicTopicRow,TopicAuditRow,TopicDisclosureReceiptRow,TopicDraftRow,TopicEvidenceDriftRow,TopicPromotionRow,TopicRow,TopicSettingsRow,TopicSummaryRunRow,TopicSummaryRow,TopicVersionEvidenceRow,TopicVersionRow} from './database-types';
 const copy=<T>(x:T):T=>structuredClone(x);
 const fail=(code:string):never=>{throw new TopicsDbError(code);};
 export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:Date):void}{
  let clock:Date|null=null;const now=()=> (clock??new Date()).toISOString();
  const topics:TopicRow[]=[],drafts:TopicDraftRow[]=[],versions:TopicVersionRow[]=[],evidence:TopicVersionEvidenceRow[]=[],receipts:TopicDisclosureReceiptRow[]=[],audits:TopicAuditRow[]=[],drifts:TopicEvidenceDriftRow[]=[];
+ const licences:TopicSourceLicenceRow[]=[];
  const promotions:TopicPromotionRow[]=[];
  const runs:TopicSummaryRunRow[]=[],summaries:TopicSummaryRow[]=[];
  const result=(run:TopicSummaryRunRow)=>copy({...run,summary:summaries.find(s=>s.run_id===run.run_id)??null});
@@ -49,6 +50,15 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    Object.assign(d,{revision:d.revision+1,body:JSON.parse(body_text),body_text,draft_hash,updated_by:i.actor,updated_at:now()});
    audit(i.topicId,i.actor,'draft_save',{revision:d.revision,draft_hash});return {revision:d.revision,draft_hash};
   },
+  async licences(){return copy(licences);},
+  async setLicence(i){
+   actor(i.actor);
+   const id=i.licenceId??randomUUID(),row={...copy(i.fields),licence_id:id,decided_by:i.actor,decided_at:now()};
+   if(i.licenceId)Object.assign(licences.find(l=>l.licence_id===id)??fail('not_found'),row);
+   else licences.push(row);
+   audit(null,i.actor,'licence_change',{licence_id:id,status:row.status});return id;
+  },
+  async publicLicenceStatus(ids){return settings.public_enabled?licences.filter(l=>ids.includes(l.licence_id)).map(({licence_id,status})=>({licence_id,status})):[];},
   async promotionOf(id){return copy(promotions.find(p=>p.topic_id===id)??null);},
   async recordPromotion(i){
    actor(i.actor);topic(i.topicId);

@@ -5,7 +5,7 @@ import {readFileSync} from 'node:fs';
 import {Pool,type PoolClient} from 'pg';
 import {afterAll,afterEach,beforeAll,beforeEach,describe,expect,it} from 'vitest';
 
-import {topicsDbContract} from './db-contract';
+import {quoteEntry,testLicence,assertRevokedViews,fixtureVersion,topicsDbContract} from './db-contract';
 import {pgTopicsDb} from './pg-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -56,9 +56,18 @@ describe.skipIf(!enabled)('topics schema',()=>{
 
 describe.skipIf(!enabled)('topics functions',()=>{
  let pool:Pool;
- const asRole=async<T>(role:'anon'|'authenticated',fn:(c:PoolClient)=>Promise<T>):Promise<T>=>{
+ const asRole=async<T>(role:'anon'|'authenticated',fn:(c:PoolClient)=>Promise<T>,researchOwner?:string):Promise<T>=>{
   const c=await pool.connect();
-  try{await c.query('begin');await c.query(`set local role ${role}`);return await fn(c);}
+  try{
+   await c.query('begin');
+   if(researchOwner){
+    // The bare harness omits Supabase's default authenticated grants. Roll these back with the session.
+    await c.query('grant usage on schema public,auth to authenticated');
+    await c.query('grant select on public.research_theses,public.research_memos,public.research_source_documents,public.research_thesis_events to authenticated');
+    await c.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)",[researchOwner,JSON.stringify({sub:researchOwner,role})]);
+   }
+   await c.query(`set local role ${role}`);return await fn(c);
+  }
   finally{await c.query('rollback').catch(()=>{});c.release();}
  };
  beforeAll(()=>{pool=new Pool({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});});
@@ -103,14 +112,15 @@ it('A12/A13 leaves private research untouched through promotion and publication 
   await pool.query("insert into public.research_thesis_events(user_id,thesis_id,kind) values($1,$2,'SUPPORT')",[actor,thesisId]);
   const before=await footprint();expect(before.map(row=>row.n)).toEqual([1,1,1,1]);
   await asRole('authenticated',async c=>{
-   await c.query("select set_config('request.jwt.claim.sub',$1,true),set_config('request.jwt.claims',$2,true)",[actor,JSON.stringify({sub:actor,role:'authenticated'})]);
+   const projection=await c.query('select title,body from public.research_theses where id=$1',[thesisId]);
+   expect(projection.rows).toEqual([{title:'Conditions',body:'Initial conditions'}]);
    // Exercise the production projections against real RLS rows on this connection.
    const session={from:(table:string)=>({select:(columns:string)=>{
     if(!Object.hasOwn(stamps,table)||!/^\w+(,\w+)*$/.test(columns))throw new Error('unexpected projection');
     const sql=`select ${columns} from public.${table}`;
-    return {eq:(_field:string,id:string)=>({maybeSingle:async()=>({data:(await c.query(sql+' where id=$1',[id])).rows[0]??null})}),
+    return {eq:(_field:string,id:string)=>({maybeSingle:async()=>({data:(await c.query(sql+' where id=$1',[id])).rows[0]??null,error:null})}),
      order:()=>{
-      const page=(after:string|null)=>({limit:async(limit:number)=>({data:(await c.query(sql+' where ($1::uuid is null or id>$1) order by id limit $2',[after,limit])).rows})});
+      const page=(after:string|null)=>({limit:async(limit:number)=>({data:(await c.query(sql+' where ($1::uuid is null or id>$1) order by id limit $2',[after,limit])).rows,error:null})});
       return {...page(null),gt:(_key:string,after:string)=>page(after)};
      }};
    }})};
@@ -129,7 +139,7 @@ it('A12/A13 leaves private research untouched through promotion and publication 
    expect((await checkDraft(deps,{topicId,actor})).passed).toBe(true);
    await publishTopic(deps,{topicId,expectedDraftHash:clean.draft_hash,actor});
    expect((await deps.db.versionsOfTopic(topicId))[0].promotion_id).toBe(promotion_id);
-  });
+  },actor);
   expect(await footprint()).toEqual(before);
  }finally{await pool.query('delete from auth.users where id=$1',[actor]);}
 });
@@ -355,6 +365,20 @@ describe.skipIf(!enabled)('topics storage',()=>{
   if(!lock)return;
   try{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[previous]);}
   finally{try{await lock.query("select pg_advisory_unlock(hashtext('topic_settings'))");}finally{lock.release();}}
+ });
+ it('A16 masks revoked excerpts for authenticated version and replay reads',async()=>{
+  const db=pgTopicsDb(pool),actor=randomUUID(),slug='pg-excerpt-'+randomUUID();
+  const licenceId=await db.setLicence({licenceId:null,actor,fields:testLicence});
+  const {emptyDraft}=await import('./drafts'),draft=emptyDraft({zh:'引文',en:'Excerpt'});
+  draft.entries=[quoteEntry(licenceId)];
+  const t=await db.createTopic({slug,actor,category:'macro',body:draft});
+  const receiptId=await db.recordDisclosure({topicId:t.topic_id,draftHash:t.draft_hash,actor,checks:[],passed:true,codeVersion:'test'});
+  const reader=pgTopicsDb(pool,{role:'authenticated'});
+  const f=fixtureVersion({db,newId:randomUUID,asPublic:()=>reader,setPublic:async()=>{}},slug);
+  const snap=JSON.parse(f.snapshotText);snap.entries=draft.entries;
+  const v=await db.publish({topicId:t.topic_id,expectedDraftHash:t.draft_hash,receiptId,actor,evidence:f.evidence,snapshotText:JSON.stringify(snap),summaryId:null,cutoff:'2026-11-10T00:00:00Z'});
+  await lock.query('update public.topic_settings set public_enabled=true where id=1');
+  await assertRevokedViews(db,reader,slug,v.version_id,licenceId,actor);
  });
  topicsDbContract('pg',async()=>({db:pgTopicsDb(pool),newId:randomUUID,
   setPublic:async on=>{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[on]);},

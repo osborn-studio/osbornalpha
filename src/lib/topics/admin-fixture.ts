@@ -34,7 +34,9 @@ export function adminFixtureDeps():AdminDeps{
    expected_slots:[{key:'industry',kind:'industry_metric',label:{zh:'行业指标',en:'Industry metric'},reason_code:'industry_not_published'}],
   });
   await base.saveDraft({topicId:rates.topic_id,expectedRevision:rates.revision,body,actor:FIXTURE_ADMIN_ID});
-  await base.createTopic({slug:'cn-company',category:'company',body:emptyDraft({zh:'中国公司',en:'China company'}),actor:FIXTURE_ADMIN_ID});
+  const company=emptyDraft({zh:'中国公司',en:'China company'});
+  await (await import('./fixtures/excerpts')).seedFixtureLicences(base,FIXTURE_ADMIN_ID);
+  await base.createTopic({slug:'cn-company',category:'company',body:company,actor:FIXTURE_ADMIN_ID});
  })();
  // Every port operation waits for seeding, including the first request after a route bundle loads.
  const db=new Proxy(base as TopicsDb,{get(target,key,receiver){

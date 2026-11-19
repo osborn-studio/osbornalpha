@@ -205,3 +205,13 @@ it('gates thesis promotion before opening dependencies and hides unreadable thes
  const missing=await run();expect(missing.status).toBe(404);expect((await missing.json()).error.code).toBe('not_found');
  expect(await deps.db.adminTopics()).toEqual([]);
 });
+it('gates licence changes and records status changes in the global audit',async()=>{
+ const {POST:set}=await import('./licences/route');
+ const fields={source_title:'Source',publisher:'Publisher',source_url:'https://example.org',terms_url:'https://example.org/terms',terms_read_at:'2026-11-01',terms_clause:'May quote',status:'approved',permits:{display_excerpt:true,link_required:true}};
+ vi.stubEnv('TOPICS_ENABLED','');expect((await set(req(fields),{})).status).toBe(404);
+ vi.stubEnv('TOPICS_ENABLED','1');const {AdminForbidden}=await import('@/lib/admin/auth');vi.mocked(requireAdminUser).mockRejectedValueOnce(new AdminForbidden());
+ expect((await set(req(fields),{})).status).toBe(403);
+ const created=await set(req(fields),{});expect(created.status).toBe(201);const {licence_id}=await created.json();
+ expect((await set(req({...fields,licence_id,status:'revoked'}),{})).status).toBe(200);
+ expect((await (await adminDeps()).db.auditOf(null)).at(-1)).toMatchObject({action:'licence_change',detail:{licence_id,status:'revoked'}});
+});

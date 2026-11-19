@@ -1,27 +1,18 @@
 // Topic plan T6.3 / spec §6.6: deterministic disclosure checks with prose-free receipt diagnostics.
 import type {Assembled} from './assemble';
 import type {TopicSettingsRow} from './database-types';
-import type {DisclosureCheck,DraftBody,DraftEntry} from './types';
+import type {DisclosureCheck,DraftBody} from './types';
 import {draftLint,ownerTexts} from './drafts';
 import {parseSlots,withoutSlots} from './slots';
 export {ownerTexts} from './drafts';
 export const DISCLOSURE_VERSION='topic-disclosure/1';
 export const CHECK_KEYS=['evidence_kind','evidence_audience','private_fingerprint','unreviewed_block','lexical','excerpt','slots','summary','resolver_health','empty_dossier'] as const;
-export const EXCERPT_CAPS={zhChars:120,enWords:60,fragments:3} as const;
+import {excerptViolations} from './excerpts';
+export {EXCERPT_CAPS} from './excerpts';
 export interface DisclosureInput{draft:DraftBody;assembled:Pick<Assembled,'snapshot'|'degraded'>;privateIds:ReadonlySet<string>;
  summary:{factsMatch?:boolean;status:'generated'|'approved'|'discarded';draft_hash:string;provider:string;model:string}|null;draftHash:string;
  settings:Pick<TopicSettingsRow,'summary_public_enabled'|'summary_provider_note'>;licences:ReadonlyMap<string,{status:'pending'|'approved'|'revoked';permits:Record<string,unknown>}>}
 const unique=(codes:string[])=>[...new Set(codes)];
-function excerptInvalid(e:Extract<DraftEntry,{entry_type:'licensed_excerpt'}>,i:DisclosureInput):boolean{
- const licence=i.licences.get(e.licence_id);
- if(licence?.status!=='approved'||licence.permits.display_excerpt!==true||e.fragments.length>EXCERPT_CAPS.fragments)return true;
- return e.fragments.some(f=>{
-  let https=false;try{https=new URL(f.url).protocol==='https:';}catch{/* Invalid links cannot be disclosed. */}
-  const han=(f.text.match(/\p{Script=Han}/gu)??[]).length;
-  const words=f.text.replace(/\p{Script=Han}/gu,' ').trim().split(/\s+/u).filter(Boolean).length;
-  return han>EXCERPT_CAPS.zhChars||words>EXCERPT_CAPS.enWords||!f.attribution.trim()||!f.date.trim()||!https;
- });
-}
 export function runDisclosure(i:DisclosureInput):{checks:DisclosureCheck[];passed:boolean;blocked:string[];warnings:string[]}{
  const checks:DisclosureCheck[]=[],texts=ownerTexts(i.draft),evidence=i.assembled.snapshot.evidence;
  const add=(codes:string[],detail:Record<string,unknown>={})=>{
@@ -41,7 +32,7 @@ export function runDisclosure(i:DisclosureInput):{checks:DisclosureCheck[];passe
  const findings=draftLint(i.draft).filter(f=>f.code!=='dangling_slot').map(({field,code})=>({field,code}));
  const counts:Record<string,number>={};for(const f of findings)counts[f.code]=(counts[f.code]??0)+1;
  add(findings.map(f=>f.code),{findings,counts});
- add(i.draft.entries.some(e=>e.entry_type==='licensed_excerpt'&&excerptInvalid(e,i))?['excerpt_violation']:[]);
+ add(i.draft.entries.some(e=>e.entry_type==='licensed_excerpt'&&excerptViolations(e,i.licences.get(e.licence_id)).length>0)?['excerpt_violation']:[]);
  const ordinals=new Set(i.draft.evidence.map(e=>e.ordinal));
  const dangling=texts.flatMap(({field,text})=>parseSlots(text).filter(t=>!ordinals.has(t.ordinal)).map(t=>({field,slot:t.raw})));
  add(dangling.length?['dangling_slot']:[],{findings:dangling});

@@ -14,6 +14,10 @@ import {
 } from '@/lib/research/types';
 import { EMPTY_FORM, OPPORTUNITY_LABELS, ThesisFormFields, formToInput } from '../thesis-form';
 
+// TOPICS ↓
+import { FromThesisLink } from '@/app/(app)/admin/topics/new/from-thesis';
+// TOPICS ↑
+
 interface QuarterReview { count: number; quarter: string; needs_review: boolean }
 
 const STATUS_COLORS: Record<ThesisStatus, string> = {
@@ -184,6 +188,9 @@ export default function ResearchThesisDetailPage() {
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-semibold">{thesis.title}</h1>
           <span className={`rounded px-2 py-0.5 text-xs ${STATUS_COLORS[thesis.status]}`}>{thesis.status}</span>
+          {/* TOPICS ↓ */}
+          <FromThesisLink href={`/admin/topics/new?fromThesis=${params.id}`}/>
+          {/* TOPICS ↑ */}
         </div>
         <p className="whitespace-pre-wrap text-sm text-gray-700">{thesis.body}</p>
         <p className="text-xs text-gray-500">

@@ -34,3 +34,7 @@ it('checks category and accepts valid input and slug boundaries',()=>{
  expect(newTopicErrors({...input,category:'other'})).toEqual({category:'errors.category'});
  for(const slug of ['abc','a'.repeat(64),input.slug])expect(newTopicErrors({...input,slug})).toEqual({});
 });
+it('validates the slug and category without title inputs in promotion mode',()=>{
+ expect(newTopicErrors({slug:'new-topic',category:'macro',title:{zh:'',en:''}},false)).toEqual({});
+ expect(Object.keys(newTopicErrors({slug:'?',category:'other',title:{zh:'',en:''}},false))).toEqual(['slug','category']);
+});

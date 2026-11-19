@@ -1,4 +1,11 @@
 {
+  "excerpt": {
+    "caption": "Licensed excerpt",
+    "masked": "Excerpt withheld",
+    "reason": "This source’s licence status has changed. Attribution and links remain available.",
+    "link": "Source link",
+    "note": "Figures in the quotation are the source’s own and have not been verified by this site."
+  },
   "summaryTemplates": {
     "macro_level": "{name} was {value} in {period}",
     "fact_value": "{company} {concept} was {value} in {period}",

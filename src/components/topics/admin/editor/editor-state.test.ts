@@ -77,3 +77,26 @@ it('addresses all owner text paths and inserts at a clamped caret',()=>{
  }
  expect(fieldText(b,'sections.unknown.note.zh')).toBeNull();expect(reduce(b,{type:'insertSlotText',field:'unknown',at:0,ordinal:1,part:'value'})).toBe(b);
 });
+it('reviews promoted title on edit and owner note on confirmation',()=>{
+ const body=start();body.blocks_provenance={title:'from_thesis','entry.from-thesis':'from_thesis'};
+ const edited=reduce(body,{type:'setTitle',locale:'zh',value:'改写'});
+ expect(edited.blocks_provenance.title).toBe('reviewed');
+ expect(reduce(edited,{type:'confirmBlock',key:'entry.from-thesis'}).blocks_provenance['entry.from-thesis']).toBe('reviewed');
+});
+it('round trips an existing licensed entry through editing and save validation',()=>{
+ const body=start();body.entries=[{entry_type:'licensed_excerpt',key:'quote',licence_id:OBS.unrateV1,fragments:[{text:'42',date:'2026-11-01',attribution:'Publisher',url:'https://example.org'}]}];
+ const edited=reduce(body,{type:'setDek',locale:'en',value:'Updated'});
+ expect(parseDraftBody(edited,new Set([OBS.unrateV1])).entries).toEqual(body.entries);
+ expect(()=>parseDraftBody(edited,new Set())).toThrow('invalid_body:entries');
+});
+it('maps private blocks to the active editor field and clears disclosure check four',async()=>{
+ const {unreviewedBlocks}=await import('./editor-state');
+ const {scenario,actor}=await import('@/lib/topics/fixtures/scenario');
+ const {checkDraft}=await import('@/lib/topics/publish');
+ const {deps,topicId}=await scenario(),draft=(await deps.db.draftOf(topicId))!;
+ draft.body.blocks_provenance={title:'from_thesis'};
+ expect(unreviewedBlocks(draft.body,'en')).toEqual([{key:'title',field:'title.en',text:draft.body.title.en}]);
+ const body=reduce(draft.body,{type:'confirmBlock',key:'title'});
+ await deps.db.saveDraft({topicId,actor,expectedRevision:draft.revision,body});
+ expect((await checkDraft(deps,{actor,topicId})).checks[3].result).toBe('pass');
+});

@@ -7,6 +7,6 @@ import {TopicError} from '@/lib/topics/errors';
 export const POST=adminPost<{params:Promise<{id:string}>}>('[admin/topics] lint',async({ctx,body})=>{
  const id=uuidParam((await ctx.params).id),deps=await adminDeps();
  if(!await deps.db.topicById(id)||!await deps.db.draftOf(id))throw new TopicError('not_found');
- const draft=parseDraftBody(body.body);
+ const draft=parseDraftBody(body.body,new Set((await deps.db.licences()).map(l=>l.licence_id)));
  return jsonNoStore({lint:draftLint(draft),evidence:await draftEvidenceView(deps,draft)});
 });

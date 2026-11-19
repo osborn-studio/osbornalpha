@@ -22,6 +22,7 @@ export default async function TopicPublishPage({params}:{params:Promise<{id:stri
  const summaryRun=await latestRun(db,topicId,locale.startsWith('zh')?'zh':'en');
  const editorHref='/admin/topics/'+topicId;
  const header=<><nav aria-label={t('flow.label')}><Link href={editorHref} className="text-accent underline">{draft.body.title[locale.startsWith('zh')?'zh':'en']}</Link> / <span aria-current="page">{t('flow.label')}</span></nav>
+  <Link href="/admin/topics/licences" className="text-accent underline">{t('licences.title')}</Link>
   <span className="rounded border border-border px-2 py-1">{t(settings.public_enabled?'frame.publicOpen':'frame.publicClosed')}</span></>;
  return <TopicAdminFrame crumb={t('flow.label')} title={t('publish.title')} headerChips={header}>
   <PublishClient initial={{summaryRun,summaryEnabled:settings.summary_public_enabled,id:topicId,revision:draft.revision,draft_hash:draft.draft_hash,title:draft.body.title,slug:topic.topic_slug,retired:topic.status==='retired',versions,
