@@ -32,14 +32,17 @@ describe('anchor runner configuration',()=>{
   expect(()=>anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_USER:'postgres.mzfcaabhuwtfvsvadvsv'})).toThrow('runner_configuration_invalid');
  });
  it('trusts an operator-supplied database CA file and omits SNI for an IP host',async()=>{
-  const {writeFileSync,mkdtempSync}=await import('node:fs');const {join}=await import('node:path');const {tmpdir}=await import('node:os');
-  const dir=mkdtempSync(join(tmpdir(),'alpha-dbca-'));const pem=join(dir,'ca.pem');writeFileSync(pem,'-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
-  expect(anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_CA_FILE:pem}).db.ssl).toMatchObject({rejectUnauthorized:true,servername:'db.example.test',ca:expect.stringContaining('BEGIN CERTIFICATE')});
-  for(const file of ['relative/ca.pem',join(dir,'missing.pem')])expect(()=>anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_CA_FILE:file})).toThrow('runner_configuration_invalid');
-  const ip=anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_HOST:'10.60.2.10'}).db.ssl as {rejectUnauthorized:boolean;servername?:string;checkServerIdentity:(h:string,c:{subject:{CN:string};subjectaltname:string})=>Error|undefined};
-  expect(ip.rejectUnauthorized).toBe(true);expect(ip.servername).toBeUndefined();
-  expect(ip.checkServerIdentity('ignored',{subject:{CN:'10.60.2.10'},subjectaltname:'IP Address:10.60.2.10'})).toBeUndefined();
-  expect(ip.checkServerIdentity('ignored',{subject:{CN:'10.60.2.11'},subjectaltname:'IP Address:10.60.2.11'})).toBeInstanceOf(Error);
+  const {writeFileSync,rmSync,mkdtempSync}=await import('node:fs');const {join}=await import('node:path');const {tmpdir}=await import('node:os');
+  const dir=mkdtempSync(join(tmpdir(),'alpha-dbca-'));
+  try{
+   const pem=join(dir,'ca.pem');writeFileSync(pem,'-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+   expect(anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_CA_FILE:pem}).db.ssl).toMatchObject({rejectUnauthorized:true,servername:'db.example.test',ca:expect.stringContaining('BEGIN CERTIFICATE')});
+   for(const file of ['relative/ca.pem',join(dir,'missing.pem')])expect(()=>anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_CA_FILE:file})).toThrow('runner_configuration_invalid');
+   const ip=anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_HOST:'10.60.2.10'}).db.ssl as {rejectUnauthorized:boolean;servername?:string;checkServerIdentity:(h:string,c:{subject:{CN:string};subjectaltname:string})=>Error|undefined};
+   expect(ip.rejectUnauthorized).toBe(true);expect(ip.servername).toBeUndefined();
+   expect(ip.checkServerIdentity('ignored',{subject:{CN:'10.60.2.10'},subjectaltname:'IP Address:10.60.2.10'})).toBeUndefined();
+   expect(ip.checkServerIdentity('ignored',{subject:{CN:'10.60.2.11'},subjectaltname:'IP Address:10.60.2.11'})).toBeInstanceOf(Error);
+  }finally{rmSync(dir,{recursive:true,force:true});}
  });
  it('allows plaintext only for an explicit loopback test target',()=>{
   const c=anchorRunnerConfig({...env,ALPHA_ANCHOR_DB_HOST:'localhost',ALPHA_ANCHOR_DB_INSECURE_LOOPBACK:'1'});

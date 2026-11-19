@@ -1,4 +1,7 @@
 import { defineConfig } from '@playwright/test';
+import { configureTestTmpdir } from './scripts/test-tmpdir';
+
+configureTestTmpdir();
 
 const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
 

@@ -18,13 +18,16 @@ describe('checkpoint registry configuration',()=>{
   expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_URL:'postgres://x:y@z/db'} as any)).toThrow('registry_configuration_invalid');
  });
  it('trusts an operator-supplied provider CA file and refuses a relative, missing or non-PEM path',async()=>{
-  const {writeFileSync,mkdtempSync}=await import('node:fs');const {join}=await import('node:path');const {tmpdir}=await import('node:os');
-  const dir=mkdtempSync(join(tmpdir(),'alpha-ca-'));const pem=join(dir,'ca.pem');writeFileSync(pem,'-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
-  const c=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_CA_FILE:pem});
-  expect(c.db.ssl).toMatchObject({rejectUnauthorized:true,servername:'registry.example.test',ca:expect.stringContaining('BEGIN CERTIFICATE')});
-  const bad=join(dir,'bad.txt');writeFileSync(bad,'not a certificate');
-  for(const file of ['relative/ca.pem',join(dir,'missing.pem'),bad])expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_CA_FILE:file})).toThrow('registry_configuration_invalid');
-  expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'127.0.0.1',ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1',ALPHA_ANCHOR_REGISTRY_CA_FILE:pem})).toThrow('registry_configuration_invalid');
+  const {writeFileSync,rmSync,mkdtempSync}=await import('node:fs');const {join}=await import('node:path');const {tmpdir}=await import('node:os');
+  const dir=mkdtempSync(join(tmpdir(),'alpha-ca-'));
+  try{
+   const pem=join(dir,'ca.pem');writeFileSync(pem,'-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+   const c=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_CA_FILE:pem});
+   expect(c.db.ssl).toMatchObject({rejectUnauthorized:true,servername:'registry.example.test',ca:expect.stringContaining('BEGIN CERTIFICATE')});
+   const bad=join(dir,'bad.txt');writeFileSync(bad,'not a certificate');
+   for(const file of ['relative/ca.pem',join(dir,'missing.pem'),bad])expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_CA_FILE:file})).toThrow('registry_configuration_invalid');
+   expect(()=>checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'127.0.0.1',ALPHA_ANCHOR_REGISTRY_INSECURE_LOOPBACK:'1',ALPHA_ANCHOR_REGISTRY_CA_FILE:pem})).toThrow('registry_configuration_invalid');
+  }finally{rmSync(dir,{recursive:true,force:true});}
  });
  it('omits SNI for an IP-literal registry host while still verifying the certificate',()=>{
   const ssl=checkpointRegistryConfig({...env,ALPHA_ANCHOR_REGISTRY_HOST:'10.60.2.10'}).db.ssl as {rejectUnauthorized:boolean;servername?:string;checkServerIdentity:(h:string,c:{subject:{CN:string};subjectaltname:string})=>Error|undefined};
