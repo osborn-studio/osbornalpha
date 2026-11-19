@@ -34,9 +34,12 @@ const productSha = fs.existsSync(productShaFile) ? fs.readFileSync(productShaFil
 
 const results = [];
 let current;
-function check(name, pass, detail = '') {
-  current.checks.push({ name, pass: !!pass, detail: String(detail).slice(0, 400) });
-  console.log(`  ${pass ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${String(detail).slice(0, 160)}` : ''}`);
+// `upstream: true` marks a failure whose cause the driver proved is an external data provider (e.g. /api/kline → 503
+// provider_unavailable). It is still a FAIL and still counts against the exit code; the flag only labels it in the summary.
+function check(name, pass, detail = '', { upstream = false } = {}) {
+  const up = !pass && upstream;
+  current.checks.push({ name, pass: !!pass, detail: String(detail).slice(0, 400), ...(up ? { upstreamUnavailable: true } : {}) });
+  console.log(`  ${pass ? 'PASS' : up ? 'FAIL[upstream-unavailable]' : 'FAIL'} ${name}${detail ? ` — ${String(detail).slice(0, 160)}` : ''}`);
 }
 const save = (name, data) => fs.writeFileSync(path.join(EVIDENCE, name), typeof data === 'string' ? data : JSON.stringify(data, null, 2));
 const shot = (page, name) => page.screenshot({ path: path.join(EVIDENCE, `${name}.png`), fullPage: false });
@@ -175,9 +178,9 @@ const journeys = {
         } catch {}
       }
       if (u.pathname === `/api/kline/${T}`) {
-        let bars = null;
-        try { bars = (await r.json()).bars?.length ?? null; } catch {}
-        klines.push({ range: u.searchParams.get('range'), status: r.status(), bars });
+        let bars = null, error = null;
+        try { const b = await r.json(); bars = b.bars?.length ?? null; error = b.error ?? null; } catch {}
+        klines.push({ range: u.searchParams.get('range'), status: r.status(), bars, ...(error ? { error } : {}) });
       }
     });
     const target = `${BASE}/portfolio?s=${T}`;
@@ -188,7 +191,16 @@ const journeys = {
       await chart.waitFor({ timeout: 30_000 }).catch(() => {});
       check('kline chart visible', await chart.isVisible());
       await chart.locator('canvas').first().waitFor({ timeout: 30_000 }).catch(() => {});
-      check('chart canvas drawn', await chart.locator('canvas').first().isVisible().catch(() => false));
+      const drawn = await chart.locator('canvas').first().isVisible().catch(() => false);
+      // The canvas exists only when the default 1D series has bars (KlineChart.tsx). If it is missing, wait (bounded) for
+      // the 1D response and say why: 503 provider_unavailable = HK minute bars have one source (Eastmoney push2his, no
+      // fallback without DATAGATEWAY_* intraday config) and it was unreachable. Still a FAIL, never skipped.
+      for (let i = 0; !drawn && i < 15 && !klines.some((k) => k.range === '1d'); i++) await page.waitForTimeout(1000);
+      const d1 = klines.find((k) => k.range === '1d');
+      const upstream = !drawn && d1?.status === 503 && d1?.error === 'provider_unavailable';
+      check('chart canvas drawn', drawn, drawn ? '' : upstream
+        ? 'upstream unavailable: /api/kline/00700.HK?range=1d → 503 provider_unavailable (Eastmoney push2his is the only HK 1D source; not a pass)'
+        : `no canvas; 1D response ${JSON.stringify(d1 ?? 'never seen')}`, { upstream });
       const focus = page.locator('main').getByText(/Tencent|腾讯/).filter({ visible: true });
       check('live Tencent quote received with a positive price', liveQuote !== null);
       check('portfolio names the company (Tencent / 腾讯)', await focus.first().isVisible());
@@ -443,5 +455,7 @@ const prev = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [
 fs.writeFileSync(file, JSON.stringify([...prev, ...results], null, 2));
 const all = results.flatMap((r) => r.checks);
 const failed = all.filter((c) => !c.pass).length;
-console.log(`drive: ${all.length - failed}/${all.length} checks passed; ${results.filter((r) => r.passed).length}/${results.length} journeys passed → ${file}`);
+const upstreamFailed = all.filter((c) => c.upstreamUnavailable).length;
+console.log(`drive: ${all.length - failed}/${all.length} checks passed; ${results.filter((r) => r.passed).length}/${results.length} journeys passed`
+  + `${upstreamFailed ? `; ${upstreamFailed} of the ${failed} failed check(s) are upstream-unavailable (counted as not passed)` : ''} → ${file}`);
 process.exit(failed ? 1 : 0);
