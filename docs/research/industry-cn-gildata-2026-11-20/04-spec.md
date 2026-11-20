@@ -1,8 +1,9 @@
 # 04 — Specification draft: Chinese industry research on Gildata data (first release)
 
-Status: draft for owner review, 2026-11-20. Not yet a `docs/superpowers/specs/` document; it
-becomes one (as an amendment A2 to `2026-11-04-industry-research-design.md`) after the owner
-answers the questions in §13 and the probe in PR-0 has run. Names of existing tables, functions
+Status: draft for owner review, 2026-11-20, revised the same day after a live read-only probe
+with the owner's key (`02-gildata-capabilities.md` section 3). Statements below marked **(L)**
+rest on that probe. Not yet a `docs/superpowers/specs/` document; it becomes one (as an
+amendment A2 to `2026-11-04-industry-research-design.md`) after the owner answers §13. Names of existing tables, functions
 and files are from the tree at `20b7fa9e`. Names marked *(new)* are proposals.
 
 ## 1. Goal and scope
@@ -79,23 +80,31 @@ bucket; neither can be reused as-is (closed adapter CHECK; `Source` type pinned)
 - `vendor_evidence_objects` *(new)*: `sha256` pk, `vendor` ('gildata'), `object_path`,
   `content_type`, `byte_length`, `created_at`.
 - `vendor_retrievals` *(new)*: `retrieval_id` pk, `vendor`, `product` (for example
-  'datamap-mcp'), `interface` (tool name), `request_canonical` jsonb (arguments only; **no
-  key, no URL with a key**), `query_template_id`, `query_template_version`, `sha256` fk,
-  `http_status`, `fetched_at`, `vendor_as_of` (nullable), `batch_id` fk `ingest_batches`,
-  `attempt`, `outcome` ('ok' \| 'error' \| 'rate_limited' \| 'parse_failed').
+  'datamap-mcp'), `interface` (tool name, for example `FinQuery`), `request_canonical` jsonb
+  (arguments only; **no key**), `query_template_id`, `query_template_version`, `sha256` fk
+  (bytes as received), `canonical_sha256` (result blocks sorted, because block order varies
+  between identical calls (L)), `api_names_returned` text[] (the vendor's interface labels in
+  the response), `http_status`, `fetched_at`, `vendor_as_of` (nullable; always null today —
+  responses carry none (L)), `batch_id` fk `ingest_batches`, `attempt`, `outcome`
+  ('ok' \| 'error' \| 'rate_limited' \| 'parse_failed' \| 'request_mismatch').
 - RLS: no public read. Service role inserts through `record_vendor_retrieval()` *(new)*.
 - A DB test asserts that no column of either table matches the key pattern, and the client
   refuses to record a request whose canonical form contains the key (§5.1).
 
 ### 4.2 Classification and membership (existing tables)
 
-- `industry_classifications`: rows for `scheme='sw2021'`, `version='2021'`, levels 1–3 if
-  returned. `attributes` gains `{source:'gildata', vendor_code, retrieval_id}`. If the vendor's
-  Shenwan version is not 2021, stop and ask (Q-probe 11).
+- `industry_classifications`: rows for `scheme='sw2021'`, `version='2021'`, levels 1–3 (L:
+  all three are returned per stock). The vendor identifies an industry by a six-digit
+  industry code (L), while existing rows use the `801xxx.SI` index code as `code`. The index
+  code stays the key; `attributes` gains `{gildata_industry_code, retrieval_id}` and a
+  reviewed mapping file `sw2021-gildata-codes.ts` *(new)* (31 level-1 rows first), checked
+  against the Tushare classification. An unmapped vendor code is quarantined, never guessed.
 - `industry_source_memberships`: `source='gildata'` (the column is free text today; confirm no
   CHECK), `raw_hash` = response sha256, `locator` = JSON pointer or table row index inside the
-  response, `in_date` / `out_date` if returned, otherwise null with
-  `provenance.availability='effective_date_assumed'` and `in_date` = first observation date.
+  response. The vendor returns **no entry or exit dates (L)**: `in_date` = first observation
+  date with `provenance.availability='effective_date_assumed'`; an exit is recorded when a
+  stock is absent from two consecutive snapshots. Weekly snapshots therefore build a real
+  history from the start date onward; nothing before it.
 - Resolution through the existing `apply_industry_memberships`. One source is authoritative per
   run (`source` recorded on the run, §4.3); the other, if present, is only reconciled
   (`dq_reconciliations`, dataset `industry.membership.sw2021.gildata_vs_tushare` *(new)*).
@@ -116,9 +125,13 @@ issuer `state_rev`, manifests of members and facts) do not apply to ready-made v
   `value_text` (exact decimal string as received), `value` numeric, `unit`, `vendor_as_of`,
   `retrieval_id` fk **not null when status='ok'**, `locator`, `n_members` (nullable),
   `updated_at`.
-- Metric CHECK for this table: `revenue_sum`, `net_income_parent_sum`, `revenue_yoy`,
-  `net_income_yoy`, `gross_margin`, `roe`, `ocf_sum`, `pe_ttm`, `pb_lf`, `ps_ttm`,
-  `vendor_prosperity_index`. Final list after the probe.
+- Metric CHECK for this table, from the columns actually returned (L): `revenue_cum`,
+  `revenue_ttm`, `net_income_parent_cum`, `net_income_parent_ttm`, `net_income_parent_yoy`,
+  `gross_margin`, `gross_margin_ttm`, `roe_avg`, `roe_ttm`, `ocf_to_revenue`, `net_assets`,
+  `member_count`, `pe_ttm`, `pb_lf`, `ps_ttm`, `vendor_pe_ttm_pctile`, `vendor_pb_lf_pctile`,
+  `vendor_prosperity`, `vendor_prosperity_rank`, `vendor_prosperity_universe`. Durations:
+  `YTD` *(new value)* for cumulative figures, `TTM`, `INSTANT`. The other 40-odd vendor
+  columns stay in the raw response and are not staged.
 - Functions *(new)*: `create_industry_vendor_run`, `stage_industry_vendor_observations`,
   `activate_industry_vendor_run` (grid completeness against `expected_grid`; generation greater
   than active; every `ok` row has a retrieval whose object exists; one activation timestamp),
@@ -131,11 +144,16 @@ issuer `state_rev`, manifests of members and facts) do not apply to ready-made v
 ### 4.4 Derived statistics *(new)*
 
 - `industry_derived_stats` *(new)*: `run_id` fk to the vendor run (or metric run in release
-  2), `code`, `stat` (`cagr_3y`, `pctile_own_history`), `metric`, `window`, `period_end`,
+  2), `code`, `stat` (`yoy`, `single_quarter`, `cagr_3y`, `pctile_own_history`), `metric`,
+  `window`, `period_end`,
   `status`, `missing_reason`, `value_text`, `value`, `formula_version`, `inputs` jsonb (list of
   observation keys), `n_samples`.
 - Computed in the same job as activation of its inputs and activated with the run, so a page
   never mixes generations.
+- `yoy` (revenue; the vendor returns no revenue YoY (L)) and `single_quarter` (difference of
+  consecutive cumulative values; the vendor returns none (L)) carry `member_count_from` and
+  `member_count_to`; when they differ the row gets `note='member_set_changed'` and the UI
+  shows it (Q16).
 - Rules: CAGR needs both end points `ok`; percentile needs `n_samples ≥ 36` month-end samples
   for valuation (existing §6.5 rule) and ≥ 8 annual or ≥ 12 quarterly samples for financial
   dimensions (to be fixed in the amended spec); otherwise `missing` with reason
@@ -157,16 +175,22 @@ the drawer, with the difference.
 
 - Server-only module. Reads `GILDATA_API_KEY` from the environment; scripts load it with
   `node --env-file`. Absent key → every job returns `{skipped:'gildata_unavailable'}`.
-- **Key hygiene**: the key is injected at the transport boundary only. If the product requires
-  the key in the URL (reported by third parties, unverified), the URL is built inside one
-  function, never logged, never returned, never stored; errors are rewrapped with the key
-  replaced by `***` before leaving the module; a unit test feeds a fake key through every error
-  path and asserts it appears in no log line, thrown message or recorded row. The key is never
-  included in prompts sent to coding agents.
-- **Query templates**: every call uses a named, versioned template
-  (`gildata-templates.ts` *(new)*, for example `sw_l1_constituents/1`), with typed arguments.
-  No free-form prompts and no model in the loop. If the probe shows the interface accepts
-  structured parameters, templates carry those instead of text.
+- **Transport (L)**: MCP JSON-RPC over HTTP POST to the vendor's "tool" server; `initialize`,
+  then `tools/call`. Only `FinQuery` is needed for release 1.
+- **Key hygiene**: the key is sent as an `Authorization: Bearer` header **(L: accepted)** and
+  never placed in a URL. It is injected at the transport boundary only; errors are rewrapped
+  with the key replaced by `***` before leaving the module; a unit test feeds a fake key
+  through every error path and asserts it appears in no log line, thrown message or recorded
+  row. The key is never included in prompts sent to coding agents.
+- **Query templates**: the tools accept only a free-text `query` **(L)**. Every call uses a
+  named, versioned template (`gildata-templates.ts` *(new)*, for example
+  `sw_l1_financials/1`) that renders a fixed Chinese sentence from typed arguments (industry
+  name, date range). No model in the loop. **One industry per call** (L: all-industry queries
+  return nothing).
+- **Request–response match (L: the service drops conditions it cannot serve without saying
+  so)**: before parsing, a validator checks the returned `api_name`, the industry name and
+  code, the scheme label, the exact expected column set, and that the returned dates cover
+  the requested range. Any mismatch → `request_mismatch`, quarantine, no rows staged.
 - **Record before parse**: `record_vendor_retrieval()` stores the response bytes and row, then
   the parser runs on the stored bytes. A fixture mode replays recorded responses (same pattern
   as `SnapshotCapture`).
@@ -181,12 +205,18 @@ the drawer, with the difference.
 
 | Job | Does | Cadence (after Q9) | Freshness key |
 |---|---|---|---|
-| `gildata-catalog` | Lists the server's tools and schemas; stores them; diff against last | weekly | `vendor.gildata.catalog` |
+| `gildata-catalog` | Lists the server's tools and schemas (L: 9 tools today); stores them; a diff fails the run so a changed vendor tool is noticed | weekly, 1 call | `vendor.gildata.catalog` |
 | `gildata-classification` | Shenwan tree → `industry_classifications` | monthly | `industry.class.sw2021` |
 | `gildata-memberships` | Constituents per level-1 → source memberships → resolve | weekly | `industry.members.sw2021` |
 | `gildata-industry-financials` | 31 × periods × metrics → vendor run → activate | weekly, and daily in report seasons (April, August, October) | `industry.vendor.fin.sw2021` |
 | `gildata-industry-valuation` | PE, PB, PS → vendor run; month-end history backfill once | weekly | `industry.vendor.val.sw2021` |
 | `gildata-reconcile` | Gildata vs Tushare membership; vendor vs computed when both exist | after each run | `dq_reconciliations` |
+
+Call volume (L): one call returns all quarter-ends 2016–2025 for one industry, and one call
+returns the full daily valuation history, so a complete refresh is about four calls per
+industry (members, financials, valuation, prosperity) ≈ 125 calls, at 2–12 seconds each. The
+largest response seen was about 357,000 characters. No quota header is returned, so the budget
+is enforced on our side.
 
 All gated by `INDUSTRY_CN_VENDOR_ENABLED=1` *(new)* for `--apply`; dry-run prints the plan and
 the expected call count without calling the vendor. Script-only first
@@ -204,10 +234,10 @@ stale, until an admin withdraws the run.
 
 - New evidence kind `vendor_observation` *(new)* in `EVIDENCE_KINDS`, payload `evidence-ref/1`:
   `source.publisher='恒生聚源 Gildata'`, `source.adapter='gildata-datamap'`,
-  `source.locator` = interface name + template id + row locator, `source.evidence_sha256`,
-  `source.url` omitted (no public URL exists; never a keyed URL),
-  `times.period`, `times.available_at` (activation), `times.ingested_at` (fetch),
-  `times.vendor_as_of` *(new optional field)*, `transform.mapping_version`,
+  `source.locator` = vendor `api_name` + column header as returned + template id + row
+  locator, `source.evidence_sha256`, `source.url` omitted (no public URL exists),
+  `times.period`, `times.available_at` (activation), `times.ingested_at` (fetch); no vendor
+  as-of (L: none is returned — the drawer states "not provided by vendor"), `transform.mapping_version`,
   `transform.method_version` (`vendor-reported/1` for V figures; the formula version for
   derived statistics), `licence.status`, `attribution_key`.
 - New evidence kind `industry_membership` closes audit item R4 for both schemes (coordinate
@@ -309,13 +339,13 @@ Per PR, runnable in CI (no vendor calls in CI; recorded fixtures only):
 
 | PR | Content | Depends on | Migration | Visible |
 |---|---|---|---|---|
-| **PR-0** | Probe: `scripts/industry/gildata-probe.ts` (read-only, budgeted, redacted), recorded fixtures, and `docs/audits/<date>-industry-cn-gildata/01-verification.md` answering questions 9–20 of `02`; amendment A2 to the industry spec with final names | key; Q1 | no | nothing |
+| **PR-0** | The probe questions are answered (`02` section 3). What remains: `scripts/industry/gildata-probe.ts` (the scratch probe made permanent: read-only, budgeted, redacted), recorded parser fixtures with values replaced, the four open items in `02` §7.3, and amendment A2 to the industry spec with final names | Q7 (storage), Q15 | no | nothing |
 | **PR-1** | Vendor raw store (`vendor_evidence_objects`, `vendor_retrievals`, bucket) and `src/lib/vendor/gildata` client with templates, redaction, budget, fixture mode | PR-0 | yes | nothing |
 | **PR-2** | Classification and membership from Gildata into the existing tables; new licence keys; `industry_membership` evidence kind; reconciliation vs Tushare; constituents page works for `sw2021` (admin preview) | PR-1; canvas for constituents state | yes (licence seeds; small) | admins only |
 | PR-3 | `industry_vendor_runs` / `_observations`, financials job, read API `origin`, list + heatmap for `sw2021` | PR-2; canvas | yes | admins only |
 | PR-4 | Detail page sections, `vendor_observation` drawer, vendor replay-check | PR-3; canvas | no | admins only |
 | PR-5 | Valuation job, `industry_derived_stats`, percentile bars | PR-3; canvas | yes | admins only |
-| PR-6 | Prosperity dimensions (derived), detail and list views | PR-5; canvas | yes if `ocf_sum` not yet in | admins only |
+| PR-6 | Prosperity dimensions (derived) and the vendor's prosperity row, detail and list views | PR-5; canvas | no | admins only |
 | PR-7 | Lifecycle method spec + method document (docs only) | O6 answer | no | nothing |
 | PR-8 | `industry_aggregate` resolver, `industry_lifecycle_stage@v1` registered (draft, not publishable), back-test report | PR-5, PR-7 | likely | admins only |
 | PR-9 | Stage grouping view | PR-8; canvas | no | admins only |
@@ -331,7 +361,7 @@ serialised with it (`read.ts`, components, `messages/*/industries.json`).
 
 Licence and scope first.
 
-1. **Q1** Which Gildata product and edition is the account, and is it personal or institutional?
+1. **Q1** Is the Gildata account personal or institutional? (The live probe shows it is the standard edition of 数据地图 MCP with 9 tools; the 450-interface edition is not enabled.)
 2. **Q2** Does your Gildata agreement allow showing Gildata figures to OsbornAlpha users other than you (signed-in, or public)?
 3. **Q3** If raw vendor figures may not be shown, may figures we derive from them (CAGRs, percentiles, stage labels) be shown?
 4. **Q4** What attribution wording does the contract require, and does it cover Shenwan industry names and codes?
@@ -346,3 +376,6 @@ Licence and scope first.
 13. **Q13** Is the sub-industry layer (their 9 groups / 106 reports) out of scope for good, or a later module built on Shenwan levels 2–3 and topic research?
 14. **Q14** Should the existing Tushare Shenwan path be kept as a reconciliation source, or retired once Gildata membership is in?
 15. **Q15** Who records the parser fixtures with the real key: you, or a session you authorise for a bounded number of read-only calls?
+16. **Q16** For quarterly figures, do you want single quarters derived by differencing the vendor's cumulative values (flagged when the member count changed), or TTM only?
+17. **Q17** Should we ask Gildata for the interface edition, which may offer constituent dates and structured parameters?
+18. **Q18** Which ROE definition should the heatmap show: average ROE for annual periods and TTM for the latest view (proposed), or another?
