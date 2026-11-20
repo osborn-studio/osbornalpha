@@ -336,6 +336,10 @@
     {
       "file": "20261210093000_usage_feature_topic_summary.sql",
       "sha256": "d360327ca7121582b985c7537f969bb223dababf555f41d2927245c91f758b24"
+    },
+    {
+      "file": "20261211090000_topics_excerpt_licence_mask.sql",
+      "sha256": "b922574e5838a5b74aff22b7662dd4715bea641e45779e646cf4cfa40bed77ab"
     }
   ]
 }
