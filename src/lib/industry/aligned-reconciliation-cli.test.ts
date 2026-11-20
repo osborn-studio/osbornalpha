@@ -2,10 +2,15 @@ import {spawnSync} from 'node:child_process';
 import {mkdirSync, mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {describe, expect, it} from 'vitest';
+import {afterAll, describe, expect, it} from 'vitest';
 
 // Synthetic offline evidence only; callers can isolate all fixtures under their task scratch.
-const scratch = join(process.env.OSSTACK_SCRATCH_ROOT ?? join(tmpdir(), 'osstack'), 'industry-aligned-cli');
+const defaultRoot = process.env.OSSTACK_SCRATCH_ROOT === undefined;
+const scratchRoot = process.env.OSSTACK_SCRATCH_ROOT ?? mkdtempSync(join(tmpdir(), 'osstack-'));
+const scratch = join(scratchRoot, 'industry-aligned-cli');
+afterAll(() => {
+ if (defaultRoot) rmSync(scratchRoot, {recursive: true, force: true});
+});
 const script = 'scripts/industry/aligned-reconciliation-check.ts';
 function fixture(n: number) {
  const expectedDates = Array.from({length: n}, (_, i) => `2026-10-${String(i + 1).padStart(2, '0')}`);

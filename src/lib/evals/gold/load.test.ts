@@ -1,8 +1,8 @@
 // src/lib/evals/gold/load.test.ts
-import {mkdirSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdirSync,rmSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {describe,expect,it} from 'vitest';
+import {afterEach,describe,expect,it} from 'vitest';
 import {sha256Hex} from '../canonical-json';
 import {EvalError} from '../errors';
 import {GOLD_DIR,checkLock,detectGoldFormat,listGoldSetPaths,loadGoldSet,loadLock,loadRecorders,parseGoldBytes,parseLock,parseRecorders,repoPath} from './load';
@@ -53,6 +53,8 @@ describe('parseGoldBytes messages and strict shapes',()=>{
 });
 
 describe('format detection and file errors',()=>{
+ const tempDirs:string[]=[];
+ afterEach(()=>{for(const dir of tempDirs.splice(0))rmSync(dir,{recursive:true,force:true});});
  it('decides by content',()=>{
   expect(detectGoldFormat({schema_version:1,cases:[]})).toBe('f6');
   expect(detectGoldFormat({entries:[],ready:false})).toBe('legacy_plan2');
@@ -61,6 +63,7 @@ describe('format detection and file errors',()=>{
  });
  it('an f6 file in a temp repo is validated against that repo\'s recorders.json',()=>{
   const root=mkdtempSync(join(tmpdir(),'f6-load-'));
+  tempDirs.push(root);
   mkdirSync(join(root,GOLD_DIR,'facts'),{recursive:true});
   writeFileSync(join(root,GOLD_DIR,'recorders.json'),JSON.stringify({version:1,recorders:[{id:'owner',role:'owner',modules:['facts'],added_at:'2026-11-06',approved_by:'owner'}]}));
   const set={schema_version:1,set_id:'facts/tmp',version:1,module:'facts',artifact_class:'public',module_implementers:['claude-code'],review_required:false,tolerance:{rel:'0'},thresholds:{max_fail:0,min_coverage_optional:'0.95'},optional_cases:[],history:[],

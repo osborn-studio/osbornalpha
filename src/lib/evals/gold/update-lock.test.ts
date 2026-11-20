@@ -1,7 +1,7 @@
 import {readFileSync,writeFileSync,mkdirSync,mkdtempSync,rmSync,symlinkSync,fsyncSync,existsSync,statSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {afterEach,describe,expect,it,vi} from 'vitest';
+import {afterAll,afterEach,describe,expect,it,vi} from 'vitest';
 import {spawnSync} from 'node:child_process';
 
 vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:fs')>();return {...fs,fsyncSync:vi.fn(fs.fsyncSync)};});
@@ -9,10 +9,14 @@ import {updateGoldLock} from './update-lock';
 import {GOLD_DIR,LEGACY_PLAN2_PATH,LOCK_PATH,RECORDERS_PATH,loadLock,loadGoldSet,checkLock} from './load';
 
 const roots:string[]=[];
+const configuredRoot=process.env.OSSTACK_SCRATCH_ROOT;
+const scratch=configuredRoot??mkdtempSync(join(tmpdir(),'osstack-'));
+afterAll(()=>{
+ if(configuredRoot===undefined) rmSync(scratch,{recursive:true,force:true});
+});
 const path=`${GOLD_DIR}/facts/test-only.json`;
 // Synthetic contract fixtures in isolated temp repositories; never human or production evidence.
 function setup(){
- const scratch=process.env.OSSTACK_SCRATCH_ROOT??join(tmpdir(),'osstack');
  mkdirSync(scratch,{recursive:true});
  const root=mkdtempSync(join(scratch,'f6-lock-test-'));roots.push(root);
  mkdirSync(join(root,GOLD_DIR,'facts'),{recursive:true});

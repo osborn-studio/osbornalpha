@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -136,8 +136,14 @@ describe('parseCardMarkdown', () => {
 // ---------------------------------------------------------------------------
 // ingestRadarDay against a synthetic day directory built from real fixtures.
 
+const tempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function makeDayDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'radar-'));
+  tempDirs.push(root);
   const dayDir = path.join(root, '2026-07-04');
   fs.mkdirSync(path.join(dayDir, 'cards'), { recursive: true });
   fs.writeFileSync(path.join(dayDir, 'report.md'), REPORT_MD);

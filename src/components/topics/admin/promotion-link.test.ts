@@ -1,4 +1,3 @@
-import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {createElement} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
@@ -24,11 +23,15 @@ it('keeps the admin API probe out of the thesis page and link',()=>{
   expect(readFileSync(path,'utf8')).not.toMatch(/fetch\s*\(\s*['"`]\/api\/admin\/topics/);
  }
 });
-it('limits changes to the main thesis page to TOPICS fences',()=>{
- const main=execFileSync('git',['show',`origin/main:${pagePath}`],{encoding:'utf8'});
- const page=readFileSync(pagePath,'utf8').replace(/^ *\/\/ TOPICS ↓\n[^]*?^ *\/\/ TOPICS ↑\n\n/gm,'')
-  .replace(/^ *\{\/\* TOPICS ↓ \*\/\}\n[^]*?^ *\{\/\* TOPICS ↑ \*\/\}\n/gm,'');
- expect(page).toBe(main);
+it('keeps topic code on the thesis page inside the two TOPICS fences',()=>{
+ // Self-contained on purpose: comparing with origin/main stops working once the fenced page is on main.
+ const source=readFileSync(pagePath,'utf8');
+ const fence=/^ *(?:\/\/ TOPICS ↓|\{\/\* TOPICS ↓ \*\/\})\n([^]*?)^ *(?:\/\/ TOPICS ↑|\{\/\* TOPICS ↑ \*\/\})\n/gm;
+ expect([...source.matchAll(fence)].map(match=>match[1].trim())).toEqual([
+  "import { FromThesisLink } from '@/app/(app)/admin/topics/new/from-thesis';",
+  '<FromThesisLink href={`/admin/topics/new?fromThesis=${params.id}`}/>',
+ ]);
+ expect(source.replace(fence,'')).not.toMatch(/topics|FromThesis/i);
 });
 
 async function renderLink(locale?:'zh'|'en'){

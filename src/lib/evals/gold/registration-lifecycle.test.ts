@@ -3,15 +3,19 @@ import {spawn,spawnSync} from 'node:child_process';
 import {cpSync,existsSync,mkdirSync,mkdtempSync,readFileSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {afterEach,describe,expect,it} from 'vitest';
+import {afterAll,afterEach,describe,expect,it} from 'vitest';
 import {GOLD_DIR,LOCK_PATH,RECORDERS_PATH,checkLock,loadGoldSet,loadLock} from './load';
 import {assessGoldAdmission} from './admission';
 
 const repo=process.cwd(),loader=join(repo,'node_modules/tsx/dist/loader.mjs');
 const candidate=`${GOLD_DIR}/facts/synthetic-lifecycle-contract.json`;
 const roots:string[]=[];
+const configuredRoot=process.env.OSSTACK_SCRATCH_ROOT;
+const scratch=configuredRoot??mkdtempSync(join(tmpdir(),'osstack-'));
+afterAll(()=>{
+ if(configuredRoot===undefined) rmSync(scratch,{recursive:true,force:true});
+});
 function setup(){
- const scratch=process.env.OSSTACK_SCRATCH_ROOT??join(tmpdir(),'osstack');
  mkdirSync(scratch,{recursive:true});
  const root=mkdtempSync(join(scratch,'f6-registration-lifecycle-'));roots.push(root);
  mkdirSync(join(root,GOLD_DIR,'facts'),{recursive:true});

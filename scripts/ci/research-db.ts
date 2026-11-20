@@ -1,4 +1,5 @@
 /** One bounded full test run, with a fresh loopback database and a fail-closed report gate. */
+import { configureTestTmpdir } from '../test-tmpdir';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { startLocalDatabase, stopLocalDatabase } from '../s4/local-db';
 import { migrationInventory, verifyDatabaseReport, verifyCriticalSuiteInventory } from './research-checks';
 
 async function main() {
+  configureTestTmpdir();
   const manifest = migrationInventory();
   verifyCriticalSuiteInventory();
   mkdirSync('reports', { recursive: true });

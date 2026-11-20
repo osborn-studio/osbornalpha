@@ -1,5 +1,5 @@
 import {beforeAll,afterAll,describe,it,expect} from 'vitest';
-import {readFileSync,mkdtempSync,appendFileSync,readdirSync,statSync} from 'node:fs';
+import {readFileSync,mkdtempSync,rmSync,appendFileSync,readdirSync,statSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
@@ -72,9 +72,11 @@ describe.skipIf(!enabled)('anchor runner program on real PostgreSQL',()=>{
   options={manifest:manifest(),root,principalId:principal,owners:[actor.userId],db:runnerPool,registry,watchdogMs:5000};
  },180000);
  afterAll(async()=>{
-  await closeS4Pool();await registry?.close();await runnerPool?.end();await registryAdmin?.end();
-  if(admin){for(let i=0;i<50&&Number((await admin.query('select count(*) n from pg_stat_activity where datname=$1',[dbName])).rows[0].n)>0;i++)await new Promise(r=>setTimeout(r,100));await admin.end();}
-  if(cluster)stopLocalDatabase(cluster);
+  try{
+   await closeS4Pool();await registry?.close();await runnerPool?.end();await registryAdmin?.end();
+   if(admin){for(let i=0;i<50&&Number((await admin.query('select count(*) n from pg_stat_activity where datname=$1',[dbName])).rows[0].n)>0;i++)await new Promise(r=>setTimeout(r,100));await admin.end();}
+   if(cluster)stopLocalDatabase(cluster);
+  }finally{if(root)rmSync(root,{recursive:true,force:true});}
  });
 
  it('drains the whole outbox through the scoped functions, journals receipts, confirms the registry and fills the cache',async()=>{

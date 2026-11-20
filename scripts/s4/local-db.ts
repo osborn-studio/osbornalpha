@@ -1,4 +1,5 @@
 /** Real isolated PostgreSQL for local acceptance. Never reads developer .env files. */
+import { configureTestTmpdir } from '../test-tmpdir';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -49,6 +50,7 @@ export async function startLocalDatabase(options: { rehearsalDefaultTableGrants?
     throw new Error('Refusing inherited database configuration; run in a clean test environment');
   }
   if (readdirSync('.').some(f => f === '.env' || (f.startsWith('.env.') && f !== '.env.example'))) throw new Error('Test checkout must not contain .env files');
+  configureTestTmpdir();
   const bin = process.env.S4_POSTGRES_BIN || (process.platform === 'darwin' ? '/opt/homebrew/opt/postgresql@17/bin' : '/usr/lib/postgresql/17/bin');
   if (!existsSync(join(bin, 'initdb'))) throw new Error('Set S4_POSTGRES_BIN to installed PostgreSQL 17 binaries');
   const postgresVersion = execFileSync(join(bin, 'postgres'), ['--version'], { encoding: 'utf8', timeout: 5000 }).trim();
