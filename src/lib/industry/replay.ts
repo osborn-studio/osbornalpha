@@ -10,7 +10,7 @@
 // full-grid check stays in replayFromManifest (ingestion).
 // No database, no clock, no METHOD_CONFIG: an old manifest replays under the code that reads it.
 import {pickInputsUs,finalizeCellUs} from './aggregate-us';
-import {METHOD_VERSION_US,cellSpecsUs} from './method-us';
+import {cellSpecsUs,isUsMethodVersion,usPickRule} from './method-us';
 import {InputIndex,finalizeCell,pickInputs} from './aggregate';
 import type {PoolDerived,PoolFact} from './aggregate';
 import {canonicalJson} from './canonical-json';
@@ -30,9 +30,10 @@ function contextOf(m:AggregateManifest):Ctx{
  const facts:PoolFact[]=m.facts.map(f=>({issuer_id:f.issuer_id,concept:f.concept,period_start:f.period_start,period_end:f.period_end,duration:f.duration,unit:f.unit,value:f.value_text}));
  const derived:PoolDerived[]=m.derived.map(d=>({issuer_id:d.issuer_id,metric:d.metric,period_start:d.period_start,period_end:d.period_end,duration:d.duration,unit:d.unit,value:d.value}));
  const byIssuer=new Map<string,PoolFact[]>();for(const f of facts){const xs=byIssuer.get(f.issuer_id);if(xs)xs.push(f);else byIssuer.set(f.issuer_id,[f]);}
- return {m,facts:byIssuer,us:m.method_version===METHOD_VERSION_US,nMembers:new Set(m.members.map(x=>x.issuer_id)).size,nUnresolved:new Set(m.unresolved.map(u=>u.ts_code)).size,idx:new InputIndex(facts,derived),
+ const us=isUsMethodVersion(m.method_version);
+ return {m,facts:byIssuer,us,nMembers:new Set(m.members.map(x=>x.issuer_id)).size,nUnresolved:new Set(m.unresolved.map(u=>u.ts_code)).size,idx:new InputIndex(facts,derived),
   // the grid and the units are method facts, not manifest claims: the stored cells must be exactly cellSpecs(period_end)
-  expected:new Map((m.method_version===METHOD_VERSION_US?cellSpecsUs(m.period_end):cellSpecs(m.period_end)).map(s=>[cellId(s),s]))};
+  expected:new Map((us?cellSpecsUs(m.period_end):cellSpecs(m.period_end)).map(s=>[cellId(s),s]))};
 }
 /** Recomputes one stored cell from the manifest's roles and inputs; pushes unexpected_cell / value mismatches. */
 function replayStored(c:Ctx,stored:ManifestCell,mismatches:string[]):ManifestCell{
@@ -45,7 +46,7 @@ function replayStored(c:Ctx,stored:ManifestCell,mismatches:string[]):ManifestCel
  if(stored.metric!=='member_count'){
   for(const r of roles){
    if(r.role!=='included')continue;
-   const p=c.us?pickInputsUs(spec,r.issuer_id,c.facts.get(r.issuer_id)??[]):pickInputs(spec,r.issuer_id,c.idx);
+   const p=c.us?pickInputsUs(spec,r.issuer_id,c.facts.get(r.issuer_id)??[],usPickRule(c.m.method_version)):pickInputs(spec,r.issuer_id,c.idx);
    if(!p.ok){broken=true;break;}
    included.push(p.values);
   }

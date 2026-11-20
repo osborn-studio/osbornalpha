@@ -45,6 +45,8 @@ node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate
 node --env-file=<prod.env> --import tsx scripts/industry/replay-check.ts --scheme sic --sample 50
 ```
 
+方法版本变更部署后，运行 `node --env-file=<prod.env> --import tsx scripts/industry/sync.ts --job aggregate-sic --apply` 发布新一代，或等待每周 cron；旧代次仍可回放。
+
 US SIC cron 从运行开始计时，预算为 240 秒；`time_budget_exceeded` 表示应改用上述脚本命令运行。脚本不设此预算。
 
 回执 `groups` 是 code × 财年桶数量，`cells_ok/cells_missing` 是计算状态（显示阈值不会把 ok 改成 missing）；`manifest_mismatches` 必须为 0，`read_truncated` 记录截断发行人数。dry-run 的 `preview` 给出指标计数、缺因、`industriesMinMembers`、`displayableValueCells` 与样例；只有成员 ≥5 且 `n_with_data/n_members ≥0.8` 的 ok 格在页面显示数字。apply 成功时 `status=success`（runner 已激活 active run），失败码 `facts_scope_not_ready` 表示 US 宇宙成功事实源不足 50%。回放样本任一不一致退出 1。`--scheme` 默认仍为 `sw2021`；可加 `--run <id>` 检查指定 run。

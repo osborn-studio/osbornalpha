@@ -5,7 +5,7 @@ import type * as Pinned from './types';
 export * from './types';
 
 export type AggMetricAny=Pinned.AggMetric|'net_margin';
-export type RoleReasonAny=Pinned.RoleReason|'ambiguous_period'|'period_mismatch';
+export type RoleReasonAny=Pinned.RoleReason|'dual_currency'|'ambiguous_period'|'period_mismatch';
 export type AggMetric=AggMetricAny;
 export type RoleReason=RoleReasonAny;
 export type ExpectedGridUs=Omit<Pinned.MetricRunRow['expected_grid'],'metrics'>&{

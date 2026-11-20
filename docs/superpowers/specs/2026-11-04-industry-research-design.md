@@ -842,7 +842,7 @@ The logical input is the per-issuer `read_facts` envelope named in the method co
 | `revenue_yoy` / `net_income_yoy` | (Σ_Y − Σ_{Y−1}) / \|Σ_{Y−1}\|，同集合（桶 Y 与桶 Y−1 都有唯一值的发行人） | 12M | ratio |
 | `member_count` | n_members | INSTANT | count |
 
-取数规则（缺失就是缺失，不用代理）：某发行人某概念在桶内恰有一条匹配事实 → 采用；零条 → `excluded:missing_concept`（存在其他币种的同键事实 → `unit_excluded`）；多于一条（财年变更）→ `excluded:ambiguous_period`；比率的分子分母 `period_start/period_end` 不一致 → `excluded:period_mismatch`；`truncated` 信封 → 该发行人全部格 `read_truncated`。外币申报者（CNY/EUR 等）因此被排除并计入覆盖分母，不折算。舍入、十进制字符串、清单结构（`industry-manifest/2`）、`replayFromManifest` 自检、内容寻址、依赖登记、激活时刻规则全部沿用 §5.3–§5.4；`replayFromManifest` 按清单的 `method_version` 分派。
+取数规则（缺失就是缺失，不用代理）：某发行人某概念在桶内恰有一条匹配事实 → 采用；零条 → `excluded:missing_concept`（存在其他币种的同键事实 → `unit_excluded`）；多于一条（财年变更）→ `excluded:ambiguous_period`；比率的分子分母 `period_start/period_end` 不一致 → `excluded:period_mismatch`；`truncated` 信封 → 该发行人全部格 `read_truncated`。外币申报者（CNY/EUR 等）因此被排除并计入覆盖分母，不折算。舍入、十进制字符串、清单结构（`industry-manifest/2`）、`replayFromManifest` 自检、内容寻址、依赖登记、激活时刻规则全部沿用 §5.3–§5.4；`replayFromManifest` 按清单的 `method_version` 分派。自 1.1 起，同一发行人同一期间的折算美元数按 §19.11 排除。
 
 **19.5 网格与完整性。** `expected_grid = {codes: 分类表全部一级码, period_ends: 桶的 12-31, metrics: 上表, cell_rule: 'fiscal_year_bucket/1', membership_on}`。激活完整性：`cell_rule` 缺省 → 现行 CN 季度规则（不变）；`fiscal_year_bucket/1` → 每个 code × period_end × metric 有一行，`member_count` 为 `INSTANT`、其余为 `12M`。无成分的码 → `missing:no_members`。
 
@@ -855,6 +855,10 @@ The logical input is the per-issuer `read_facts` envelope named in the method co
 **19.9 迁移。** 一份只增的迁移：`industry_metrics.metric` 检查约束加入 `net_margin`；`activate_industry_metric_run` 按 19.2/19.5 读取 `expected_grid.cell_rule` / `membership_on`（两键都缺省时行为与现行逐字相同，数据库测试断言）。
 
 **19.10 成功标准。** 生产存在 `scheme='sic'` 的活跃 run；`industry_metrics` 网格内每格有值或缺因；抽样格 `replayFromManifest` 与存储值相等；`dq_freshness('industry.agg.sic')` 为 fresh；登出与登录状态下行业页显示数值、覆盖与来源抽屉；申万路径测试与 `CONFIG_HASH` 钉值不变。
+
+**19.11 修订 A2（2026-11-20）：折算美元数不采用（`industry-agg-us/1.1`）。** 部分以 CNY、HKD 或 EUR 申报的 20-F 发行人，也为最近财年的折算美元数打标。1.0 将该美元数计入合计，与 §19.4 的“不折算”相悖。
+
+取数时，某发行人某概念在桶内有多条 USD 事实仍记 `ambiguous_period`，零条仍按有无其他币种事实记 `unit_excluded` 或 `missing_concept`。恰有一条 USD 事实时，检查该发行人三个输入概念的全部当前、状态为 ok、合并口径的 12M 候选事实：若任一非 USD 事实的 `period_start`、`period_end` 均与该 USD 事实相同，则本次取数失败，记 `dual_currency`。各合计、利润率及同比当年取数均适用；同比上年取数失败仍记 `not_in_comparable_set`。排除的发行人仍计入覆盖分母，`member_count` 不变；同期仅以 USD 申报者仍可纳入。1.0 代次及其清单沿用 1.0 规则与配置哈希回放，无需迁移。
 
 ---
 

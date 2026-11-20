@@ -158,6 +158,7 @@
     "excluded": "排除",
     "missing_concept": "缺概念",
     "unit_excluded": "币种排除",
+    "dual_currency": "以其他币种申报；申报文件中的美元数为折算值，不采用",
     "read_truncated": "读取截断",
     "version_inconsistent": "版本不一致",
     "not_in_comparable_set": "不在可比集合",

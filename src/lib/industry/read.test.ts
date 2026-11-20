@@ -304,6 +304,11 @@ describe('SIC snapshot read models',()=>{
   const v=await industryListView(readDepsOf(stubIndustryDb({tree:TREE,runs:[run],cells:[cell],freshness:[{dataset:'industry.agg.sic',status:'fresh',last_ok_at:'2026-11-05T00:00:00Z'}]})),q);
   expect(v).toMatchObject({state:'ok',kind:'aggregate',freshness:'fresh',header:{membershipOn:'2026-11-05',methodVersion:'industry-agg-us/1.0'},periodEnds:['2025-12-31'],valuation:{state:'not_enabled'},cells:[{value:'1200000000',nMembers:6}]});
  });
+ it.each(['industry-agg-us/1.0','industry-agg-us/1.1'])('displays the stored generation’s method config for %s',async method_version=>{
+  const deps=readDepsOf(stubIndustryDb({tree:TREE,runs:[{...run,method_version}],cells:[cell]}));
+  const v=await industryDetailView(deps,{scheme:q.scheme,version:q.version,code:'3674',metrics:[q.metric],durations:null,window:'all'});
+  expect(v).toMatchObject({method:{config:{method_version}}});
+ });
  it('detail uses SIC series; a code without rows retains the old detail fallback',async()=>{
   const deps=readDepsOf(stubIndustryDb({tree:TREE,runs:[run],cells:[cell]}));
   const dq={scheme:q.scheme,version:q.version,code:'3674',metrics:[q.metric],durations:null,window:'all' as const};

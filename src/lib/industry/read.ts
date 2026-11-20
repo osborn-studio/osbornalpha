@@ -16,7 +16,7 @@ import type {CellDisplay} from './display';
 import {schemeDatasetKey} from './licenses';
 import {isMemberAt} from './memberships';
 import {CONFIG_HASH,METHOD_CONFIG,METHOD_VERSION,cellSpecs} from './method';
-import {METHOD_CONFIG_US,METHOD_VERSION_US,cellSpecsUs} from './method-us';
+import {cellSpecsUs,isUsMethodVersion,methodConfigUs,usPickRule} from './method-us';
 import {pickInputsUs} from './aggregate-us';
 import {InputIndex,pickInputs} from './aggregate';
 import type {PoolDerived,PoolFact} from './aggregate';
@@ -208,7 +208,7 @@ export async function industryDetailView(deps:ReadDeps,q:DetailQuery):Promise<De
   node:nodeView(row),ancestors:ancestorsOf(tree,row),children:tree.filter(n=>n.parent_code===q.code).map(nodeView).sort(byCode),
   header:run?runHeader(run):null,aggregated:run!==null,members:{count:new Set(members.map(m=>m.issuer_id)).size,unresolved,lastAddition},
   periodEnds,series,valuation,
-  method:{methodVersion:run?.method_version??METHOD_VERSION,configHash:run?.config_hash??CONFIG_HASH,formulaVersion:run?.formula_version??null,codeVersion:run?.code_version??null,config:run?.method_version===METHOD_VERSION_US?METHOD_CONFIG_US:METHOD_CONFIG},
+  method:{methodVersion:run?.method_version??METHOD_VERSION,configHash:run?.config_hash??CONFIG_HASH,formulaVersion:run?.formula_version??null,codeVersion:run?.code_version??null,config:run&&isUsMethodVersion(run.method_version)?methodConfigUs(run.method_version):METHOD_CONFIG},
   sources:SOURCES[q.scheme],
  };
 }
@@ -320,13 +320,13 @@ export function filterManifest(m:AggregateManifest,metric:AggMetric,cell:{durati
  const derivedPool:D[]=m.derived.map(d=>({issuer_id:d.issuer_id,metric:d.metric,period_start:d.period_start,period_end:d.period_end,duration:d.duration,unit:d.unit,value:d.value,src:d}));
  const idx=new InputIndex(facts,derivedPool);
  const roles=m.roles.filter(r=>r.metric===metric&&r.duration===cell.duration);
- const us=m.method_version===METHOD_VERSION_US;
+ const us=isUsMethodVersion(m.method_version);
  const spec=(us?cellSpecsUs(m.period_end):cellSpecs(m.period_end)).find(s=>s.metric===metric&&s.duration===cell.duration&&s.period_start===cell.period_start);
  const usedFacts=new Set<AggregateManifest['facts'][number]>(),usedDerived=new Set<AggregateManifest['derived'][number]>();
  if(spec&&metric!=='member_count')for(const r of roles){
   if(r.role!=='included')continue;
   if(us){
-   const p=pickInputsUs(spec,r.issuer_id,facts);if(p.ok)for(const f of p.facts)usedFacts.add(f.src);
+   const p=pickInputsUs(spec,r.issuer_id,facts,usPickRule(m.method_version));if(p.ok)for(const f of p.facts)usedFacts.add(f.src);
   }else{
    const p=pickInputs(spec,r.issuer_id,idx);if(!p.ok)continue;
    for(const f of p.facts)usedFacts.add(f.src);

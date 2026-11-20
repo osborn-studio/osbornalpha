@@ -158,6 +158,7 @@
     "excluded": "Excluded",
     "missing_concept": "missing concept",
     "unit_excluded": "currency excluded",
+    "dual_currency": "reports in another currency; USD figure in the filing is a translation, not used",
     "read_truncated": "read truncated",
     "version_inconsistent": "version inconsistent",
     "not_in_comparable_set": "not in comparable set",
