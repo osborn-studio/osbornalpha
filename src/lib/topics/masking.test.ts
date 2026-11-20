@@ -2,7 +2,8 @@
 import {describe,expect,it} from 'vitest';
 import {canonicalJson,sha256Hex} from '@/lib/evidence/hash';
 import {maskingFixture} from './fixtures/published';
-import {maskSnapshot} from './masking';
+import type {PublicLicenceStatusRow} from './database-types';
+import {maskedEntries,maskSnapshot} from './masking';
 describe('read-time masking (spec §5.4, A5b)',()=>{
  const f=maskingFixture();   // evidence 1 ok (value '3.75'), 2 ok ('4.3'), 3 ok ('1000'); summary facts ev:1, ev:2, ev:3; point A cites ev:1+ev:3, point B cites ev:2
  it('shows revised and newer_period in current and version views but not in replay',()=>{
@@ -34,4 +35,13 @@ it('shows nonmasking drift in both named and current views only',()=>{
   for(const view of ['current','version'] as const)expect(maskSnapshot(f.snapshot,d,view).evidence[1]).toMatchObject({drift,masked:false,current:{value_text:'4.2'}});
   expect(maskSnapshot(f.snapshot,d,'replay').evidence[1]).toMatchObject({drift:null,current:null,masked:false});
  }
+});
+
+it('masks on a false or missing public permission even when approved',()=>{
+ const row={licence_id:'source',status:'approved' as const};
+ const quote={key:'q',entry_type:'licensed_excerpt' as const,licence_id:'source',fragments:[{text:'Quote',attribution:'A',date:'2026-11-01',url:'https://example.org'}]};
+ const masked={key:'q',entry_type:'licensed_excerpt',masked:true,reason:'licence_revoked',attributions:[{attribution:'A',url:'https://example.org'}]};
+ expect(maskedEntries([quote],[{...row,excerpt_allowed:true}])).toEqual([quote]);
+ expect(maskedEntries([quote],[{...row,excerpt_allowed:false}])).toEqual([masked]);
+ expect(maskedEntries([quote],[row as PublicLicenceStatusRow])).toEqual([masked]);
 });

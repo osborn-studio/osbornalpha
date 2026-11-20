@@ -1,5 +1,7 @@
 // src/lib/topics/public-read.test.ts
-import {describe,expect,it} from 'vitest';
+import {describe,expect,it,vi} from 'vitest';
+import type {PublicEntry} from './excerpts';
+import type {PublicLicenceStatusRow} from './database-types';
 import {TopicError} from './errors';
 import {publishedFixture} from './fixtures/published';
 import {listTopics,readEvidence,readTopic,readVersions} from './public-read';
@@ -119,4 +121,28 @@ it('serves the approved fixture quote and only credits for the revoked quote',as
  expect(JSON.stringify(dto.entries)).toContain('Published survey: 42');
  expect(JSON.stringify(dto.entries)).not.toContain('Withdrawn survey: 31');
  expect(dto.entries).toContainEqual(expect.objectContaining({masked:true,attributions:[{attribution:'Archive',url:'https://example.org/archive'}]}));
+});
+
+describe('dossier excerpt permission',()=>{
+ const fragment={text:'Unmasked dossier marker',attribution:'Author',date:'2026-11-01',url:'https://example.org'};
+ const quote={key:'quote',entry_type:'licensed_excerpt' as const,licence_id:'source',fragments:[fragment]};
+ const masked={key:'quote',entry_type:'licensed_excerpt' as const,masked:true as const,reason:'licence_revoked' as const,
+  attributions:[{attribution:fragment.attribution,url:fragment.url}]};
+ function reader(entry:PublicEntry,rows:PublicLicenceStatusRow[]){
+  const d=deps(publishedFixture());
+  return {...d,db:{...d.db,publicVersions:async(id:string)=>(await d.db.publicVersions(id)).map(v=>({...v,snapshot:v.snapshot&&{...v.snapshot,entries:[entry]}})),
+   publicLicenceStatus:vi.fn(async()=>rows)}};
+ }
+ it.each(['unticked','unknown'] as const)('masks a raw snapshot when the licence is %s',async state=>{
+  const d=reader(quote,state==='unknown'?[]:[{licence_id:'source',status:'approved',excerpt_allowed:false}]);
+  for(const view of [{},{version:1},{asOf:'2026-11-08'}]){
+   const dto=await readTopic(d,'rates-and-banks',view);
+   expect(dto.entries).toEqual([masked]);expect(JSON.stringify(dto)).not.toContain(fragment.text);
+  }
+ });
+ it('preserves a masked snapshot entry without looking up a licence',async()=>{
+  const d=reader(masked,[]);
+  expect((await readTopic(d,'rates-and-banks',{})).entries).toEqual([masked]);
+  expect(d.db.publicLicenceStatus).not.toHaveBeenCalled();
+ });
 });

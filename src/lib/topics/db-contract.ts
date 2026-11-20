@@ -4,6 +4,8 @@ import {describe,expect,it} from 'vitest';
 import {canonicalJson,sha256Hex} from '@/lib/evidence/hash';
 import {TopicsDbError,type DraftBody,type EvidenceRowInput,type TopicsDb,type TopicSnapshot} from './types';
 
+import {emptyDraft} from './drafts';
+
 export interface TopicsContractHarness{db:TopicsDb;newId():string;setPublic(on:boolean):Promise<void>;asPublic():TopicsDb}
 const body=(title:string):DraftBody=>({title:{zh:title,en:title},dek:{zh:'',en:''},sections:[],evidence:[],expected_slots:[],entries:[],blocks_provenance:{}});
 export function fixtureVersion(h:TopicsContractHarness,slug:string,states:EvidenceRowInput['state'][]=['ok']):{snapshotText:string;evidence:EvidenceRowInput[]}{
@@ -37,8 +39,15 @@ export function topicsDbContract(label:string,setup:()=>Promise<TopicsContractHa
    const h=await setup(),id=await h.db.setLicence({licenceId:null,actor,fields:testLicence});
    expect(await h.db.licences()).toContainEqual(expect.objectContaining({licence_id:id,source_title:testLicence.source_title}));
    await h.setPublic(false);expect(await h.asPublic().publicLicenceStatus([id])).toEqual([]);
-   await h.setPublic(true);expect(await h.asPublic().publicLicenceStatus([id])).toEqual([{licence_id:id,status:'approved'}]);
+   await h.setPublic(true);expect(await h.asPublic().publicLicenceStatus([id])).toEqual([{licence_id:id,status:'approved',excerpt_allowed:true}]);
+   for(const fields of deniedLicences){
+    await h.db.setLicence({licenceId:id,fields,actor});
+    expect(await h.asPublic().publicLicenceStatus([id])).toEqual([{licence_id:id,status:fields.status,excerpt_allowed:false}]);
+   }
    expect(await h.asPublic().publicLicenceStatus([h.newId()])).toEqual([]);
+  });
+  it('masks published excerpts at read time across licence changes',async()=>{
+   const h=await setup();await checkPublishedExcerpt(h,`${label}-mask`,actor);
   });
   it('records promotion provenance and audits only the promotion id',async()=>{
    const h=await setup(),t=await h.db.createTopic({slug:`${label}-promotion`,category:'macro',body:body('text'),actor});
@@ -170,17 +179,39 @@ export function topicsDbContract(label:string,setup:()=>Promise<TopicsContractHa
 }
 
 export const testLicence={source_title:'Source',publisher:'Publisher',source_url:'https://example.org',terms_url:'https://example.org/terms',terms_read_at:'2026-11-01',terms_clause:'Short quotations',permits:{display_excerpt:true,link_required:true},note:null,status:'approved' as const};
-export async function assertRevokedViews(db:TopicsDb,reader:TopicsDb,slug:string,versionId:string,licenceId:string,actor:string){
+const deniedLicences=[{...testLicence,status:'revoked' as const},{...testLicence,permits:{display_excerpt:false,link_required:true}},{...testLicence,status:'pending' as const}];
+export const quoteEntry=(licence_id:string,text='Quoted 42')=>({key:'quote',entry_type:'licensed_excerpt' as const,licence_id,fragments:[{text,date:'2026-11-01',attribution:'Author',url:'https://example.org'}]});
+export async function checkPublishedExcerpt(h:TopicsContractHarness,slug:string,actor:string){
+ const {db}=h,licenceId=await db.setLicence({licenceId:null,actor,fields:testLicence}),quote='quote-'+h.newId();
+ const draft=emptyDraft({zh:'引文',en:'Excerpt'});
+ draft.entries=[{key:'note',entry_type:'owner_note',body:{en:'Owner',zh:'注'}},quoteEntry(licenceId,quote)];
+ const t=await db.createTopic({slug,actor,category:'macro',body:draft});
+ const receiptId=await db.recordDisclosure({topicId:t.topic_id,draftHash:t.draft_hash,actor,checks:[],passed:true,codeVersion:'test'});
+ const f=fixtureVersion(h,slug),snapshotText=JSON.stringify({...JSON.parse(f.snapshotText),entries:draft.entries});
+ const v=await db.publish({topicId:t.topic_id,expectedDraftHash:t.draft_hash,receiptId,actor,evidence:f.evidence,snapshotText,summaryId:null,cutoff:'2026-11-10T00:00:00Z'});
+ await h.setPublic(true);
+ try{await assertExcerptMasking(db,h.asPublic(),slug,v.version_id,licenceId,actor,quote);}finally{await h.setPublic(false);}
+}
+export async function assertExcerptMasking(db:TopicsDb,reader:TopicsDb,slug:string,versionId:string,licenceId:string,actor:string,quote='Quoted 42'){
  const {readTopic}=await import('./public-read');
  const version=(await db.versionById(versionId))!,day=version.published_at.slice(0,10);
  const pub={db:reader,preview:false,now:()=>new Date(version.published_at)};
- expect(JSON.stringify((await readTopic(pub,slug,{})).entries)).toContain('Quoted 42');
- await db.setLicence({licenceId,fields:{...testLicence,status:'revoked'},actor});
- for(const view of [{},{version:version.version_no},{asOf:day}]){
-  const dto=await readTopic(pub,slug,view);
-  expect(dto.entries).toContainEqual({key:'quote',entry_type:'licensed_excerpt',masked:true,reason:'licence_revoked',attributions:[{attribution:'Author',url:'https://example.org'}]});
-  expect(JSON.stringify(dto)).not.toContain('Quoted 42');
- }
- expect((await db.versionById(versionId))!.snapshot_hash).toBe(version.snapshot_hash);
+ const masked={key:'quote',entry_type:'licensed_excerpt',masked:true,reason:'licence_revoked',attributions:[{attribution:'Author',url:'https://example.org'}]};
+ const check=async(allowed:boolean)=>{
+  const stored=(await db.versionById(versionId))!;
+  expect(stored.snapshot_hash).toBe(version.snapshot_hash);expect(JSON.stringify(stored.snapshot)).toContain(quote);
+  const expected=version.snapshot.entries.map(e=>allowed||e.entry_type==='owner_note'?e:masked);
+  const rows=await reader.publicVersions(version.topic_id);
+  expect(rows.find(v=>v.version_id===versionId)).toMatchObject({snapshot_hash:version.snapshot_hash});
+  expect(rows.find(v=>v.version_id===versionId)?.snapshot?.entries).toEqual(expected);
+  expect(JSON.stringify(rows).includes(quote)).toBe(allowed);
+  for(const view of [{},{version:version.version_no},{asOf:day}]){
+   const dto=await readTopic(pub,slug,view);
+   expect(dto.entries).toEqual(expected);expect(JSON.stringify(dto).includes(quote)).toBe(allowed);
+  }
+ };
+ await check(true);
+ for(const fields of deniedLicences){await db.setLicence({licenceId,actor,fields});await check(false);}
+ await db.setLicence({licenceId,actor,fields:testLicence});await check(true);
 }
-export const quoteEntry=(licence_id:string)=>({key:'quote',entry_type:'licensed_excerpt' as const,licence_id,fragments:[{text:'Quoted 42',date:'2026-11-01',attribution:'Author',url:'https://example.org'}]});
+export const assertRevokedViews=assertExcerptMasking;
