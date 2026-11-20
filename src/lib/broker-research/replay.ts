@@ -73,5 +73,6 @@ export async function replayFromSnapshot(deps:RDeps,pub:PublicationRow):Promise<
 }
 export async function replayPublication(deps:RDeps,publicationId:string){
  const pub=await deps.db.getPublication(publicationId);if(!pub)throw new Error(`publication_not_found:${publicationId}`);
- return replayFromSnapshot(deps,pub);
+ const result=await replayFromSnapshot(deps,pub),snapshotHashOk=await deps.db.publicationSnapshotOk(publicationId);
+ return {...result,snapshotHashOk,ok:result.ok&&snapshotHashOk===true};
 }
