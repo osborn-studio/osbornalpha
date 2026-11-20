@@ -9,7 +9,7 @@ import en from '../../../messages/en/judgments.json';
 import type {CalibrationRow,JudgmentCard,ReliabilityBin,SettlementRow} from '@/lib/judgments/types';
 import type {MethodologyListItem,QueueItem} from './api-types';
 import {BRASS_BADGE,LINK,NEUTRAL_BADGE,SELECTED,TONE,UNSELECTED,badgeClass,calibrationMsg,cardBody,collapsedView,confusionView,footerView,gatesView,holdoutRows,
- inputRows,lifecycleView,methodRows,methodState,queueActions,refText,registeredValue,reliabilityPoints,reliabilityRows,segmentClass,targetText,timelineSteps,visiblePercent} from './view-model';
+ inputRows,lifecycleView,methodRows,methodState,queueActions,refText,registeredValue,reliabilityPoints,reliabilityRows,segmentClass,classView,subjectChip,missingName,targetMsg,targetText,timelineSteps,visiblePercent} from './view-model';
 
 type Summary=NonNullable<JudgmentCard['calibration_summary']>;
 const summary=(p:Partial<Summary>={}):Summary=>({n_independent:12,n_total:30,threshold_n:100,brier:null,brier_skill:null,ece_raw_holdout:null,valid_until:'2026-11-20T00:00:00.000Z',hit_rate:null,href:'/intel/methods/thesis_win_rate/v1',...p});
@@ -88,8 +88,36 @@ describe('brass, tones, labels',()=>{
   expect(collapsedView(card(),'zh')).toMatchObject({percent:null,band:'high'});
   expect(collapsedView(macro(),'zh')).toMatchObject({percent:null,band:null,lifecycle:{key:'ui.lifecycle.open'}});
  });
+ it('shows the class code separately only with a label',()=>{
+  expect(classView('recovery','复苏')).toEqual({text:'复苏',code:'recovery'});
+  expect(classView('undervalued',null)).toEqual({text:'undervalued',code:null});
+ });
+ it('uses subject context or a readable key for the chip',()=>{
+  expect(subjectChip(macro(),false)).toBeNull();
+  expect(subjectChip(card(),{ticker:'FIXT',name:'Fixture'})).toBe('FIXT · Fixture');
+  expect(subjectChip(card(),{ticker:'FIXT'})).toBe('FIXT');
+  expect(subjectChip(card())).toBeNull();
+  expect(subjectChip(macro({subject:{type:'industry',key:US}}))).toBeNull();
+  expect(subjectChip(macro())).toBe('US');
+ });
+ it('resolves missing identifiers through concepts then metrics and preserves input labels',()=>{
+  const concept=(id:string)=>id==='revenue'?'Revenue':null;
+  const metric=(id:string)=>id==='unknown'?null:'Metric';
+  expect(missingName('revenue',concept,metric)).toBe('Revenue');
+  expect(missingName('gross_margin',concept,metric)).toBe('Metric');
+  expect(missingName('unknown',concept,metric)).toBe('unknown');
+  const unexpected=()=>{throw new Error('unexpected lookup');};
+  expect(missingName('input:report.v1',unexpected,unexpected)).toBe('input:report.v1');
+ });
+ it('maps each target to its localized sentence and fiscal suffix',()=>{
+  expect(targetMsg({kind:'session_index',base_date:'2026-01-01',n:20})).toEqual({msg:{key:'target.session_index',values:{base:'2026-01-01',n:20}},extrapolated:false});
+  expect(targetMsg({kind:'date',date:'2026-12-01'})).toEqual({msg:{key:'target.date',values:{date:'2026-12-01'}},extrapolated:false});
+  expect(targetMsg({kind:'period',period:'2026-12'})).toEqual({msg:{key:'target.period',values:{period:'2026-12'}},extrapolated:false});
+  for(const extrapolated of [true,false])expect(targetMsg({kind:'fiscal_period',period_end:'2026-12-31',calendar:{anchor_period_end:'2025-12-31',months:3},extrapolated})).toEqual({msg:{key:'target.fiscal_period',values:{periodEnd:'2026-12-31'}},extrapolated});
+  expect(footerView(card({condition:null}),'en').target).toBeNull();
+ });
  it('footer line and target text for every target kind',()=>{
-  expect(footerView(card(),'zh')).toEqual({method:'thesis_win_rate@v1',asOf:'2026-11-01',condition:'FY2026 revenue_yoy ≥ 8%',target:'2026-12-31'});
+  expect(footerView(card(),'zh')).toEqual({method:'thesis_win_rate@v1',asOf:'2026-11-01',condition:'FY2026 revenue_yoy ≥ 8%',target:{msg:{key:'target.fiscal_period',values:{periodEnd:'2026-12-31'}},extrapolated:false}});
   expect([targetText({kind:'session_index',base_date:'2026-09-14',n:5}),targetText({kind:'date',date:'2026-12-01'}),targetText({kind:'period',period:'2026-12'}),
    targetText({kind:'fiscal_period',period_end:'2027-03-31',calendar:{anchor_period_end:'2026-12-31',months:3},extrapolated:true})]).toEqual(['2026-09-14 +5','2026-12-01','2026-12','2027-03-31*']);
  });
@@ -110,10 +138,13 @@ describe('drawer and timeline',()=>{
   expect(scores).toEqual({type:'scores',rows:[{cls:'recovery',score:'0.326'},{cls:'overheat',score:'0.235'},{cls:'stagflation',score:'0.220'},{cls:'recession',score:'0.220'}]});
   expect(JSON.stringify(scores)).not.toContain('%');
  });
+ it('labels the registered method and input count',()=>{
+  expect(timelineSteps(card(),undefined,'en')[0]).toMatchObject({detail:'thesis_win_rate@v1 · 1',detailMsg:{key:'ui.timeline.registeredDetail',values:{method:'thesis_win_rate@v1',count:1}}});
+ });
  it('formats target and settlement deadline with a timeline message',()=>{
   const c=card(),condition=c.condition!,steps=timelineSteps(c,undefined,'en');
   for(const step of steps)expect.soft(step.detail??'').not.toContain('settle_by');
-  expect(steps.find(s=>s.key==='ui.timeline.target')).toHaveProperty('detailMsg',{key:'ui.timeline.targetDetail',values:{target:targetText(condition.target),date:condition.settle_by.slice(0,10)}});
+  expect(steps.find(s=>s.key==='ui.timeline.target')).toMatchObject({target:{msg:{key:'target.fiscal_period',values:{periodEnd:'2026-12-31'}},extrapolated:false},detailMsg:{key:'ui.timeline.targetDetail',values:{date:condition.settle_by.slice(0,10)}}});
  });
  for(const [locale,messages] of [['zh',zh],['en',en]] as const)it(`defines the target detail message (${locale})`,()=>{
   expect(messages.ui.timeline).toHaveProperty('targetDetail',expect.stringMatching(/\S/));

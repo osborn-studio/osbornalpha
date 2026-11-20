@@ -68,6 +68,13 @@ describe('judgment UI source guards (Task 21)',()=>{
 });
 
 describe('interaction safeguards',()=>{
+ it('drawer close and tabs have phone touch targets with desktop resets',()=>{
+  const buttons=src(`${C}InputsDrawer.tsx`).match(/<button[^\n]+/g)??[];
+  const close=buttons.find(b=>b.includes('ui.drawer.close')),tabs=buttons.filter(b=>b.includes('role="tab"'));
+  expect(tabs).toHaveLength(2);
+  for(const button of [close,...tabs])for(const cls of ['inline-flex','min-h-11','items-center','sm:min-h-0'])expect(button).toContain(cls);
+  for(const cls of ['min-w-11','justify-center','sm:min-w-0'])expect(close).toContain(cls);
+ });
  it('dialogs use the browser modal focus boundary and reason length matches the route',()=>{
   for(const file of [`${C}InputsDrawer.tsx`,'src/app/(app)/admin/judgments/AdminJudgmentsClient.tsx']){
    expect(src(file)).toContain('.showModal()');

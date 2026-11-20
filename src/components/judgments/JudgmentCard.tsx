@@ -9,12 +9,14 @@ import Link from 'next/link';
 import { useLocale, useTranslations } from 'next-intl';
 import { CalibrationBadge } from './CalibrationBadge';
 import { InputsDrawer, type DrawerTab } from './InputsDrawer';
-import { LINK, TONE, cardBody, collapsedView, footerView, lifecycleView, type AnyCard, type CardBody } from './view-model';
+import { LINK, TONE, cardBody, classView, missingName, subjectChip, translateTarget, type CardSubject, collapsedView, footerView, lifecycleView, type AnyCard, type CardBody } from './view-model';
 
 const BANDS = ['low', 'mid', 'high'] as const;
 
 function Body({ body, href }: { body: CardBody; href: string }) {
   const t = useTranslations('judgments');
+  const concepts = useTranslations('company.concepts');
+  const metrics = useTranslations('company.metrics.names');
   switch (body.type) {
     case 'percent':
       return (
@@ -36,18 +38,20 @@ function Body({ body, href }: { body: CardBody; href: string }) {
           </div>
         </div>
       );
-    case 'category':
+    case 'category': {
+      const selected = classView(body.selected, t.has(`ui.classes.${body.selected}`) ? t(`ui.classes.${body.selected}`) : null);
       return body.realized !== null ? (
         <div className="grid grid-cols-2 gap-2">
-          <div><div className="text-[11px] text-[var(--text-dim)]">{t('ui.card.selected')}</div><div className="text-lg font-semibold">{t.has(`ui.classes.${body.selected}`) ? t(`ui.classes.${body.selected}`) : body.selected}</div></div>
+          <div><div className="text-[11px] text-[var(--text-dim)]">{t('ui.card.selected')}</div><div className="text-lg font-semibold">{selected.text}</div></div>
           <div><div className="text-[11px] text-[var(--text-dim)]">{t('ui.card.realized')}</div><div className="text-lg font-semibold">{t.has(`ui.classes.${body.realized}`) ? t(`ui.classes.${body.realized}`) : body.realized}</div></div>
         </div>
       ) : (
         <div className="space-y-1">
-          <div className="flex items-baseline gap-2"><span className="text-[22px] font-semibold">{t.has(`ui.classes.${body.selected}`) ? t(`ui.classes.${body.selected}`) : body.selected}</span><span className="num text-[11px] text-[var(--text-muted)]">{body.selected}</span></div>
+          <div className="flex items-baseline gap-2"><span className="text-[22px] font-semibold">{selected.text}</span>{selected.code && <span className="num text-[11px] text-[var(--text-muted)]">{selected.code}</span>}</div>
           <p className="text-[11px] text-[var(--text-dim)]">{body.accuracy ? t(body.accuracy.key, body.accuracy.values) : t('ui.card.scoresInDrawer')}</p>
         </div>
       );
+    }
     case 'score':
       return (
         <div className="space-y-2">
@@ -74,13 +78,13 @@ function Body({ body, href }: { body: CardBody; href: string }) {
       return (
         <div className="rounded-md border border-dashed border-[var(--border)] p-3 text-sm">
           <p>{t('ui.card.abstained', { reason: t.has(`ui.abstainReason.${body.reason}`) ? t(`ui.abstainReason.${body.reason}`) : body.reason })}</p>
-          {body.missing.length > 0 && <p className="num mt-1 text-[11px] text-[var(--text-dim)]">{t('ui.card.missing', { items: body.missing.join(', ') })}</p>}
+          {body.missing.length > 0 && <p className="num mt-1 text-[11px] text-[var(--text-dim)]">{t('ui.card.missing', { items: body.missing.map(id => missingName(id, k => concepts.has(k) ? concepts(k) : null, k => metrics.has(k) ? metrics(k) : null)).join(', ') })}</p>}
         </div>
       );
   }
 }
 
-export function JudgmentCard({ card }: { card: AnyCard }) {
+export function JudgmentCard({ card, subject }: { card: AnyCard; subject?: CardSubject }) {
   const t = useTranslations('judgments');
   const locale = useLocale() === 'en' ? 'en' : 'zh';
   const [open, setOpen] = useState(false);
@@ -90,6 +94,7 @@ export function JudgmentCard({ card }: { card: AnyCard }) {
   const life = lifecycleView(card);
   const collapsed = collapsedView(card, locale);
   const foot = footerView(card, locale);
+  const chip = subjectChip(card, subject);
   const s = card.settlement;
   return (
     <article className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]" aria-label={card.display.headline[locale]}>
@@ -104,7 +109,7 @@ export function JudgmentCard({ card }: { card: AnyCard }) {
       <div id={bodyId} className={`${open ? 'flex' : 'hidden'} flex-col gap-3 p-4 sm:flex`}>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--text-dim)]">
           <span>{t(`ui.type.${card.judgment_type}`)}</span>
-          <span className="num rounded border border-[var(--border)] px-1.5 py-0.5">{card.subject.key}</span>
+          {chip && <span className="num rounded border border-[var(--border)] px-1.5 py-0.5">{chip}</span>}
           {card.retrospective && <span className="rounded border border-dashed border-[var(--border)] px-1.5 py-0.5">{t('ui.card.retrospective')}</span>}
           {card.merged_from && <span>{t('ui.card.mergedFrom', { key: card.merged_from })}</span>}
           {card.source === 'recommendation' && <span>{t('ui.card.private')}</span>}
@@ -121,7 +126,7 @@ export function JudgmentCard({ card }: { card: AnyCard }) {
           {t('ui.card.method')} <Link className={`num ${LINK}`} href={card.methodology.href}>{foot.method}</Link>
           {' · '}{t('ui.card.asOf', { date: foot.asOf })}
           {foot.condition && <>{' · '}{t('ui.card.condition', { text: foot.condition })}</>}
-          {foot.target && <>{' · '}{t('ui.card.target', { target: foot.target })}</>}
+          {foot.target && <>{' · '}{t('ui.card.target', { target: translateTarget(foot.target, t) })}</>}
           {' · '}{t('ui.card.settlement', { state: t(life.msg.key) })}
         </p>
         {card.lifecycle !== 'abstained' && (

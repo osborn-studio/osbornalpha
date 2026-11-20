@@ -5,6 +5,7 @@ import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,expect,it} from 'vitest';
 import {CALIBRATION_STATES_BY_KIND,KINDS,PRIVATE_LIFECYCLES,PUBLIC_LIFECYCLES} from './display';
+import {MACRO_REGIMES} from './methodologies/macro-regime.v2';
 import {PUBLIC_INPUT_KINDS} from './types';
 
 const load=(l:'zh'|'en')=>JSON.parse(readFileSync(join(process.cwd(),'messages',l,'judgments.json'),'utf8')) as Record<string,unknown>;
@@ -19,6 +20,9 @@ describe('judgments messages',()=>{
  });
  it('zh and en use the same placeholders per key',()=>{
   for(const [k,v] of zh)expect(placeholders(v),k).toEqual(placeholders(en.get(k)!));
+ });
+ it('labels every macro_regime@v2 class in both locales',()=>{
+  for(const value of MACRO_REGIMES)for(const messages of [zh,en])expect(messages.get(`ui.classes.${value}`)).toMatch(/\S/);
  });
  it('every lifecycle, calibration state, kind, input kind and derived-odds reason has a label',()=>{
   const need=[

@@ -3,9 +3,11 @@
 // view-model.test.ts: a percent is rendered only for probability × calibrated; brass (the accent) is used only for the
 // calibrated badge and the selected state, and every accent class of src/components/judgments lives in this file;
 // hit / miss use --up / --down; charts have table equivalents. Components turn the returned message keys into text with
-// useTranslations('judgments'). Type-only imports, so the file is safe in client bundles.
+// useTranslations('judgments').
 import type {CalibrationRow,CalibrationState,InputKind,Kind,Lifecycle,ReliabilityBin,SettlementRow,Target} from '@/lib/judgments/types';
 import type {WireCard as JudgmentCard,MethodologyListItem,QueueItem} from './api-types';
+
+import {UUID_RE} from '@/lib/judgments/wire';
 
 export type Locale='zh'|'en';
 export type Msg={key:string;values?:Record<string,string|number>};
@@ -59,6 +61,28 @@ export function targetText(t:Target):string{
  }
 }
 
+type TargetMessage={msg:Msg;extrapolated:boolean};
+export function targetMsg(t:Target):TargetMessage{
+ switch(t.kind){
+  case 'session_index':return {msg:{key:'target.session_index',values:{base:t.base_date,n:t.n}},extrapolated:false};
+  case 'date':return {msg:{key:'target.date',values:{date:t.date}},extrapolated:false};
+  case 'period':return {msg:{key:'target.period',values:{period:t.period}},extrapolated:false};
+  case 'fiscal_period':return {msg:{key:'target.fiscal_period',values:{periodEnd:t.period_end}},extrapolated:t.extrapolated};
+ }
+}
+export const translateTarget=({msg,extrapolated}:TargetMessage,t:(key:string,values?:Msg['values'])=>string)=>
+ t(msg.key,msg.values)+(extrapolated?t('target.extrapolated'):'');
+
+export const classView=(code:string,label:string|null)=>({text:label??code,code:label===null?null:code});
+export type CardSubject=false|{ticker:string;name?:string|null};
+export function subjectChip(c:Pick<JudgmentCard,'subject'>,subject?:CardSubject):string|null{
+ if(subject===false)return null;
+ if(subject)return subject.name?`${subject.ticker} · ${subject.name}`:subject.ticker;
+ return c.subject.type==='issuer'||UUID_RE.test(c.subject.key.toLowerCase())?null:c.subject.key;
+}
+type NameLookup=(id:string)=>string|null;
+export const missingName=(id:string,concept:NameLookup,metric:NameLookup)=>/^[a-z0-9_]+$/.test(id)?concept(id)??metric(id)??id:id;
+
 // ── card body ──
 export type CardBody=
  |{type:'percent';text:string;hitRate:Msg|null}
@@ -100,8 +124,8 @@ export function collapsedView(c:JudgmentCard,locale:Locale):{title:string;type:M
   percent:pct===null?null:`${pct}%`,band:c.kind==='probability'&&pct===null?c.display.band??null:null,lifecycle:lifecycleView(c).msg};
 }
 /** Card foot line (spec §9.3 "方法 id@version · 截至 as_of · 条件 · 目标 · 结算"). */
-export function footerView(c:JudgmentCard,locale:Locale):{method:string;asOf:string;condition:string|null;target:string|null}{
- return {method:`${c.methodology.id}@${c.methodology.version}`,asOf:c.as_of,condition:c.condition?c.condition.text[locale]:null,target:c.condition?targetText(c.condition.target):null};
+export function footerView(c:JudgmentCard,locale:Locale):{method:string;asOf:string;condition:string|null;target:TargetMessage|null}{
+ return {method:`${c.methodology.id}@${c.methodology.version}`,asOf:c.as_of,condition:c.condition?c.condition.text[locale]:null,target:c.condition?targetMsg(c.condition.target):null};
 }
 
 // ── inputs drawer ──
@@ -135,10 +159,11 @@ const ABSTAIN_REASONS:ReadonlySet<string>=new Set([
  'binding_missing','input_not_public','input_unavailable','metric_missing',
  'snapshot_missing','snapshot_unclassified','subject_not_issuer','target_unresolvable',
 ]);
-export interface Step{key:string;at:string|null;detail:string|null;detailMsg?:Msg;tone:Tone;done:boolean}
+export interface Step{key:string;at:string|null;detail:string|null;detailMsg?:Msg;target?:TargetMessage;tone:Tone;done:boolean}
 const SETTLEMENT_KEY=(s:Pick<SettlementRow,'kind'|'outcome'>)=>s.kind==='settled'?(s.outcome==='miss'?'ui.timeline.settledMiss':'ui.timeline.settledHit'):`ui.timeline.${s.kind}`;
 export function timelineSteps(c:JudgmentCard,settlements:SettlementRow[]|undefined,locale:Locale):Step[]{
- const steps:Step[]=[{key:'ui.timeline.registered',at:c.registered_at,detail:`${c.methodology.id}@${c.methodology.version} · ${c.inputs.length}`,tone:'neutral',done:true}];
+ const method=`${c.methodology.id}@${c.methodology.version}`,count=c.inputs.length;
+ const steps:Step[]=[{key:'ui.timeline.registered',at:c.registered_at,detail:`${method} · ${count}`,detailMsg:{key:'ui.timeline.registeredDetail',values:{method,count}},tone:'neutral',done:true}];
  if(c.lifecycle==='abstained'){
   const reason=c.abstain_reason??null;
   const step:Step={key:'ui.timeline.abstained',at:null,detail:reason,tone:'neutral',done:true};
@@ -146,8 +171,8 @@ export function timelineSteps(c:JudgmentCard,settlements:SettlementRow[]|undefin
   return [...steps,step];
  }
  if(c.condition){
-  const target=targetText(c.condition.target);
-  steps.push({key:'ui.timeline.target',at:c.condition.settle_after,detail:target,detailMsg:{key:'ui.timeline.targetDetail',values:{target,date:day(c.condition.settle_by)}},tone:'neutral',done:false});
+  const target=targetMsg(c.condition.target);
+  steps.push({key:'ui.timeline.target',at:c.condition.settle_after,detail:null,target,detailMsg:{key:'ui.timeline.targetDetail',values:{date:day(c.condition.settle_by)}},tone:'neutral',done:false});
  }
  const rows=settlements&&settlements.length?[...settlements].sort((a,b)=>a.seq-b.seq).map(s=>({kind:s.kind,outcome:s.outcome,at:s.settled_at,detail:s.realized?String(s.realized.label??s.realized.value):s.reason}))
   :c.settlement?[{kind:c.settlement.kind,outcome:c.settlement.outcome,at:c.settlement.settled_at,detail:c.settlement.evidence_summary[locale]}]:[];
