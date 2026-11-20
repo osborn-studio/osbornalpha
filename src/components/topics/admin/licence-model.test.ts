@@ -6,7 +6,10 @@ it('fixes attribution and caps and requires HTTPS',()=>{
  expect(()=>licenceForm({...input,source_url:'http://example.org'})).toThrow();
 });
 it('offers the excerpt type only after source approval',()=>{
- expect(offersExcerpt([])).toBe(false);expect(offersExcerpt([{status:'revoked'}])).toBe(false);expect(offersExcerpt([{status:'approved'}])).toBe(true);
+ const approved={status:'approved' as const,permits:{display_excerpt:true}};
+ expect(offersExcerpt([])).toBe(false);expect(offersExcerpt([{...approved,status:'revoked'}])).toBe(false);
+ expect(offersExcerpt([approved])).toBe(true);
+ const unticked={...approved,permits:{display_excerpt:false}};expect(offersExcerpt([unticked])).toBe(false);
 });
 it('lists only the registered permissions in display order',async()=>{
  const {permissionKeys}=await import('./licence-model');

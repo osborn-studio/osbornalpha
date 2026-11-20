@@ -1,14 +1,14 @@
 // Topic read-time masking (spec §5.4, A5b); frozen snapshots remain unchanged.
 import type {Resolved} from '@/lib/evidence/resolve';
-import type {DriftRow,RenderedSummary,TopicSnapshot} from './types';
+import type {DriftRow,RenderedSummary} from './types';
 import type {PublicEvidence} from './public-dto';
-import {maskExcerpts} from './excerpts';
-import type {PublicLicenceStatusRow} from './database-types';
-export function maskedEntries(entries:TopicSnapshot['entries'],rows:PublicLicenceStatusRow[]){
- return maskExcerpts(entries,new Map(rows.map(l=>[l.licence_id,l.status])));
+import {maskExcerpts,type PublicEntry} from './excerpts';
+import type {PublicLicenceStatusRow,PublicSnapshot} from './database-types';
+export function maskedEntries(entries:PublicEntry[],rows:PublicLicenceStatusRow[]){
+ return maskExcerpts(entries,new Map(rows.map(l=>[l.licence_id,l.excerpt_allowed])));
 }
 export const MASKING_DRIFTS=['retracted','now_withheld'] as const;
-export function maskSnapshot(snapshot:TopicSnapshot,drift:ReadonlyMap<number,DriftRow>,view:'current'|'version'|'replay'):
+export function maskSnapshot(snapshot:PublicSnapshot,drift:ReadonlyMap<number,DriftRow>,view:'current'|'version'|'replay'):
  {evidence:PublicEvidence[];drawers:Map<number,Resolved['drawer']>;summary:(RenderedSummary&{hidden_points:number})|null}{
  const drawers=new Map<number,Resolved['drawer']>(),maskedOrdinals=new Set<number>();
  const evidence=snapshot.evidence.map((e):PublicEvidence=>{

@@ -1,4 +1,5 @@
 // Topic public dependency wiring and service preview projection (spec §6).
+import {publicLicenceRow} from './licences';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {getServerSupabase} from '@/lib/supabase/server';
 import {supabaseTableClient} from '@/lib/db/table-client';
@@ -47,7 +48,7 @@ export function previewDeps():PublicDeps{
   }));
  };
  return {preview:true,now:()=>new Date(),db:{
-  publicLicenceStatus:async ids=>(await db.licences()).filter(l=>ids.includes(l.licence_id)).map(({licence_id,status})=>({licence_id,status})),
+  publicLicenceStatus:async ids=>(await db.licences()).filter(l=>ids.includes(l.licence_id)).map(publicLicenceRow),
   publicOpen:async()=>true,publicTopics,
   publicTopicBySlug:async slug=>(await publicTopics()).find(t=>t.topic_slug===slug)??null,
   async publicVersions(id){

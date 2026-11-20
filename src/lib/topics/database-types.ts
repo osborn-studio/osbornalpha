@@ -1,6 +1,7 @@
 // Topic table shapes are owned by this module so the shared Database stays byte-for-byte stable for methodology formula hashing.
 // Topic research (spec §4.2–§4.9).
 import type {Category,DisclosureCheck,DraftBody,DriftRow,EvidenceCounts,EvidenceRowInput,RenderedSummary,TopicSnapshot,UnpublishReason} from './types';
+import type {PublicEntry} from './excerpts';
 export interface TopicSettingsRow{id:1;public_enabled:boolean;summary_public_enabled:boolean;summary_provider_note:string|null;drift_checked_at:string|null;drift_cursor:{version_id:string;ordinal:number}|null;updated_by:string|null;updated_at:string}
 export interface TopicRow{topic_id:string;topic_slug:string;category:Category;status:'draft'|'published'|'unpublished'|'retired';current_version_id:string|null;retired_at:string|null;retired_reason:UnpublishReason|null;created_by:string;created_at:string}
 export interface TopicVersionRow{version_id:string;topic_id:string;version_no:number;contract_version:'evidence-ref/1';cutoff:string;snapshot:TopicSnapshot;snapshot_text:string;snapshot_hash:string;summary_id:string|null;disclosure_receipt_id:string;promotion_id:string|null;published_at:string;published_by:string;supersedes_version_id:string|null;unpublished_at:string|null;unpublish_reason:UnpublishReason|null}
@@ -14,6 +15,7 @@ export interface TopicDisclosureReceiptRow{receipt_id:string;topic_id:string;dra
 export interface TopicAuditRow{id:number;topic_id:string|null;actor:string;action:'create'|'draft_save'|'promote'|'disclosure_check'|'summary_run'|'summary_approve'|'preview'|'publish'|'unpublish'|'retire'|'licence_change'|'settings_change'|'replay_verify';detail:Record<string,unknown>;created_at:string}
 export interface TopicEvidenceDriftRow extends DriftRow{checked_at:string}
 export interface PublicTopicRow{topic_id:string;topic_slug:string;category:Category;status:TopicRow['status'];retired_reason:UnpublishReason|null;current_version_id:string|null;version_no:number|null;published_at:string|null;cutoff:string|null;title_zh:string|null;title_en:string|null;dek_zh:string|null;dek_en:string|null;evidence_counts:EvidenceCounts|null;drift_checked_at:string|null}
-export interface PublicVersionRow{version_id:string;topic_id:string;topic_slug:string;version_no:number;cutoff:string;published_at:string;supersedes_version_id:string|null;unpublished_at:string|null;unpublish_reason:UnpublishReason|null;snapshot_hash:string;snapshot:TopicSnapshot|null}
+export type PublicSnapshot=Omit<TopicSnapshot,'entries'>&{entries:PublicEntry[]};
+export interface PublicVersionRow{version_id:string;topic_id:string;topic_slug:string;version_no:number;cutoff:string;published_at:string;supersedes_version_id:string|null;unpublished_at:string|null;unpublish_reason:UnpublishReason|null;snapshot_hash:string;snapshot:PublicSnapshot|null}
 export interface PublicDriftRow extends TopicEvidenceDriftRow{}
-export interface PublicLicenceStatusRow{licence_id:string;status:TopicSourceLicenceRow['status']}
+export interface PublicLicenceStatusRow{licence_id:string;status:TopicSourceLicenceRow['status'];excerpt_allowed:boolean}

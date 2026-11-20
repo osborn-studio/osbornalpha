@@ -1,6 +1,6 @@
 // Topic public directory, frozen dossier and replay reads (spec §6.1–§6.2).
 import type {PublicDeps} from './deps';
-import type {Category,TopicSnapshot} from './types';
+import type {Category} from './types';
 import type {PublicTopicRow,PublicVersionRow} from './database-types';
 import type {DirectoryItem,DossierDto,EvidenceDetailDto,VersionMeta} from './public-dto';
 import {TopicError} from './errors';
@@ -57,12 +57,12 @@ async function selected(d:PublicDeps,slug:string,o:{asOf?:string;version?:number
  if(v.unpublished_at!==null)throw new TopicError('version_unpublished',{version_no:v.version_no,reason:v.unpublish_reason});
  if(!v.snapshot)throw new TopicError('not_found');
  const drift=new Map((await d.db.publicDrift(v.version_id)).map(row=>[row.ordinal,row]));
- return {t,v,versions,now,view,snapshot:v.snapshot as TopicSnapshot,masked:maskSnapshot(v.snapshot,drift,view)};
+ return {t,v,versions,now,view,snapshot:v.snapshot,masked:maskSnapshot(v.snapshot,drift,view)};
 }
 export async function readTopic(d:PublicDeps,slug:string,o:{asOf?:string;version?:number}):Promise<DossierDto>{
  await open(d);
  const {t,v,versions,now,view,snapshot:s,masked}=await selected(d,slug,o);
- const ids=[...new Set(s.entries.flatMap(e=>e.entry_type==='licensed_excerpt'?[e.licence_id]:[]))];
+ const ids=[...new Set(s.entries.flatMap(e=>e.entry_type==='licensed_excerpt'&&!('masked' in e)?[e.licence_id]:[]))];
  const entries=maskedEntries(s.entries,ids.length?await d.db.publicLicenceStatus(ids):[]);
  const age_days=ageDays(v.published_at,now);
  const attributions=[...new Set(masked.evidence.flatMap(e=>{

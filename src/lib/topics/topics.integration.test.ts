@@ -5,7 +5,9 @@ import {readFileSync} from 'node:fs';
 import {Pool,type PoolClient} from 'pg';
 import {afterAll,afterEach,beforeAll,beforeEach,describe,expect,it} from 'vitest';
 
-import {quoteEntry,testLicence,assertRevokedViews,fixtureVersion,topicsDbContract} from './db-contract';
+import {quoteEntry,testLicence,checkPublishedExcerpt,fixtureVersion,topicsDbContract} from './db-contract';
+import {emptyDraft} from './drafts';
+import {readTopic} from './public-read';
 import {pgTopicsDb} from './pg-db';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -377,21 +379,125 @@ describe.skipIf(!enabled)('topics storage',()=>{
   try{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[previous]);}
   finally{try{await lock.query("select pg_advisory_unlock(hashtext('topic_settings'))");}finally{lock.release();}}
  });
+ const harness=()=>({db:pgTopicsDb(pool),newId:randomUUID,
+  setPublic:async(on:boolean)=>{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[on]);},
+  asPublic:()=>pgTopicsDb(pool,{role:'authenticated'})});
  it('A16 masks revoked excerpts for authenticated version and replay reads',async()=>{
-  const db=pgTopicsDb(pool),actor=randomUUID(),slug='pg-excerpt-'+randomUUID();
-  const licenceId=await db.setLicence({licenceId:null,actor,fields:testLicence});
-  const {emptyDraft}=await import('./drafts'),draft=emptyDraft({zh:'引文',en:'Excerpt'});
-  draft.entries=[quoteEntry(licenceId)];
-  const t=await db.createTopic({slug,actor,category:'macro',body:draft});
-  const receiptId=await db.recordDisclosure({topicId:t.topic_id,draftHash:t.draft_hash,actor,checks:[],passed:true,codeVersion:'test'});
-  const reader=pgTopicsDb(pool,{role:'authenticated'});
-  const f=fixtureVersion({db,newId:randomUUID,asPublic:()=>reader,setPublic:async()=>{}},slug);
-  const snap=JSON.parse(f.snapshotText);snap.entries=draft.entries;
-  const v=await db.publish({topicId:t.topic_id,expectedDraftHash:t.draft_hash,receiptId,actor,evidence:f.evidence,snapshotText:JSON.stringify(snap),summaryId:null,cutoff:'2026-11-10T00:00:00Z'});
-  await lock.query('update public.topic_settings set public_enabled=true where id=1');
-  await assertRevokedViews(db,reader,slug,v.version_id,licenceId,actor);
+  await checkPublishedExcerpt(harness(),'pg-excerpt-'+randomUUID(),randomUUID());
  });
- topicsDbContract('pg',async()=>({db:pgTopicsDb(pool),newId:randomUUID,
-  setPublic:async on=>{await lock.query('update public.topic_settings set public_enabled=$1 where id=1',[on]);},
-  asPublic:()=>pgTopicsDb(pool,{role:'authenticated'})}));
+ describe('licence mask in the public views',()=>{
+  const views=['topic_licence_status_public_v','topic_versions_public_v'];
+  const asRole=async(role:'authenticated'|'anon',sql:string,args:unknown[]=[])=>{
+   const c=await pool.connect();
+   try{await c.query('begin');await c.query(`set local role ${role}`);return (await c.query(sql,args)).rows;}
+   finally{await c.query('rollback');c.release();}
+  };
+  const raw=async(id:string)=>(await asRole('authenticated','select to_jsonb(r) as row from public.topic_versions_public_v r where r.topic_id=$1 order by r.version_no',[id])).map(r=>r.row);
+  const anonDenied=async()=>{
+   for(const view of views)await expect(asRole('anon',`select * from public.${view}`)).rejects.toThrow(/permission denied/);
+  };
+  async function publishedPair(unknown=false){
+   const h=harness(),{db}=h,actor=randomUUID(),slug='mask-'+randomUUID();
+   const licenceId=await db.setLicence({licenceId:null,fields:testLicence,actor});
+   const draft=emptyDraft({zh:'引文',en:'Excerpt'}),t=await db.createTopic({slug,actor,category:'macro',body:draft});
+   const owner={key:'note',entry_type:'owner_note' as const,body:{zh:'注',en:'Owner'}};
+   const markers:string[][]=[],stored=[];
+   let hash=t.draft_hash;
+   for(const n of [1,2]){
+    if(n===2){
+     draft.title.en='Second edition';
+     hash=(await db.saveDraft({topicId:t.topic_id,expectedRevision:t.revision,body:draft,actor})).draft_hash;
+     expect(hash).not.toBe(t.draft_hash);
+    }
+    const texts=[`zebra-${randomUUID()}`,`zebra-${randomUUID()}`];markers.push(texts);
+    const excerpt=quoteEntry(unknown?(n===1?randomUUID():'not-a-uuid'):licenceId,texts[0]);
+    excerpt.fragments.push({...excerpt.fragments[0],text:texts[1],attribution:'Editor',url:'https://example.org/editor'});
+    const f=fixtureVersion(h,slug),snapshotText=JSON.stringify({...JSON.parse(f.snapshotText),entries:[owner,excerpt]});
+    const receiptId=await db.recordDisclosure({topicId:t.topic_id,draftHash:hash,actor,checks:[],passed:true,codeVersion:'test'});
+    const v=await db.publish({topicId:t.topic_id,expectedDraftHash:hash,receiptId,actor,evidence:f.evidence,snapshotText,summaryId:null,cutoff:'2026-11-10T00:00:00Z'});
+    stored.push((await db.versionById(v.version_id))!);
+   }
+   await h.setPublic(true);
+   return {h,db,actor,slug,licenceId,topicId:t.topic_id,owner,markers,stored};
+  }
+  it.each([
+   ['approved',true,true],['revoked',true,false],['approved',false,false],['pending',true,false],
+  ] as const)('serves both versions for status %s and display permission %s according to the licence',async(status,display_excerpt,allowed)=>{
+   const f=await publishedPair();
+   await f.db.setLicence({licenceId:f.licenceId,actor:f.actor,fields:{...testLicence,status,permits:{...testLicence.permits,display_excerpt}}});
+   await anonDenied();
+   const rows=await raw(f.topicId);expect(rows.map(r=>r.version_no)).toEqual([1,2]);
+   for(const [i,row] of rows.entries()){
+    const stored=(await f.db.versionById(row.version_id))!;
+    expect(stored.version_id).toBe(f.stored[i].version_id);
+    expect(row.snapshot_hash).toBe(stored.snapshot_hash);
+    expect(row.snapshot_hash).toBe(createHash('sha256').update(stored.snapshot_text).digest('hex'));
+    for(const marker of f.markers[i]){
+     expect(stored.snapshot_text).toContain(marker);expect(JSON.stringify(row).includes(marker)).toBe(allowed);
+    }
+    const masked={key:'quote',entry_type:'licensed_excerpt',masked:true,reason:'licence_revoked',
+     attributions:[{attribution:'Author',url:'https://example.org'},{attribution:'Editor',url:'https://example.org/editor'}]};
+    expect(row.snapshot).toEqual(allowed?stored.snapshot:{...stored.snapshot,entries:[f.owner,masked]});
+   }
+   const now=new Date(f.stored[1].published_at),d={db:f.h.asPublic(),preview:false,now:()=>now};
+   for(const view of [{},{version:1},{version:2},{asOf:now.toISOString().slice(0,10)}]){
+    const dto=await readTopic(d,f.slug,view),n=view.version??2;
+    expect(dto.version.version_no).toBe(n);
+    for(const [i,markers] of f.markers.entries())for(const marker of markers)
+     expect(JSON.stringify(dto).includes(marker)).toBe(allowed&&i===n-1);
+   }
+   expect(await asRole('authenticated','select * from public.topic_licence_status_public_v where licence_id=$1',[f.licenceId]))
+    .toEqual([{licence_id:f.licenceId,status,excerpt_allowed:allowed}]);
+   if(!allowed){
+    await f.db.setLicence({licenceId:f.licenceId,actor:f.actor,fields:testLicence});
+    const restored=await raw(f.topicId);expect(restored.map(r=>r.snapshot)).toEqual(f.stored.map(v=>v.snapshot));
+   }
+  });
+  it('masks unknown and malformed licence ids in the two versions',async()=>{
+   const f=await publishedPair(true),rows=await raw(f.topicId);
+   expect(rows.map(r=>r.version_no)).toEqual([1,2]);
+   for(const [i,row] of rows.entries()){
+    for(const marker of f.markers[i])expect(JSON.stringify(row)).not.toContain(marker);
+    expect(row.snapshot.entries[1].masked).toBe(true);
+   }
+   await anonDenied();
+  });
+  it('returns null for an unpublished snapshot and no rows when the directory closes',async()=>{
+   const f=await publishedPair();
+   await f.db.unpublish({topicId:f.topicId,actor:f.actor,reason:'licence',note:null});
+   expect((await raw(f.topicId)).map(r=>r.snapshot)).toEqual([f.stored[0].snapshot,null]);
+   await f.h.setPublic(false);
+   for(const view of views)expect(await asRole('authenticated',`select * from public.${view}`)).toEqual([]);
+  });
+  it('pins the ordered public columns and the source licence schema',async()=>{
+   const columns=async(name:string)=>(await pool.query("select column_name from information_schema.columns where table_schema='public' and table_name=$1 order by ordinal_position",[name])).rows.map(r=>r.column_name);
+   // Any validity-date column must be added to the masking rule in SQL and in excerptPermitted.
+   expect(await columns('topic_source_licences')).toEqual(['licence_id','source_title','publisher','source_url','terms_url','terms_read_at','terms_clause','permits','status','decided_by','decided_at','note']);
+   expect(await columns(views[1])).toEqual(['version_id','topic_id','topic_slug','version_no','cutoff','published_at','supersedes_version_id','unpublished_at','unpublish_reason','snapshot_hash','snapshot']);
+   expect(await columns(views[0])).toEqual(['licence_id','status','excerpt_allowed']);
+  });
+  it('keeps the five views select-only and the topic functions private',async()=>{
+   for(const view of VIEWS)for(const role of ['anon','authenticated','service_role']){
+    const r=await pool.query("select p from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) p where has_table_privilege($1,$2,p)",[role,'public.'+view]);
+    expect(r.rows,`${role} ${view}`).toEqual(role==='anon'?[]:[{p:'SELECT'}]);
+   }
+   for(const view of views){
+    const {rows}=await pool.query('select reloptions from pg_class where oid=$1::regclass',['public.'+view]);
+    expect(rows[0].reloptions).toEqual(expect.arrayContaining(['security_invoker=false','security_barrier=true']));
+   }
+   const f=await pool.query(`select proname from pg_proc where pronamespace='public'::regnamespace and starts_with(proname,'topic_')
+    and (has_function_privilege('anon',oid,'execute') or has_function_privilege('authenticated',oid,'execute'))`);
+   expect(f.rows).toEqual([]);
+  });
+  it('replays the migration twice without changing definitions, options or grants',async()=>{
+   const sql=readFileSync('supabase/migrations/20261211090000_topics_excerpt_licence_mask.sql','utf8');
+   const catalog=async()=>({
+    views:(await pool.query("select relname,pg_get_viewdef(oid) as definition,reloptions from pg_class where relnamespace='public'::regnamespace and relname=any($1) order by relname",[views])).rows,
+    grants:(await pool.query("select * from information_schema.role_table_grants where table_schema='public' and table_name=any($1) order by table_name,grantee,privilege_type,grantor",[views])).rows,
+   });
+   const before=await catalog();expect(before.views).toHaveLength(2);
+   for(let i=0;i<2;i++){await pool.query(sql);expect(await catalog()).toEqual(before);}
+  });
+ });
+ topicsDbContract('pg',async()=>harness());
 });
