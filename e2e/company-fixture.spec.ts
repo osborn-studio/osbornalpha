@@ -1,4 +1,8 @@
 import {test as base,expect,type Locator,type Page} from '@playwright/test';
+import companyZh from '../messages/zh/company.json';
+import companyEn from '../messages/en/company.json';
+import judgmentsZh from '../messages/zh/judgments.json';
+import judgmentsEn from '../messages/en/judgments.json';
 import * as f from './fixtures/company';
 
 // Commander starts the isolated dev server with COMPANY_E2E_FIXTURES=1,
@@ -441,11 +445,30 @@ test.describe('judgments states',()=>{
           expect.soft(bounds.right).toBeLessThanOrEqual(viewport.width);
         }
         if(vw==='phone')for(const button of await container.locator('button:visible').all())await touchHeight(button);
+        const lang=locale==='zh-CN'?'zh':'en',company=lang==='zh'?companyZh:companyEn,j=lang==='zh'?judgmentsZh:judgmentsEn;
+        const cards=f.judgmentGallery.cards;
+        const article=(card:typeof cards[number])=>container.getByRole('article',{name:card.display.headline[lang],exact:true});
+        const first=article(cards[0]),verdict=article(cards.find(c=>c.display.value==='undervalued')!);
+        const recovery=article(cards.find(c=>c.display.value==='recovery')!),abstained=article(cards.find(c=>c.lifecycle==='abstained')!);
+        const session=j.target.session_index.replace('{base}','2026-01-01').replace('{n}','20');
+        await expect(container).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+        expect((await verdict.innerText()).match(/undervalued/g)).toHaveLength(1);
+        await expect(recovery.getByText(j.ui.classes.recovery,{exact:true})).toBeVisible();
+        await expect(recovery).toContainText(j.target.fiscal_period.replace('{periodEnd}','2026-12-31')+j.target.extrapolated);
+        await expect(first).toContainText(session);
+        await expect(first).not.toContainText('2026-01-01 +20');
+        for(const name of [company.concepts.revenue,company.metrics.names.gross_margin,'fixture_unknown_concept'])await expect(abstained).toContainText(name);
+        await expect(abstained).not.toContainText(/\bgross_margin\b/);
         await assertNoRawCodes(container);
         await shot(page,`judgments-cards-${vw}-${locale}`);
-        await articles.first().getByRole('button',{name:locale==='zh-CN'?/^输入 \d+$/:/^Inputs \d+$/}).click();
+        await first.getByRole('button',{name:locale==='zh-CN'?/^输入 \d+$/:/^Inputs \d+$/}).click();
         const dialog=page.getByRole('dialog'),bounds=await boxOf(dialog);
         expect.soft(bounds.left).toBeGreaterThanOrEqual(0);
+        if(vw==='phone'){
+          for(const button of await dialog.locator('button:visible').all())await touchHeight(button);
+          const close=await boxOf(dialog.getByRole('button',{name:j.ui.drawer.close,exact:true}));
+          expect.soft(close.right-close.left).toBeGreaterThanOrEqual(44);
+        }
         expect.soft(bounds.top).toBeGreaterThanOrEqual(0);
         expect.soft(bounds.right).toBeLessThanOrEqual(viewport.width);
         expect.soft(bounds.bottom).toBeLessThanOrEqual(viewport.height);
@@ -455,6 +478,8 @@ test.describe('judgments states',()=>{
         const timeline=dialog.getByRole('tab').nth(1);
         await timeline.click();
         await expect(timeline).toHaveAttribute('aria-selected','true');
+        await expect(dialog).toContainText(lang==='zh'?'输入 3 项':'inputs: 3');
+        await expect(dialog).toContainText(session);
         await assertNoRawCodes(dialog);
         await shot(page,`judgments-drawer-timeline-${vw}-${locale}`,false);
         await page.keyboard.press('Escape');

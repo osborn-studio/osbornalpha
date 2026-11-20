@@ -58,11 +58,11 @@ export function InputsDrawer({ card, initialTab = 'inputs', onClose }: { card: A
             <h2 id={titleId} className="text-base font-semibold">{card.display.headline[locale]}</h2>
             <p className="num mt-1 text-[11px] text-[var(--text-dim)]">{card.methodology.id}@{card.methodology.version} · {card.judgment_id.slice(0, 8)}… · {t('ui.drawer.registeredAt', { at: minute(card.registered_at) })}</p>
           </div>
-          <button type="button" ref={closeRef} aria-label={t('ui.drawer.close')} className="rounded p-1 text-[var(--text-dim)] hover:text-[var(--text)]" onClick={onClose}>✕</button>
+          <button type="button" ref={closeRef} aria-label={t('ui.drawer.close')} className="inline-flex min-h-11 min-w-11 items-center justify-center sm:min-h-0 sm:min-w-0 rounded p-1 text-[var(--text-dim)] hover:text-[var(--text)]" onClick={onClose}>✕</button>
         </header>
         <div role="tablist" aria-label={t('ui.drawer.tabs')} className="flex gap-1 border-b border-[var(--border)] px-4 text-sm">
-          <button type="button" role="tab" id={`${tabId}-inputs`} tabIndex={tab === 'inputs' ? 0 : -1} onKeyDown={tabKey} aria-selected={tab === 'inputs'} aria-controls={`${tabId}-inputs-panel`} className={`px-3 py-2 ${segmentClass(tab === 'inputs')}`} onClick={() => setTab('inputs')}>{t('ui.card.inputs', { count: rows.length })}</button>
-          <button type="button" role="tab" id={`${tabId}-timeline`} tabIndex={tab === 'timeline' ? 0 : -1} onKeyDown={tabKey} aria-selected={tab === 'timeline'} aria-controls={`${tabId}-timeline-panel`} className={`px-3 py-2 ${segmentClass(tab === 'timeline')}`} onClick={() => setTab('timeline')}>{t('ui.card.timeline')}</button>
+          <button type="button" role="tab" id={`${tabId}-inputs`} tabIndex={tab === 'inputs' ? 0 : -1} onKeyDown={tabKey} aria-selected={tab === 'inputs'} aria-controls={`${tabId}-inputs-panel`} className={`inline-flex min-h-11 items-center sm:min-h-0 px-3 py-2 ${segmentClass(tab === 'inputs')}`} onClick={() => setTab('inputs')}>{t('ui.card.inputs', { count: rows.length })}</button>
+          <button type="button" role="tab" id={`${tabId}-timeline`} tabIndex={tab === 'timeline' ? 0 : -1} onKeyDown={tabKey} aria-selected={tab === 'timeline'} aria-controls={`${tabId}-timeline-panel`} className={`inline-flex min-h-11 items-center sm:min-h-0 px-3 py-2 ${segmentClass(tab === 'timeline')}`} onClick={() => setTab('timeline')}>{t('ui.card.timeline')}</button>
         </div>
         <div className="flex-1 overflow-y-auto p-4">
           {failed && <p role="status" className="mb-3 text-xs text-[var(--text-muted)]">{t('ui.drawer.detailUnavailable')}</p>}

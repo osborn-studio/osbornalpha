@@ -18,7 +18,7 @@ export function JudgmentsContent({model,retry}:{model:JudgmentsState;retry:()=>v
     case 'off': content=<Callout><strong className="text-text">{t('emptyTitle')}</strong><p>{t('empty')}</p></Callout>;break;
     case 'none': content=<Callout>{t('none')}</Callout>;break;
     case 'loading': content=<div className="overflow-hidden"><LoadingGrid/></div>;break;
-    case 'cards': content=<div className="grid grid-cols-1 gap-3 md:grid-cols-2">{model.cards.map(c=><MarkCard kind="judgment" key={c.judgment_id}><JudgmentCard card={companyJudgmentCard(c)}/></MarkCard>)}</div>;break;
+    case 'cards': content=<div className="grid grid-cols-1 gap-3 md:grid-cols-2">{model.cards.map(c=><MarkCard kind="judgment" key={c.judgment_id}><JudgmentCard card={companyJudgmentCard(c)} subject={false}/></MarkCard>)}</div>;break;
     default: content=<div role="alert" className={`space-y-2 rounded-lg border bg-bg-elevated p-4 text-sm ${model.state==='failed'?'border-[var(--danger)] text-[var(--danger)]':'border-[var(--warn)] text-[var(--warn)]'}`}>
       <strong>{model.state==='failed'?t('loadFailed',{code:model.code}):t('replayFailed')}</strong>
       <p className="text-text-dim">{t(model.state==='failed'?'loadFailedBody':'replayFailedBody')}</p>

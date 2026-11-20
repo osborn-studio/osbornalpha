@@ -47,6 +47,7 @@ const forecast=galleryBase(1,'根据最新财务报告中的营收、毛利率�
 const calibrated=galleryBase(2,'股价上涨概率','Probability of a price increase');
 const hit=galleryBase(3,'股价如期上涨','Shares rose as forecast');
 const verdict=galleryBase(5,'估值判断','Valuation verdict');
+const regime=galleryBase(12,'宏观周期判断','Economic regime forecast');
 const score=galleryBase(6,'经营质量评分','Operating quality score');
 const range=galleryBase(7,'预期收益区间','Expected return range');
 export const judgmentGallery={...judgments,cards:[
@@ -57,10 +58,13 @@ export const judgmentGallery={...judgments,cards:[
  {...hit,lifecycle:'settled',outcome:'hit',calibration:'calibrated',display:{...hit.display,value:0.64,percent:64},settlement:{...settlement,outcome:'hit',realized:{value:true,label:'yes',unit:null,from:price.date,to:DAY,label_policy:'first_observed'}}},
  {...galleryBase(4,'回顾股价预测','Retrospective price forecast'),lifecycle:'settled',outcome:'miss',calibration:'failed',retrospective:true,calibration_summary:{...measured,ece_raw_holdout:0.12},settlement:{...settlement,outcome:'miss'}},
  {...verdict,judgment_type:'valuation_verdict',kind:'categorical',display:{...verdict.display,value:'undervalued'}},
+ {...regime,judgment_type:'macro_regime',kind:'categorical',display:{...regime.display,value:'recovery'},
+  methodology:{id:'macro_regime',version:'v2',title:{zh:'宏观周期',en:'Macro regime'},href:'/intel/methods/macro_regime/v2'},
+  condition:{text:{zh:'年末经济周期',en:'Economic regime at year end'},target:{kind:'fiscal_period',period_end:'2026-12-31',calendar:{anchor_period_end:'2025-12-31',months:3},extrapolated:true},horizon:{unit:'fiscal_quarters',n:4},label_policy:'first_observed',settle_after:'2027-01-01T00:00:00Z',settle_by:'2027-05-01T00:00:00Z'}},
  {...score,kind:'score',calibration:'evaluated',calibration_summary:{...measured,spearman:0.31},display:{...score.display,value:72,scale:{min:0,max:100},dims:[
   {id:'growth',label:{zh:'增长',en:'Growth'},value:70,coverage:true},{id:'profit',label:{zh:'盈利',en:'Profit'},value:74,coverage:true},{id:'cash',label:{zh:'现金流',en:'Cash flow'},value:null,coverage:false}]}},
  {...range,judgment_type:'return_range',kind:'interval',calibration:'self_assessed',display:{...range.display,value:[-0.05,0.12],nominal_coverage:0.8}},
- {...galleryBase(8,'数据缺失','Missing observations'),lifecycle:'abstained',abstain_reason:'input_unavailable',missing:['revenue','gross_margin']},
+ {...galleryBase(8,'数据缺失','Missing observations'),lifecycle:'abstained',abstain_reason:'input_unavailable',missing:['revenue','gross_margin','fixture_unknown_concept']},
  {...galleryBase(9,'报价失效','Invalid price observation'),lifecycle:'void',settlement:{...settlement,kind:'void',evidence_summary:{zh:'交易所撤销了原始报价。',en:'The exchange cancelled the original quote.'}}},
  {...galleryBase(10,'预测已撤回','Forecast withdrawn'),lifecycle:'withdrawn',settlement:{...settlement,kind:'withdrawn'}},
  {...galleryBase(11,'等待成交','Awaiting execution'),lifecycle:'pending_fill',display:{headline:{zh:'等待成交',en:'Awaiting execution'},value:0.25,band:'low'}},

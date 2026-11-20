@@ -364,6 +364,7 @@
       "title": "Settlement timeline",
       "registered": "Registered",
       "target": "Target",
+      "registeredDetail": "{method} · inputs: {count}",
       "targetDetail": "{target} · settle by {date}",
       "settledHit": "Settled · hit",
       "settledMiss": "Settled · miss",

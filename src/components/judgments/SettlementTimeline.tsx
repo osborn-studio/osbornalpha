@@ -3,7 +3,7 @@
 import { useLocale, useTranslations } from 'next-intl';
 import type { SettlementRow } from '@/lib/judgments/types';
 import type { WireCard as JudgmentCard } from './api-types';
-import { TONE, minute, timelineSteps } from './view-model';
+import { TONE, minute, timelineSteps, translateTarget } from './view-model';
 
 export function SettlementTimeline({ card, settlements }: { card: JudgmentCard; settlements?: SettlementRow[] }) {
   const t = useTranslations('judgments');
@@ -19,7 +19,7 @@ export function SettlementTimeline({ card, settlements }: { card: JudgmentCard; 
               <strong className={`text-sm ${s.tone === 'neutral' ? '' : TONE[s.tone]}`}>{t(s.key)}</strong>
               {s.at && <time className="num text-[11px] text-[var(--text-dim)]" dateTime={s.at}>{minute(s.at)}</time>}
             </div>
-            {(s.detailMsg || s.detail) && <p className="break-words text-xs text-[var(--text-dim)]">{s.detailMsg ? t(s.detailMsg.key, s.detailMsg.values) : s.detail}</p>}
+            {(s.detailMsg || s.detail) && <p className="break-words text-xs text-[var(--text-dim)]">{s.detailMsg ? t(s.detailMsg.key, s.target ? { ...s.detailMsg.values, target: translateTarget(s.target, t) } : s.detailMsg.values) : s.detail}</p>}
           </div>
         </li>
       ))}

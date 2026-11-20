@@ -364,6 +364,7 @@
       "title": "结算时间线",
       "registered": "登记",
       "target": "目标",
+      "registeredDetail": "{method} · 输入 {count} 项",
       "targetDetail": "{target} · 结算截止 {date}",
       "settledHit": "结算 · 命中",
       "settledMiss": "结算 · 未命中",
