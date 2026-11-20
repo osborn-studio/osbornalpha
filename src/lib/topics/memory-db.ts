@@ -1,4 +1,6 @@
 // In-memory topic function rules and public projections (spec §4.2–§4.9).
+import {publicLicenceRow} from './licences';
+import {maskedEntries} from './masking';
 import {randomUUID} from 'node:crypto';
 import {canonicalJson,sha256Hex} from '@/lib/evidence/hash';
 import {CATEGORIES,UNPUBLISH_REASONS,TopicsDbError,type TopicsDb,type TopicSnapshot} from './types';
@@ -58,7 +60,7 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
    else licences.push(row);
    audit(null,i.actor,'licence_change',{licence_id:id,status:row.status});return id;
   },
-  async publicLicenceStatus(ids){return settings.public_enabled?licences.filter(l=>ids.includes(l.licence_id)).map(({licence_id,status})=>({licence_id,status})):[];},
+  async publicLicenceStatus(ids){return settings.public_enabled?licences.filter(l=>ids.includes(l.licence_id)).map(publicLicenceRow):[];},
   async promotionOf(id){return copy(promotions.find(p=>p.topic_id===id)??null);},
   async recordPromotion(i){
    actor(i.actor);topic(i.topicId);
@@ -215,7 +217,12 @@ export function memoryTopicsDb():TopicsDb&{setPublicFlag(on:boolean):void;now(d:
   async publicOpen(){return settings.public_enabled;},
   async publicTopics(){return copy(publicTopics());},
   async publicTopicBySlug(slug){return copy(publicTopics().find(t=>t.topic_slug===slug)??null);},
-  async publicVersions(id){return settings.public_enabled?copy(versions.filter(v=>v.topic_id===id).sort((a,b)=>a.version_no-b.version_no).map(v=>({version_id:v.version_id,topic_id:v.topic_id,topic_slug:topic(id).topic_slug,version_no:v.version_no,cutoff:v.cutoff,published_at:v.published_at,supersedes_version_id:v.supersedes_version_id,unpublished_at:v.unpublished_at,unpublish_reason:v.unpublish_reason,snapshot_hash:v.snapshot_hash,snapshot:v.unpublished_at===null?v.snapshot:null}))):[];},
+  async publicVersions(id){
+   if(!settings.public_enabled)return [];
+   const rows=licences.map(publicLicenceRow);
+   return copy(versions.filter(v=>v.topic_id===id).sort((a,b)=>a.version_no-b.version_no).map(v=>({version_id:v.version_id,topic_id:v.topic_id,topic_slug:topic(id).topic_slug,version_no:v.version_no,cutoff:v.cutoff,published_at:v.published_at,supersedes_version_id:v.supersedes_version_id,unpublished_at:v.unpublished_at,unpublish_reason:v.unpublish_reason,snapshot_hash:v.snapshot_hash,snapshot:v.unpublished_at!==null?null:
+    'entries' in v.snapshot?{...v.snapshot,entries:maskedEntries(Array.isArray(v.snapshot.entries)?v.snapshot.entries:[],rows)}:v.snapshot})));
+  },
   async publicDrift(id){return settings.public_enabled&&versions.some(v=>v.version_id===id&&v.unpublished_at===null)?copy(drifts.filter(d=>d.version_id===id).sort((a,b)=>a.ordinal-b.ordinal)):[];},
  };
 }

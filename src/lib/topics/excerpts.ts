@@ -1,5 +1,4 @@
 import type {DraftEntry} from './types';
-import type {TopicSourceLicenceRow} from './database-types';
 export const EXCERPT_CAPS={zhChars:120,enWords:60,fragments:3} as const;
 export function httpsUrl(value:string){
  try{return value.startsWith('https://')&&new URL(value).protocol==='https:';}catch{return false;}
@@ -14,8 +13,12 @@ export function fragmentLength(text:string){
   enWords:(text.match(/[\p{Script=Latin}\d]+(?:['’][\p{Script=Latin}\d]+)*/gu)??[]).length};
 }
 type Excerpt=Extract<DraftEntry,{entry_type:'licensed_excerpt'}>;
+// Display requires an approved licence with explicit excerpt permission. Licences have no validity dates.
+export function excerptPermitted(licence:{status:string;permits:Record<string,unknown>}|undefined):boolean{
+ return licence?.status==='approved'&&licence.permits.display_excerpt===true;
+}
 export function excerptViolations(entry:Excerpt,licence:{status:string;permits:Record<string,unknown>}|undefined){
- if(licence?.status!=='approved'||licence.permits.display_excerpt!==true||!entry.fragments.length||entry.fragments.length>EXCERPT_CAPS.fragments)return ['excerpt_violation'];
+ if(!excerptPermitted(licence)||!entry.fragments.length||entry.fragments.length>EXCERPT_CAPS.fragments)return ['excerpt_violation'];
  const invalid=entry.fragments.some(f=>{
   const {zhChars,enWords}=fragmentLength(f.text);
   return !f.text.trim()||zhChars>EXCERPT_CAPS.zhChars||enWords>EXCERPT_CAPS.enWords||!f.attribution.trim()||!validDate(f.date)||!httpsUrl(f.url);
@@ -23,7 +26,7 @@ export function excerptViolations(entry:Excerpt,licence:{status:string;permits:R
  return invalid?['excerpt_violation']:[];
 }
 export type PublicEntry=DraftEntry|{key:string;entry_type:'licensed_excerpt';masked:true;reason:'licence_revoked';attributions:{attribution:string;url:string}[]};
-export function maskExcerpts(entries:DraftEntry[],statuses:ReadonlyMap<string,TopicSourceLicenceRow['status']>):PublicEntry[]{
- return entries.map(e=>e.entry_type==='licensed_excerpt'&&statuses.get(e.licence_id)!=='approved'?
+export function maskExcerpts(entries:PublicEntry[],allowed:ReadonlyMap<string,boolean>):PublicEntry[]{
+ return entries.map(e=>!('masked' in e)&&e.entry_type==='licensed_excerpt'&&allowed.get(e.licence_id)!==true?
   {key:e.key,entry_type:e.entry_type,masked:true,reason:'licence_revoked',attributions:e.fragments.map(({attribution,url})=>({attribution,url}))}:structuredClone(e));
 }

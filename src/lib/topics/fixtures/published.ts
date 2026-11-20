@@ -71,7 +71,11 @@ function deterministicDb():ReturnType<typeof memoryTopicsDb>{
   const method=Reflect.get(target,key);
   if(key==='now'||key==='setPublicFlag')return method;
   return async(...args:unknown[])=>{
-   const out:unknown=await Reflect.apply(method,target,args.map(a=>translate(a,reverse)));
+   const inputs=args.map(a=>translate(a,reverse)),input=inputs[0];
+   // The memory view checks licence IDs inside the serialized snapshot against its own rows.
+   if(key==='publish'&&input&&typeof input==='object'&&'snapshotText' in input&&typeof input.snapshotText==='string')
+    input.snapshotText=canonicalJson(translate(JSON.parse(input.snapshotText),reverse));
+   const out:unknown=await Reflect.apply(method,target,inputs);
    if((key==='recordDisclosure'||key==='setLicence')&&typeof out==='string')register(out);else visit(out);
    return translate(out,forward);
   };

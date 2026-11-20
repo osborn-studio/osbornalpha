@@ -1,7 +1,8 @@
 import type {TopicSourceLicenceRow} from './database-types';
-import {EXCERPT_CAPS,httpsUrl,validDate} from './excerpts';
+import {EXCERPT_CAPS,excerptPermitted,httpsUrl,validDate} from './excerpts';
 import {TopicError} from './errors';
 export type LicenceFields=Omit<TopicSourceLicenceRow,'licence_id'|'decided_by'|'decided_at'>;
+export const publicLicenceRow=(l:TopicSourceLicenceRow)=>({licence_id:l.licence_id,status:l.status,excerpt_allowed:excerptPermitted(l)});
 export function licenceForm(body:Record<string,unknown>):LicenceFields{
  const bad=(key:string):never=>{throw new TopicError('invalid_body:'+key);};
  const text=(key:string)=>{const v=body[key];return typeof v==='string'&&v.trim()?v.trim():bad(key);};

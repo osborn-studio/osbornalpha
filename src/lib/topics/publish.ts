@@ -1,5 +1,6 @@
 import {driftDetail,lastVerification} from '@/components/topics/admin/publish/publish-model';
 // Topic plan T6.4–T6.6: disclosure receipts, public previews and version transitions.
+import {publicLicenceRow} from './licences';
 import type {AdminDeps} from './admin-deps';
 import type {TopicRow,TopicVersionRow} from './database-types';
 import {assemble,type Assembled} from './assemble';
@@ -65,7 +66,7 @@ export async function previewDraft(d:AdminDeps,i:{topicId:string;actor:string}){
  const view:DossierDto['view']='current';
  const dossier={attributions:[...keys].sort(),topic:s.topic,version:{version_no,published_at:input.cutoff,cutoff:input.cutoff,is_current:true,superseded:false,unpublished_at:null,unpublish_reason:null},
   total_versions:versions.length+1,current_version_no:versions.find(v=>v.version_id===input.currentVersionId)?.version_no??null,view,replay_as_of:null,
-  sections:s.sections,evidence,expected_slots:s.expected_slots,entries:maskedEntries(s.entries,await d.db.licences()),summary,counts:s.counts,freshness_at_publication:s.freshness_at_publication,
+  sections:s.sections,evidence,expected_slots:s.expected_slots,entries:maskedEntries(s.entries,(await d.db.licences()).map(publicLicenceRow)),summary,counts:s.counts,freshness_at_publication:s.freshness_at_publication,
   stale:false,age_days:0,drift_checked_at:null,drift_unchecked:true};
  const difference=s.evidence.map(({ordinal,resolved},n)=>({ordinal,label:resolved.display.label,
   public:{state:resolved.state,text:previewText(resolved)},admin:{text:previewText(adminResolved[n])}}));
