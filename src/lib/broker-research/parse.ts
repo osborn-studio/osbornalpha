@@ -41,9 +41,14 @@ export async function runParse(deps:BrokerDeps,documentId:string,by:string,opts:
  let errorCode:string|null=null,ex:F3Artifact|null=null,artifactHash='';
  try{
   const bytes=await deps.storage.download(doc.storage_path);if(!bytes)throw new F3Error('f3_failed','pdf_missing');
+  if(opts.deadline.getTime()<=deps.now().getTime())throw new F3Timeout();
   ex=assertExtraction(await trackedPortWrite(deps,{documentId,prefix:brokerPaths.pagesPrefix(doc.sha256,runId),writer:'f3',lease:{token,ttlSeconds:LEASE_SECONDS}},
-   ()=>deps.f3.extractDocument({bytes,sha256:doc.sha256,outputPrefix:brokerPaths.artifactPrefix(doc.sha256,runId),pagesPrefix:brokerPaths.pagesPrefix(doc.sha256,runId)},
-    {deadline:opts.deadline,authorization:{licenceId:licence.licence_id,licenceVersion:licence.version,purpose:'broker_research'}})),doc.sha256);
+   async()=>{const remaining=opts.deadline.getTime()-deps.now().getTime();if(remaining<=0)throw new F3Timeout();
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const timeout=new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new F3Timeout()),remaining);});
+    try{return await Promise.race([timeout,deps.f3.extractDocument({bytes,sha256:doc.sha256,outputPrefix:brokerPaths.artifactPrefix(doc.sha256,runId),pagesPrefix:brokerPaths.pagesPrefix(doc.sha256,runId)},
+     {deadline:opts.deadline,authorization:{licenceId:licence.licence_id,licenceVersion:licence.version,purpose:'broker_research'}})]);}finally{clearTimeout(timer);}
+   }),doc.sha256);
   const artifact=new TextEncoder().encode(JSON.stringify(ex));artifactHash=sha(artifact);
   if(await trackedUpload(deps,{documentId,path,writer:'parse',body:artifact,contentType:'application/json',lease:{token,ttlSeconds:LEASE_SECONDS}})!=='stored')throw new F3Error('f3_failed','artifact_exists');
  }catch(e){errorCode=f3Code(e);}

@@ -12,7 +12,7 @@ import type {BrokerDeps} from './deps';
 import type {AnalystRow,ReportRow,RuleResult,TargetRow} from './types';
 
 export const TITLE_SURFACES=['title_original','title_public','title_zh','title_en'] as const;
-export interface RulesOutcome{receiptId:string;results:RuleResult[];quarantined:number;warnings:number;blockingFailures:number;unverifiedFieldIds:string[];infoCodes:string[]}
+export interface RulesOutcome{receiptId:string;inputHash:string;results:RuleResult[];quarantined:number;warnings:number;blockingFailures:number;unverifiedFieldIds:string[];infoCodes:string[]}
 type RulesDeps=Pick<BrokerDeps,'db'|'storage'|'tables'|'codeVersion'>;
 export async function boundAnalysts(deps:Pick<BrokerDeps,'db'>,report:ReportRow):Promise<AnalystRow[]>{
  const bound=await deps.db.listReportAnalysts(report.report_id);if(!bound.length)return [];
@@ -55,6 +55,6 @@ export async function applyRules(deps:RulesDeps,reportId:string,o:{batchId:strin
  const receiptId=await deps.db.insertRuleReceipt({report_id:reportId,rules_version:RULES_VERSION,input_hash:report.rules_input_hash,results,code_version:deps.codeVersion});
  for(const q of out.quarantines)await quarantine(deps.tables,{dataset:QUARANTINE_DATASET,table:QUARANTINE_TABLE,naturalKey:q.naturalKey,reasonCode:q.reasonCode,payload:q.payload,
   detail:{report_id:reportId,receipt_id:receiptId,rules_version:RULES_VERSION,rule:q.rule},batchId:o.batchId});
- return {receiptId,results,quarantined:out.quarantines.length,warnings:out.results.filter(r=>r.rule==='horizon_present_with_target'&&!r.passed).length,
+ return {receiptId,inputHash:report.rules_input_hash,results,quarantined:out.quarantines.length,warnings:out.results.filter(r=>r.rule==='horizon_present_with_target'&&!r.passed).length,
   blockingFailures:results.filter(r=>!r.passed&&r.blocking).length,unverifiedFieldIds:out.unverifiedFieldIds,infoCodes:out.infoCodes};
 }
