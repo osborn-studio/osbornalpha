@@ -59,12 +59,15 @@ function replay(i:IntentRow,dupId?:string):never{
  if(i.error_code==='document_withdrawn')throw gone();
  throw conflict('intent_mismatch',{reason:i.error_code??i.status});
 }
+async function requireLicence(deps:UploadDeps,i:IntentRow):Promise<void>{
+ const licence=await deps.db.getLicence(i.licence_id);
+ if(!licence||!licenceConfirmed(licence,utcToday(deps.now())))throw conflict('licence_unconfirmed');
+}
 export async function commitIntent(deps:UploadDeps,intentId:string,by:string):Promise<{documentId:string;status:'committed'}>{
  let i=await reload(deps,intentId);
  if(i.created_by!==by)throw conflict('intent_mismatch',{reason:'owner'});
  if(i.status!=='committed'&&i.status!=='expired'&&i.status!=='abandoned'){
-  const licence=await deps.db.getLicence(i.licence_id);
-  if(!licence||!licenceConfirmed(licence,utcToday(deps.now())))throw conflict('licence_unconfirmed');
+  await requireLicence(deps,i);
  }
  for(let step=0;step<8;step++){
   switch(i.status){
@@ -86,6 +89,7 @@ export async function commitIntent(deps:UploadDeps,intentId:string,by:string):Pr
    case 'validated':{
     const docId=i.document_id??intentId;
     if(!await deps.db.getDocument(docId)){
+     await requireLicence(deps,i);
      const inserted=await deps.db.insertDocument({document_id:docId,sha256:i.sha256,storage_path:brokerPaths.report(i.sha256),byte_size:i.byte_size,licence_id:i.licence_id,uploaded_by:i.created_by,original_filename:i.original_filename});
      if(inserted==='duplicate'){
       const other=await deps.db.findDocumentBySha(i.sha256);
@@ -115,6 +119,7 @@ async function promote(deps:UploadDeps,i:IntentRow,by:string):Promise<void>{
  }
  const replacement=doc.status==='withdrawn'&&doc.withdrawn_reason==='promotion_lost'&&doc.purged_at===null;
  if(doc.status==='withdrawn'&&!replacement){await deps.db.transitionIntent(i.intent_id,'promoting','abandoned',{error_code:'document_withdrawn'});throw gone();}
+ await requireLicence(deps,i);
  const m=await deps.storage.move(i.staging_path,reportPath);
  if(m==='target_exists')await deps.storage.remove([i.staging_path]);
  if(m==='missing'&&!await deps.storage.exists(reportPath)){

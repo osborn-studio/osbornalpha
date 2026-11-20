@@ -182,6 +182,7 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   async getReport(id){const r=await maybe(from('broker_research_reports').select('*').eq('report_id',id));return r?reportFromRow(r):null;},
   async reportByDocument(id){const r=await maybe(from('broker_research_reports').select('*').eq('document_id',id));return r?reportFromRow(r):null;},
   async listReports(opts){return (await pageAll(()=>from('broker_research_reports').select('*').eq('institution_id',opts.institutionId).order('created_at').order('report_id'))).map(reportFromRow);},
+  async bindReport(id,patch,analyst){return receiptFrom(await call('broker_report_bind',{p_report_id:id,p_patch:patch,p_analyst:analyst}));},
   async updateReportDraft(id,patch){const p=dropUndefined(patch);if(Object.keys(p).length)await run(from('broker_research_reports').update(p).eq('report_id',id));},
   async setReportFlags(id,flags){const p=dropUndefined(flags);if(Object.keys(p).length)await required(from('broker_research_reports').update(p).eq('report_id',id).select('report_id'),'report');},
   async extractCommit(documentId,token,runId,rows){return receiptFrom(await call('broker_extract_commit',{p_document_id:documentId,p_lease_token:token,p_run_id:runId,p_rows:rows}));},
@@ -206,6 +207,7 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   async extractSetScope(documentId,token,runId,scope){return receiptFrom(await call('broker_extract_set_scope',{p_document:documentId,p_token:token,p_run:runId,p_scope:scope}));},
   async extractFinalize(documentId,token,runId,detail){await call('broker_extract_finalize',{p_document:documentId,p_token:token,p_run:runId,p_detail:detail});return 'ok';},
   async insertSummary(row){return String((await run<R>(from('broker_report_summaries').insert(row).select('summary_id').single())).summary_id);},
+  async approveSummary(id,by,check){await call('broker_summary_approve',{p_summary_id:id,p_by:by,p_check:check});},
   async setSummaryStatus(id,patch){await run(from('broker_report_summaries').update(dropUndefined(patch)).eq('summary_id',id));},
   async getSummary(id){const r=await maybe(from('broker_report_summaries').select('*').eq('summary_id',id));return r?summaryFromRow(r):null;},
   async listSummaries(reportId){return (await pageAll(()=>from('broker_report_summaries').select('*').eq('report_id',reportId).order('generated_at').order('summary_id'))).map(summaryFromRow);},
@@ -213,7 +215,9 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
   async disclosureDigest(id){return String(await call('broker_report_disclosure_digest',{p_report_id:id}));},
   async disclosureRecheck(id,by,checks){const x=await call<R>('broker_report_disclosure_recheck',{p_report_id:id,p_by:by,p_checks:checks});return {restored:x.restored===true,failures:((x.failures??[]) as unknown[]).map(String)};},
   async publish(id,by){return {publicationId:String(await call('broker_report_publish',{p_report_id:id,p_by:by}))};},
+  async unpublishLogged(id,by,reason){await call('broker_report_unpublish_logged',{p_report_id:id,p_by:by,p_reason:reason});},
   async unpublish(id,by,reason){await call('broker_report_unpublish',{p_report_id:id,p_by:by,p_reason:reason});},
+  publicationSnapshotOk:id=>call('broker_publication_snapshot_ok',{p_publication:id}),
   async getPublication(id){const r=await maybe(from('broker_report_publications').select('*').eq('publication_id',id));return r?publicationFromRow(r):null;},
   async upsertInstitution(row){
    if(row.institution_id){

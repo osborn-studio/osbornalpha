@@ -112,6 +112,42 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    expect((await db.listLicences()).some(x=>x.licence_id===l.licence_id)).toBe(true);
   });
 
+  it('unpublishLogged commits one reason with the revision or leaves both unchanged',async()=>{
+   const w=await ready(),log=()=>db.listAccessLog({documentId:w.doc,limit:10});
+   expect(await code(db.unpublishLogged(w.rep,by,'reason'))).toBe('report_not_published');expect(await log()).toEqual([]);
+   await db.publish(w.rep,by);const before=await db.getReport(w.rep);
+   expect(await code(db.unpublishLogged(w.rep,by,' '))).toBe('reason_required');expect(await db.getReport(w.rep)).toEqual(before);expect(await log()).toEqual([]);
+   await db.unpublishLogged(w.rep,by,'reason');expect(await db.getReport(w.rep)).toMatchObject({status:'draft',revision:before!.revision+1});
+   expect(await log()).toEqual([expect.objectContaining({document_id:w.doc,user_id:by,action:'unpublish',detail:{report_id:w.rep,reason:'reason'}})]);
+  });
+
+  it('approveSummary preserves the prior approval when the replacement fails',async()=>{
+   const w=await world(),input_hash=(await db.getReport(w.rep))!.summary_input_digest!;
+   const draft=()=>db.insertSummary({report_id:w.rep,lang:'en',kind:'independent_summary',run_id:w.ext,input_hash,summary_md:'S',max_verbatim_overlap:1,numeric_grounding:{version:'grounding/1',passed:true,assertions:[],failures:[]},disclosure_check:PASS_CHECK,status:'draft'});
+   const x=await draft(),y=await draft();await db.setSummaryStatus(x,{status:'approved',approved_by:by});
+   const before=await db.listSummaries(w.rep);
+   expect(await code(db.approveSummary(y,by,{...PASS_CHECK,passed:false}))).toBe('disclosure_failed');expect(await db.listSummaries(w.rep)).toEqual(before);
+   await db.approveSummary(y,by,PASS_CHECK);
+   expect(await db.getSummary(x)).toMatchObject({status:'draft',approved_by:null});
+   expect((await db.listSummaries(w.rep)).filter(s=>s.status==='approved').map(s=>s.summary_id)).toEqual([y]);
+  });
+
+  it('bindReport materializes the binding and rolls back invalid edits',async()=>{
+   const w=await ready(),af=(await db.insertHumanField(w.rep,{target_key:null,field:'analyst',occurrence:1,value_text:'Ann',value_num:null,value_currency:null,value_unit:null,value_date:null,page:1,char_start:0,char_end:3,value_source_text:'Ann',parse_run_id:w.parse,status:'confirmed'},by)).fieldId;
+   const analyst={analyst_id:await db.upsertAnalyst({institution_id:w.inst,display_name:'Ann',name_variants:[],public_display:false}),field_id:af,role:'lead'};
+   const receipt=await db.bindReport(w.rep,{report_type:'Initiation'},analyst);
+   expect(receipt.materializedHash).toBeTruthy();expect(await db.publishBlockers(w.rep)).not.toContain('materialize_stale');
+   expect(await db.listReportAnalysts(w.rep)).toEqual([{report_id:w.rep,...analyst}]);expect(await db.getReport(w.rep)).toMatchObject({report_type:'Initiation'});
+   expect(await code(db.bindReport(w.rep,{report_type:null},{...analyst,field_id:(await db.listFields(w.rep)).find(f=>f.field==='title')!.field_id}))).toBe('analyst_field_mismatch');
+   expect(await db.getReport(w.rep)).toMatchObject({report_type:'Initiation'});
+   expect(await code(db.bindReport(w.rep,{review_status:'approved'} as never,null))).toBe('invalid_payload');
+  });
+
+  it('publicationSnapshotOk verifies a fresh publication and returns null for an unknown id',async()=>{
+   const w=await ready(),p=await db.publish(w.rep,by);
+   expect(await db.publicationSnapshotOk(p.publicationId)).toBe(true);expect(await db.publicationSnapshotOk(randomUUID())).toBeNull();
+  });
+
   it('intents: compare-and-set transitions stamp checkpoint_at; an illegal move is intent_transition_invalid',async()=>{
    const l=await db.insertLicence(licenceInput());const id=randomUUID();
    await db.insertIntent({intent_id:id,sha256:hex64(),byte_size:10,licence_id:l.licence_id,original_filename:'a.pdf',created_by:by,expires_at:new Date(Date.now()+7200e3).toISOString(),status:'open',staging_path:`staging/${id}.pdf`,document_id:null});

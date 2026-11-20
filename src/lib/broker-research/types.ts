@@ -163,6 +163,7 @@ export interface BrokerResearchDb{
  getReport(reportId:string):Promise<ReportRow|null>;
  reportByDocument(documentId:string):Promise<ReportRow|null>;
  listReports(opts:{institutionId:string}):Promise<ReportRow[]>;                                    // every status; R7 peers
+ bindReport(reportId:string,patch:Partial<Pick<ReportRow,'institution_id'|'scope'|'report_type'|'primary_target_key'|'supersedes_report_id'|'title_public'|'title_public_by'>>,analyst:Omit<ReportAnalystRow,'report_id'>|null):Promise<MaterializeReceipt>;
  updateReportDraft(reportId:string,patch:Partial<Pick<ReportRow,'scope'|'institution_id'|'report_type'|'primary_target_key'|'supersedes_report_id'|'title_public'|'title_public_by'|'title_zh'|'title_en'|'title_run_id'|'review_status'|'disclosure_ok'|'evidence_ok'>>):Promise<void>;
  setReportFlags(reportId:string,flags:{evidence_ok?:boolean;disclosure_ok?:boolean}):Promise<void>;   // draft or published (reports_guard k_live); verify cron, restore
  extractCommit(documentId:string,leaseToken:string,runId:string,rows:CandidateFieldInput[]):Promise<MaterializeReceipt>;   // rpc broker_extract_commit
@@ -189,6 +190,7 @@ export interface BrokerResearchDb{
  /** rpc broker_extract_finalize: under the lease, finish the extract run succeeded (detail merged) and release the lease, one transaction. */
  extractFinalize(documentId:string,token:string,runId:string,detail:Record<string,unknown>):Promise<'ok'>;
  insertSummary(row:Omit<SummaryRow,'summary_id'|'approved_by'|'approved_at'|'generated_at'|'draft_reason'>):Promise<string>;
+ approveSummary(summaryId:string,by:string,check:DisclosureCheck):Promise<void>;
  setSummaryStatus(summaryId:string,patch:{status:TextStatus;disclosure_check?:DisclosureCheck;approved_by?:string|null}):Promise<void>;
  getSummary(summaryId:string):Promise<SummaryRow|null>;
  listSummaries(reportId:string):Promise<SummaryRow[]>;
@@ -198,7 +200,9 @@ export interface BrokerResearchDb{
  /** rpc broker_report_disclosure_recheck (spec §4.11 重跑规则; P-R1-08): verifies expected_digest is current, applies the title policy, checks APPROVED snippets/summaries only, restores disclosure_ok=true; failures change nothing. */
  disclosureRecheck(reportId:string,by:string,checks:DisclosureRecheckInput):Promise<{restored:boolean;failures:string[]}>;                                               // rpc broker_report_disclosure_digest (P-R1-04)
  publish(reportId:string,by:string):Promise<{publicationId:string}>;
+ unpublishLogged(reportId:string,by:string,reason:string):Promise<void>;
  unpublish(reportId:string,by:string,reason:string):Promise<void>;
+ publicationSnapshotOk(publicationId:string):Promise<boolean|null>;
  getPublication(publicationId:string):Promise<PublicationRow|null>;
  // entities
  upsertInstitution(row:Omit<InstitutionRow,'institution_id'|'created_at'>&{institution_id?:string}):Promise<string>;
