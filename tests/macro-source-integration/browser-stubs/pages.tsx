@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { NextIntlClientProvider } from 'next-intl';
+import MacroLayout from '../../../src/app/(app)/macro/layout';
 import SeriesPage from '../../../src/app/(app)/macro/[seriesId]/page';
 import HistoryPage from '../../../src/app/(app)/macro/history/page';
 import TransmissionPage from '../../../src/app/(app)/macro/transmission/page';
@@ -39,6 +40,7 @@ export async function fixturePage(input: FixturePageInput) {
     page = await ReviewMonthPage({ params: Promise.resolve({ region, month }) });
   } else if (/^\/intel\/macro\/[^/]+$/.test(path)) page = await SeriesPage({ params: Promise.resolve({ seriesId: decodeURIComponent(path.split('/').at(-1)!) }) });
   else notFound();
+  if (path !== '/fixture/source') page = <MacroLayout>{page}</MacroLayout>;
   return <NextIntlClientProvider locale="en" messages={{ macro, macroStrategy, research }} timeZone="UTC" now={new Date('2026-11-07T12:00:00Z')}>
     <div data-fixture-only="true"><HydrationMarker /><p role="note">Synthetic fixture harness · real page components · simulated framework routing and capability gates</p>{page}</div>
   </NextIntlClientProvider>;
