@@ -5,6 +5,9 @@
 // tests; route code calls applyGate directly so this double replaces it): no fact / no evidence record → evidence_incomplete; CN non-admin without a linked filing AND a PDF locator
 // → citation_pending; admin exempts only the CN conditions. Never imported by application code.
 import {vi} from 'vitest';
+import {randomUUID} from 'node:crypto';
+import {memoryFactsDb,type MemoryFactsDb} from '@/lib/facts/memory-facts-db';
+import {filingSummaryOf} from './snapshot-read';
 import {memoryTableClient} from '@/lib/db/memory-table-client';
 import type {TableClient} from '@/lib/db/table-client';
 import {rawHashOf} from '@/lib/facts/providers/shared';
@@ -103,4 +106,55 @@ export const realRecord=(f:FactRow):EvidenceRecord=>record(f.fact_id,{raw_hash:f
 export function realEvidence(deps:KitDeps,facts:FactRow[]):void{
  const by=new Map(facts.map(f=>[f.fact_id,f]));
  (deps.company.evidenceOf as unknown as ReturnType<typeof vi.fn>).mockImplementation(async(ids:string[])=>new Map(ids.filter(id=>by.has(id)&&!deps.noEvidence.has(id)).map(id=>[id,realRecord(by.get(id)!)])));
+}
+
+/** Single-member byte pins share one annual income statement and one materialized headline. */
+export function seedPinnedCompany(deps:KitDeps){
+ const revenue=fact({fact_id:HEADLINE_FACT,value:'100',value_text:'100'});
+ const gross=fact({fact_id:kid(3),concept:'gross_profit',source_concept:'GrossProfit',value:'40',value_text:'40'});
+ const filing=summary({factCount:2});
+ vi.mocked(deps.snapshot).mockResolvedValue(emptySnapshot({rows:[revenue,gross],filings:[filing]}));
+ vi.mocked(deps.facts.factsByIds).mockResolvedValue([revenue]);
+ vi.mocked(deps.facts.filingsOfIssuer).mockResolvedValue([filingRow({url:filing.url})]);
+ vi.mocked(deps.company.eventsOfIssuer).mockResolvedValue({rows:[eventRow({natural_key:'2022-09-25:2023-09-30:12M',
+  payload:{periodStart:revenue.period_start,periodEnd:revenue.period_end,duration:'12M',filingId:FIL_US,conceptCount:2,
+   headline:{revenue:{factId:HEADLINE_FACT,value:'100',unit:'USD'}},ambiguousUnits:[]}})],nextCursor:null});
+}
+
+export const companyMembers=[OLD,US].sort();
+export const memberFilingUrl=(r:FactRow)=>`https://www.sec.gov/${r.issuer_id}/${r.filing_id}`;
+export function memberSnapshotOf(db:MemoryFactsDb):ReadDeps['snapshot']{
+ return async(member,market,{asOf})=>{
+  const filings=await db.filingsOfIssuer(member,market,{to:asOf});
+  const [rev]=await db.stateRevs([member],market);
+  return emptySnapshot({stateRev:rev.state_rev,filings:filings.filter(f=>f.mapping_gen>0).map(f=>
+   filingSummaryOf(f,db.facts().filter(r=>r.filing_id===f.filing_id&&r.status==='ok'&&r.mapping_gen===f.mapping_gen).length))});
+ };
+}
+/** Publish each disclosure independently so the target and predecessor have distinguishable revisions. */
+export async function seedCompanyHistory(deps:KitDeps,scenario:'chain'|'overlap'|'units'='chain'){
+ const db=memoryFactsDb(),rows:FactRow[]=[];
+ type Disclosure=[owner:string,year:number,date:string,value:string,unit?:string];
+ const disclosures:Disclosure[]=[[OLD,2021,'2021-11-01','50'],[OLD,2022,'2022-11-01','80']];
+ if(scenario==='overlap')disclosures.push([OLD,2023,'2023-11-01','100'],[US,2023,'2024-11-01','110'],
+  [OLD,2024,'2024-12-01','991'],[US,2024,'2024-12-01','992']);
+ else disclosures.push([US,2023,'2023-11-01','100']);
+ if(scenario==='units')disclosures.push([OLD,2023,'2023-10-15','765','EUR']);
+ await db.reconcileScope('US',companyMembers.map(issuer_id=>({issuer_id,reasons:[],priority:1,fetch_key:'test'})));
+ for(const [owner,year,date,value,unit='USD'] of disclosures){
+  const batch=randomUUID(),filingId=randomUUID();
+  await db.claimLease(owner,'US',batch,60);
+  const run=await db.beginRun(owner,'US',batch,1);
+  const row=realFact({issuer_id:owner,run_id:run,filing_id:filingId,period_start:`${year-1}-10-01`,period_end:`${year}-09-30`,
+   available_date:date,value,value_text:value,unit});
+  await db.stageFilings(run,[{filing_id:filingId,issuer_id:owner,sourceRef:filingId,market:'US',source:'edgar',origin:'sec',
+   formType:'10-K',fiscalYear:year,fiscalPeriod:'FY',periodEnd:row.period_end,availableDate:date,url:memberFilingUrl(row)}]);
+  await db.stageFacts(run,[{...row,consolidation:'consolidated'}]);await db.publishRun(run,[filingId]);
+  await db.releaseLease(owner,'US',batch,'success',date);rows.push(row);
+ }
+ db.setTopology({[OLD]:{status:'merged',merged_into:US}});
+ deps.facts=db;vi.mocked(deps.snapshot).mockImplementation(memberSnapshotOf(db));
+ vi.mocked(deps.company.evidenceOf).mockImplementation(async ids=>new Map(rows.filter(r=>ids.includes(r.fact_id)).map(r=>
+  [r.fact_id,{...realRecord(r),run_id:r.run_id,snapshot_path:`edgar/${r.issuer_id}/${REAL_SHA}.json`}])));
+ return {db,rows,stateRevs:await db.stateRevs(companyMembers,'US'),read:vi.spyOn(db,'readFactsLineage')};
 }

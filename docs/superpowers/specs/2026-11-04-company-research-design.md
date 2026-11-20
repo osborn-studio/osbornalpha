@@ -768,7 +768,7 @@ interface JudgmentCard {
 | §12.3 第 6 条 | 断言无 K 线、无行情行（决策 J 默认） | 规格原文是批准例外时的断言 |
 | §1.1 / §12.3 #3 | FY2023 revenue 的 “latest is seq 2” 仅对 2024-11-01 至 2025-10-31 前的 asOf 成立；第二请求固定 `asOf=2025-06-30`，seq 2、非修订 | 录制夹具另含 2025-10-31 第三次披露；今日为 seq 3 |
 | §5.4 / §12.3 #3–4 回放估值 | “hidden in replay” 指保留估值 section，以“回放模式下不运行估值模型”提示替换 DcfStudio；无 asOf 时显示模型 | e2e 在 metrics 页签分别验证回放提示和当前模型 |
-| §6 合并发行人读取 | statements / drawer / overview / packet 仍读单一发行人，不并入合并前身事实；metrics proxy 已按 lineage 读取 | 已知缺口（实施日志“合并 main 后的兼容”）；补齐需要 lineage 版同快照读函数与新迁移 |
+| §6 合并发行人读取 | filings / metrics / statements / drawer（#191）与 overview / packet / events（R3，`src/lib/company/lineage-read.ts`）均按当前 lineage 读取：`read_facts_lineage` 包络 + 逐成员 filings 快照，成员与 rev 向量围栏，逐事实按原发行人过门槛；单成员走原路径，响应字节不变。多成员时 events 与 overview 的近期事件一律由 lineage 包络实时派生（`computed:'live'`）。来源字段仅多成员出现：`lineage` / `stateRevs` / `conflicts` / `factOwners`，packet 在前身持有的值上内联 `issuerId` | 未做（均需迁移或设计）：合并无日期，`asOf` 只约束事实与 filings，成员取当前值；物化 `issuer_events`、收件箱、未读数、`issuer_coverage` 仍按单一发行人；前身数值的 UI 标记未定义 |
 | §12.3 第 11 条 | 直接写 `NEXT_LOCALE=en` cookie，不驱动设置页 | 设置页 DOM 不在本模块范围 |
 | §12.0 / §0 #72 | 夹具清单三条期望值保持 `pending`，测试与 e2e 跳过并列出；"6×2×6"矩阵未宣称通过 | 期望值必须人工抄录；删除无消费者的 `aapl-recent-10-filings` / `aapl-revenue-fy2023-current`，保留四个夹具、三条期望 |
 | §4.6 / §0.1 证据写入 | 新增第三份已锁迁移 `20261118092000_company_evidence_fence.sql`，`replace_company_fact_evidence(uuid,text,bigint,bigint,jsonb)` 五参、尝试与版本围栏 | Task 2 Codex 挑战：证据替换无尝试/版本围栏，旧尝试可能覆盖新证据 |

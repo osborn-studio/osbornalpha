@@ -4,6 +4,9 @@
 // on the SAME envelope, never the materialized table) and latestFiling (that snapshot's filings).
 // Without asOf the recent events are the materialized ones (≤ 3); with asOf the envelope reads every
 // concept and the events are derived live from it. All values gated.
+// Merged issuers read a fenced lineage for headlines and always derive recent events live.
+import type {LineageRead} from '../lineage-read';
+import {lineageMembers,readLineage,withLineageRetry} from '../lineage-read';
 import {resolveIssuer} from '@/lib/entities/resolve';
 import type {ResolvedIssuer} from '@/lib/entities/resolve';
 import {DERIVE_CONCEPTS,deriveMetrics} from '@/lib/facts/derive';
@@ -14,7 +17,7 @@ import {eventFactIds,toPublicEvent} from '../event-dto';
 import type {PublicEvent} from '../event-dto';
 import {deriveIssuerEvents} from '../events';
 import {buildGated,cellFactIds,countWithheld,gateCell} from '../route';
-import type {Handler} from '../route';
+import type {Handler,RouteCtx} from '../route';
 import {derivedCellOf,factCellOf,periodKeyOf} from '../statements-grid';
 import type {Cell,CoverageRow,EventInput,EventRow,EvidenceDto,FilingSummary,OverviewUnavailableReasons,WithheldCounts} from '../types';
 
@@ -23,7 +26,10 @@ export const HEADLINE:Record<Market,readonly string[]>={US:['revenue','net_incom
 const DERIVED=['gross_margin','revenue_yoy'] as const;
 const DUR_RANK:Record<string,number>={'12M':4,'9M':3,'6M':2,'3M':1};
 export interface LatestBlock{periodKey:string|null;facts:Record<string,Cell>;derived:Record<string,Cell>;stateRev:number;truncated:boolean;unavailableReasons?:OverviewUnavailableReasons}
-export interface OverviewDto{issuer:ResolvedIssuer|null;ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;latest:LatestBlock|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+export interface OverviewDto{issuer:ResolvedIssuer|null;ticker:string;market:Market;asOf:string;coverage:CoverageRow|null;coverageOtherMarket:CoverageRow|null;latestFiling:FilingSummary|null;latest:LatestBlock|null;recentEvents:PublicEvent[];eventsComputed:'materialized'|'live';evidence:Record<string,EvidenceDto>;withheld:WithheldCounts;
+ /** present only for a multi-member lineage */
+ lineage?:string[];stateRevs?:LineageRead['stateRevs'];conflicts?:LineageRead['conflicts'];factOwners?:Record<string,string>
+}
 
 type AmbiguityCandidates={facts:Record<string,string[]>;derived:Record<string,string[]>};
 /** Candidate IDs stay internal. One candidate per distinct unit excludes same-unit conflicts. */
@@ -50,6 +56,10 @@ export function latestBlock(rows:FactRow[],market:Market,asOf:string,stateRev:nu
  return selectLatest(rows,market,asOf,stateRev)?.block??null;
 }
 export const overviewHandler:Handler=async(ctx)=>{
+ const lineage=await lineageMembers(ctx);
+ return lineage.length>1?withLineageRetry('overview',()=>overviewLineage(ctx)):overviewSingle(ctx);
+};
+const overviewSingle=async(ctx:RouteCtx)=>{
  const {issuer,deps,asOf}=ctx;const live=ctx.asOfGiven;
  const [snap,resolved,coverage]=await Promise.all([
   deps.snapshot(issuer.issuerId,issuer.market,{concepts:live?null:[...DERIVE_CONCEPTS[issuer.market]],asOf,history:true}),
@@ -84,6 +94,42 @@ export const overviewHandler:Handler=async(ctx)=>{
  const body:OverviewDto={issuer:resolved,ticker:issuer.ticker,market:issuer.market,asOf,
   coverage:coverage.find(c=>c.market===issuer.market)??null,coverageOtherMarket:coverage.find(c=>c.market!==issuer.market)??null,
   latestFiling,latest:gatedLatest,recentEvents,eventsComputed:live?'live':'materialized',evidence:Object.fromEntries(Object.entries(g.evidence).filter(([id])=>visibleIds.has(id))),
+  withheld:countWithheld([...(gatedLatest?[...Object.values(gatedLatest.facts),...Object.values(gatedLatest.derived)]:[]),...eventIds.map(id=>g.withheld(id))])};
+ const empty=!latest&&recentEvents.length===0&&coverage.length===0;
+ return {body,empty,cacheControl:!empty&&asOf===ctx.today?CURRENT_COMPANY_CACHE_CONTROL:undefined};
+};
+const overviewLineage=async(ctx:RouteCtx)=>{
+ const {asOf,deps,asOfGiven:live}=ctx;
+ const L=await readLineage(ctx,{concepts:live?null:[...DERIVE_CONCEPTS[ctx.issuer.market]],asOf,history:true});if(!L)return null;
+ const {issuer}=L;
+ const [resolved,coverage]=await Promise.all([resolveIssuer(deps.tables,{ticker:issuer.ticker},{today:ctx.today}),deps.publicCompany.coverageOf([issuer.issuerId])]);
+ const latestFiling=L.filings[0]??null;
+ const selection=L.truncated?null:selectLatest(L.relabelled(L.rows),issuer.market,asOf,L.targetRev);
+ const latest:LatestBlock|null=L.truncated?{periodKey:null,facts:{},derived:{},stateRev:L.targetRev,truncated:true}:selection?.block??null;
+ const eventRead=live?L:await L.read({concepts:null,asOf,history:true});if(!eventRead)return null;
+ const events=eventRead.truncated?[]:deriveIssuerEvents({rows:eventRead.rows,filings:L.filings,cutoff:asOf})
+  .map(e=>({e,eventId:eventIdOf(issuer.issuerId,issuer.market,e.kind,e.natural_key)}))
+  .sort((x,y)=>x.e.occurred_on<y.e.occurred_on?1:x.e.occurred_on>y.e.occurred_on?-1:x.eventId<y.eventId?-1:1).slice(0,3);
+ const cells=latest?[...Object.values(latest.facts),...Object.values(latest.derived)]:[];
+ const visibleIds=new Set([...cells.flatMap(cellFactIds),...events.flatMap(x=>eventFactIds(x.e))]);
+ const candidates=selection?.candidates??{facts:{},derived:{}};
+ const diagnosticIds=[...Object.values(candidates.facts),...Object.values(candidates.derived)].flat();
+ const g=await buildGated(L.gateCtx,[...visibleIds,...diagnosticIds],eventRead===L?L.rows:[...L.rows,...eventRead.rows],L.filings);
+ if(!await L.stable())return null;
+ const gatedLatest=latest&&{...latest,facts:Object.fromEntries(Object.entries(latest.facts).map(([k,c])=>[k,gateCell(c,g)])),derived:Object.fromEntries(Object.entries(latest.derived).map(([k,c])=>[k,gateCell(c,g)]))};
+ // One gate read for visible and suppressed inputs. All candidates must pass; a visible subset
+ // cannot establish the reason. Diagnostic-only evidence and counts stay out of the public DTO.
+ if(gatedLatest&&diagnosticIds.length){
+  const confirmed=(group:Record<string,string[]>):Record<string,'multiple_units'>=>Object.fromEntries(
+   Object.entries(group).filter(([,inputs])=>inputs.length>0&&inputs.every(id=>g.reasonOf(id)===null)).map(([key])=>[key,'multiple_units']));
+  const reasons:OverviewUnavailableReasons={facts:confirmed(candidates.facts),derived:confirmed(candidates.derived)};
+  if(Object.keys(reasons.facts).length||Object.keys(reasons.derived).length)gatedLatest.unavailableReasons=reasons;
+ }
+ const recentEvents=events.map(x=>toPublicEvent({e:x.e,eventId:x.eventId,issuerId:issuer.issuerId,market:issuer.market},g.eligibility,x.e.filing_id?g.filings.get(x.e.filing_id):undefined));
+ const eventIds=[...new Set(events.flatMap(x=>eventFactIds(x.e)))];
+ const body:OverviewDto={issuer:resolved,ticker:issuer.ticker,market:issuer.market,asOf,
+  coverage:coverage.find(c=>c.market===issuer.market)??null,coverageOtherMarket:coverage.find(c=>c.market!==issuer.market)??null,
+  latestFiling,latest:gatedLatest,recentEvents,eventsComputed:'live',lineage:L.lineage,stateRevs:L.stateRevs,conflicts:L.conflicts,factOwners:L.ownersOf(visibleIds),evidence:Object.fromEntries(Object.entries(g.evidence).filter(([id])=>visibleIds.has(id))),
   withheld:countWithheld([...(gatedLatest?[...Object.values(gatedLatest.facts),...Object.values(gatedLatest.derived)]:[]),...eventIds.map(id=>g.withheld(id))])};
  const empty=!latest&&recentEvents.length===0&&coverage.length===0;
  return {body,empty,cacheControl:!empty&&asOf===ctx.today?CURRENT_COMPANY_CACHE_CONTROL:undefined};
