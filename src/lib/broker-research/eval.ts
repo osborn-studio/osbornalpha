@@ -17,7 +17,7 @@ export interface EvalRow{target_key:string|null;field:string;occurrence:number;v
 export interface GoldDoc{sha256:string;fields:EvalRow[];absent:{target_key:string|null;field:string}[]}
 export interface ExtractedDoc{sha256:string;rows:EvalRow[]}
 export const EVAL_THRESHOLD=0.95,GOLD_MIN_DOCS=30;
-const id=(r:{target_key:string|null;field:string;occurrence?:number})=>`${r.target_key??''}\u0000${r.field}\u0000${r.occurrence??1}`;
+const id=(r:{target_key:string|null;field:string;occurrence:number})=>`${r.target_key??''}\u0000${r.field}\u0000${r.occurrence}`;
 const tf=(r:{target_key:string|null;field:string})=>`${r.target_key??''}\u0000${r.field}`;
 const norm=(s:string)=>s.toLowerCase().replace(/\s+/g,' ').trim();
 const sameNum=(a:string|null,b:string|null)=>a===null||b===null?a===b:decimalEquals(a,b);
@@ -30,10 +30,15 @@ const overlaps=(a:EvalRow,b:EvalRow)=>a.char_start!==null&&a.char_end!==null&&b.
 const matches=(gold:EvalRow,x:EvalRow)=>sameValue(gold,x)&&gold.page===x.page&&overlaps(gold,x);
 const ratio=(n:number,d:number)=>d===0?null:n/d;
 export function evalStats(gold:GoldDoc[],extracted:ExtractedDoc[]):Pick<EvalReceiptRow,'n_docs'|'per_field'|'absence'|'precision_min'|'recall_min'|'passed'>{
+ const goldShas=new Set(gold.map(g=>g.sha256)),bySha=new Map<string,EvalRow[]>(),duplicates=new Set<string>();
+ for(const e of extracted){if(bySha.has(e.sha256))duplicates.add(e.sha256);bySha.set(e.sha256,e.rows);}
+ const missing=[...goldShas].filter(s=>!bySha.has(s)),unexpected=[...bySha.keys()].filter(s=>!goldShas.has(s));
+ if(missing.length||unexpected.length||duplicates.size)throw new BrokerError('eval_document_set_mismatch',409,{missing,unexpected,duplicate:[...duplicates]});
  const per:Record<string,{tp:number;fp:number;fn:number}>={};const bump=(f:string,k:'tp'|'fp'|'fn')=>{(per[f]??={tp:0,fp:0,fn:0})[k]++;};
  const absence={tp:0,fp:0,fn:0};
  for(const gd of gold){
-  const rows=extracted.find(e=>e.sha256===gd.sha256)?.rows??[];
+  const rows=bySha.get(gd.sha256)!;
+  for(const r of [...gd.fields,...rows])if(!Number.isSafeInteger(r?.occurrence)||r.occurrence<1)throw new BrokerError('invalid_eval_row',400,{sha256:gd.sha256,field:typeof r?.field==='string'?r.field:null});
   const byId=new Map<string,EvalRow[]>();for(const r of rows){const k=id(r);byId.set(k,[...(byId.get(k)??[]),r]);}
   const used=new Set<EvalRow>();
   for(const gr of gd.fields){const hit=(byId.get(id(gr))??[]).find(x=>!used.has(x)&&matches(gr,x));if(hit){used.add(hit);bump(gr.field,'tp');}else bump(gr.field,'fn');}
@@ -74,11 +79,21 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
  const authorized:AuthorizedDoc[]=[];const versions=new Set<string>();
  for(const g of docs){const a=await authorizeGoldDoc(deps,g.sha256);authorized.push({sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,parse_run_id:a.parseRun.run_id,artifact_hash:a.parseRun.artifact_hash,extractor_version:a.parseRun.extractor_version});versions.add(a.parseRun.extractor_version??'unknown');}
  if(versions.size>1)throw conflict('mixed_extractor_versions',{versions:[...versions]});
+ const load=artifactLoader(deps);
+ for(const [i,g] of docs.entries()){
+  const artifact=await load(authorized[i].parse_run_id);
+  const invalid=(field:unknown,reason:string)=>new BrokerError('invalid_gold_manifest',400,{sha256:g.sha256,field:typeof field==='string'?field:null,reason});
+  for(const r of g.fields){
+   const page=artifact.pages.find(p=>p.page===r?.page);if(!page)throw invalid(r?.field,'unknown_page');
+   const {char_start:s,char_end:e}=r;if(s===null||e===null||!Number.isSafeInteger(s)||!Number.isSafeInteger(e)||s<0||s>=e||e>page.text.length)throw invalid(r.field,'invalid_span');
+  }
+  for(const a of g.absent)if(typeof a?.field!=='string'||(a.target_key!==null&&typeof a.target_key!=='string'))throw invalid(a?.field,'invalid_absent');
+ }
  const extractorVersion=[...versions][0]??'unknown',hash=corpusHash(docs);
  const digest=behaviorDigest({extractorVersion,modelId:info.modelId,registryHash:info.registryHash,promptVersion:EXTRACT_PROMPT_VERSION,schemaVersion:SCHEMA_VERSION});
  const approved=(await deps.db.getSettings()).approved_gold_corpus_hash===hash;
  if(o.dryRun)return {receiptId:null,authorized,corpusHash:hash,behaviorDigest:digest,approved,stats:null};
- const load=artifactLoader(deps);const extracted:ExtractedDoc[]=[];
+ const extracted:ExtractedDoc[]=[];
  for(const g of docs){
   const a=await authorizeGoldDoc(deps,g.sha256),pin=authorized.find(x=>x.sha256===g.sha256)!;
   if(a.licence.version!==pin.licence_version)throw conflict('licence_changed_during_eval');
