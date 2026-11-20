@@ -340,6 +340,10 @@
     {
       "file": "20261211090000_topics_excerpt_licence_mask.sql",
       "sha256": "b922574e5838a5b74aff22b7662dd4715bea641e45779e646cf4cfa40bed77ab"
+    },
+    {
+      "file": "20261212090000_broker_research_r15.sql",
+      "sha256": "6e0ae65bfc3aad98e9b4d49da560b1d5e91f8ccf79f5b530214d16c572221bde"
     }
   ]
 }
