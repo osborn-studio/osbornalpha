@@ -2,7 +2,7 @@
 import {decimalEquals} from '../facts/json-numbers';
 import {behaviorDigest} from './behavior';
 import {BrokerError,conflict,gone,notFound} from './errors';
-import {extractCandidates} from './extract/run';
+import {extractCandidates,ExtractFailure} from './extract/run';
 import {canonicalJson,sha256Hex} from './hash';
 import {processingAllowed,utcToday} from './licences';
 import {LEASE_SECONDS,artifactLoader} from './parse';
@@ -86,14 +86,22 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
   const token=deps.newId();if(!await deps.db.claimLease(a.doc.document_id,token,LEASE_SECONDS))throw conflict('lease_held',{sha256:g.sha256});
   try{
    let lost:'lease_lost'|'document_withdrawn'|null=null;
-   const hb=setInterval(()=>{void deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS).then(x=>{if(x!=='ok')lost=x;},()=>{lost='lease_lost';});},HEARTBEAT_MS);
+   const evalRun=deps.newId();
+   const put=async(path:string,record:unknown)=>{await trackedUpload(deps,{documentId:a.doc.document_id,path,writer:'eval',body:JSON.stringify(record),contentType:'application/json',lease:{token,ttlSeconds:LEASE_SECONDS}});};
+   const provenance={run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,document_id:a.doc.document_id,parse_run_id:pin.parse_run_id,artifact_hash:pin.artifact_hash,licence_id:pin.licence_id,licence_version:pin.licence_version,extractor_version:extractorVersion,model_id:info.modelId,registry_hash:info.registryHash,prompt_version:EXTRACT_PROMPT_VERSION,schema_version:SCHEMA_VERSION,behavior_digest:digest};
+   const requestPath=brokerPaths.evalRequest(g.sha256,evalRun),responsePath=brokerPaths.evalResponse(g.sha256,evalRun);
    let b:Awaited<ReturnType<typeof extractCandidates>>;
-   try{b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});}
+   const hb=setInterval(()=>{void deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS).then(x=>{if(x!=='ok')lost=x;},()=>{lost='lease_lost';});},HEARTBEAT_MS);
+   try{b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now,recorder:{
+    request:(rec,seq)=>put(brokerPaths.evalCallRequest(g.sha256,evalRun,seq),rec),response:(rec,seq)=>put(brokerPaths.evalCallResponse(g.sha256,evalRun,seq),rec),
+   }});}
+   catch(e){if(e instanceof ExtractFailure){
+    await put(requestPath,{...provenance,calls:e.requests,error:e.code}).catch(()=>{});
+    await put(responsePath,{...provenance,calls:e.responses,error:e.code}).catch(()=>{});
+   }throw e;}
    finally{clearInterval(hb);}
    if(lost==='document_withdrawn')throw gone();if(lost)throw conflict('lease_lost',{sha256:g.sha256});
-   const evalRun=deps.newId();const put=(path:string,body:string)=>trackedUpload(deps,{documentId:a.doc.document_id,path,writer:'eval',body,contentType:'application/json',lease:{token,ttlSeconds:LEASE_SECONDS}});
-   await put(brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}));
-   await put(brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}));
+   await put(requestPath,{...provenance,calls:b.requests});await put(responsePath,{...provenance,calls:b.responses});
    extracted.push({sha256:g.sha256,rows:b.rows});
    o.log?.(`${g.sha256.slice(0,12)} licence_v=${a.licence.version} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
   }finally{await deps.db.fencedUpdateDocument(a.doc.document_id,token,{releaseLease:true});}

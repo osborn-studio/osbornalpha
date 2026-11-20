@@ -79,7 +79,7 @@ describe('runExtract',()=>{
  });
  it('stops further model calls after licence authorization is revoked mid-run',async()=>{
   const doc=await parsedDoc(d),base=recordedLlmPort([EXTRACT_RESPONSE,EXTRACT_RESPONSE,EXTRACT_RESPONSE]);let calls=0;
-  d.llm={info:()=>({...base.info()!,contextTokens:1000}),complete:async req=>{
+  d.llm={info:()=>({...base.info()!,contextTokens:10_000}),complete:async req=>{
    calls++;if(calls===1)await d.db.updateLicence(doc.licence_id,{allows_llm_processing:false});
    return base.complete(req);
   }};
@@ -111,7 +111,7 @@ describe('runExtract',()=>{
   for(let k=0;k<50&&!waiting;k++)await new Promise(r=>setTimeout(r,0));
   d.advance(301_000);await d.db.updateDocument(doc.document_id,{status:'withdrawn',withdrawn_at:d.now().toISOString(),withdrawn_reason:'licence ended'});release();
   expect(await pending).toMatchObject({status:'failed',errorCode:'lease_lost'});
-  expect([...d.storage.objects.keys()].filter(k=>k.startsWith('runs/'))).toEqual([]);
+  expect([...d.storage.objects.keys()].filter(k=>k.startsWith('runs/'))).toEqual([brokerPaths.callRequest((await pending).runId,1)]);
  });
  it('fixture response encodes its object',()=>expect(JSON.parse(EXTRACT_RESPONSE)).toEqual(EXTRACT_OBJECT));
 });
