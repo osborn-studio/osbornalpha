@@ -2,6 +2,7 @@
 import { createRoot } from "react-dom/client";
 import { NextIntlClientProvider } from "next-intl";
 import { MacroWorkbench } from "../../src/components/macro/MacroWorkbench";
+import { StrategyFlagProvider } from "../../src/components/macro/strategy-flag";
 import { correlationOptions } from "../../src/lib/macro/workbench-options";
 import en from "../../messages/en/macro.json";
 import zh from "../../messages/zh/macro.json";
@@ -17,13 +18,15 @@ createRoot(document.getElementById("root")!).render(
   >
     {/* Matches the protected app layout's real main width/padding, without auth, global account chrome or production credentials. */}
     <main className="mx-auto w-full max-w-[1600px] p-3 lg:p-4">
-      <MacroWorkbench
-        initialRegion={search.get("region") === "CN" ? "CN" : "US"}
-        initialTab="overview"
-        judgmentsEnabled
-        options={correlationOptions()}
-        strategyEnabled
-      />
+      <StrategyFlagProvider enabled>
+        <MacroWorkbench
+          initialRegion={search.get("region") === "CN" ? "CN" : "US"}
+          initialTab="overview"
+          judgmentsEnabled
+          options={correlationOptions()}
+          strategyEnabled
+        />
+      </StrategyFlagProvider>
     </main>
   </NextIntlClientProvider>,
 );
