@@ -463,12 +463,33 @@ describe.skipIf(!enabled)('topics storage',()=>{
    await anonDenied();
   });
   it('returns null for an unpublished snapshot and no rows when the directory closes',async()=>{
-   const f=await publishedPair();
-   await f.db.unpublish({topicId:f.topicId,actor:f.actor,reason:'licence',note:null});
-   expect((await raw(f.topicId)).map(r=>r.snapshot)).toEqual([f.stored[0].snapshot,null]);
-   await f.h.setPublic(false);
-   for(const view of views)expect(await asRole('authenticated',`select * from public.${view}`)).toEqual([]);
-  });
+   // DIAGNOSTIC (not for merge): report what this test is waiting on when it stalls.
+   const t0=Date.now();let step='start';const mark=(s:string)=>{step=s;console.log('[diag] step',s,Date.now()-t0,'ms');};
+   const timer=setTimeout(async()=>{
+    const {Client}=await import('pg');
+    const c=new Client({connectionString:JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl});
+    try{
+     await c.connect();
+     const a=await c.query("select pid,state,wait_event_type wt,wait_event we,pg_blocking_pids(pid) blockers,round(extract(epoch from now()-query_start)::numeric,2) q_s,round(extract(epoch from now()-xact_start)::numeric,2) x_s,datname,left(query,300) q from pg_stat_activity where backend_type='client backend' and pid<>pg_backend_pid() and (state<>'idle' or wait_event_type='Lock') order by query_start");
+     const l=await c.query("select l.pid,l.locktype,l.mode,l.granted,l.relation::regclass::text rel,l.classid,l.objid from pg_locks l where not l.granted or l.locktype='advisory' order by l.pid");
+     console.log('[diag] STALL at step',step,Date.now()-t0,'ms pool',{total:pool.totalCount,idle:pool.idleCount,waiting:pool.waitingCount});
+     console.log('[diag] activity',JSON.stringify(a.rows));
+     console.log('[diag] locks',JSON.stringify(l.rows));
+    }catch(e){console.log('[diag] failed',String(e));}finally{await c.end().catch(()=>{});}
+   },3000);
+   try{
+    mark('publishedPair');
+    const f=await publishedPair();
+    mark('unpublish');
+    await f.db.unpublish({topicId:f.topicId,actor:f.actor,reason:'licence',note:null});
+    mark('raw');
+    expect((await raw(f.topicId)).map(r=>r.snapshot)).toEqual([f.stored[0].snapshot,null]);
+    mark('setPublic(false)');
+    await f.h.setPublic(false);
+    for(const view of views){mark('select '+view);expect(await asRole('authenticated',`select * from public.${view}`)).toEqual([]);}
+    mark('done');
+   }finally{clearTimeout(timer);}
+  },20000);
   it('pins the ordered public columns and the source licence schema',async()=>{
    const columns=async(name:string)=>(await pool.query("select column_name from information_schema.columns where table_schema='public' and table_name=$1 order by ordinal_position",[name])).rows.map(r=>r.column_name);
    // Any validity-date column must be added to the masking rule in SQL and in excerptPermitted.
