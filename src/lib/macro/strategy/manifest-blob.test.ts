@@ -3,6 +3,7 @@ import {gzipSync,gunzipSync} from 'node:zlib';
 import {expect,it} from 'vitest';
 import {strategyDbOver,supabaseTransport} from './db';
 import type {StrategyTransport} from './db';
+import {manifestSizes,sizedManifest} from './manifest-blob.fixture';
 import {testManifest} from './db-contract';
 import {canonicalJson,sha256Hex} from './hash';
 import {manifestFetch,manifestRequestId,withManifestRequest} from './manifest-request';
@@ -13,6 +14,31 @@ const large=()=>testManifest('cycle_table',{salt:'汉'.repeat(400000)});
 const row=(body=large())=>({manifest_id:ID,manifest_hash:sha256Hex(canonicalJson(body)),created_at:CREATED,
  body:null,body_gz:gzipSync(Buffer.from(canonicalJson(body)),{level:6}),body_bytes:Buffer.byteLength(canonicalJson(body))});
 
+it.each(manifestSizes)('chooses the RPC by canonical byte length and preserves jsonb identity at %i bytes',async size=>{
+ const body=sizedManifest(size),hash=sha256Hex(canonicalJson(body));
+ const store=(expectedRpc:string):StrategyTransport=>{
+  let rows:Record<string,unknown>[]=[];
+  return {
+   rpc:async(fn,args)=>{
+    expect(fn).toBe(expectedRpc);
+    expect(args.p_manifest_hash).toBe(hash);
+    const gzip=fn==='macro_put_manifest_gz';
+    rows=[{manifest_id:ID,manifest_hash:args.p_manifest_hash,created_at:CREATED,body:args.p_body??null,
+     body_gz:gzip?Buffer.from(String(args.p_body_gz),'base64'):null,body_bytes:args.p_body_bytes??null}];
+    return gzip?{manifest_id:ID,outcome:'inserted'}:ID;
+   },
+   select:async()=>rows,
+  };
+ };
+ const legacy=store('macro_put_manifest');
+ const id=await legacy.rpc('macro_put_manifest',{p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,
+  p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version});
+ const expected=await strategyDbOver(legacy).manifest(String(id));
+ const db=strategyDbOver(store(size>100_000?'macro_put_manifest_gz':'macro_put_manifest'));
+ const stored=await db.putManifest(body);
+ expect(stored).toEqual(expected);
+ expect(await db.manifest(stored.manifest_id)).toEqual(expected);
+});
 it('sends large canonical UTF-8 as base64 gzip with unchanged hash and metadata-only readback',async()=>{
  const body=large(),canonical=canonicalJson(body),stored=row(body);
  const db=strategyDbOver({rpc:async(fn,args)=>{
