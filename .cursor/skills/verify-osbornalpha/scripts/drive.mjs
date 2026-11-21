@@ -301,9 +301,9 @@ const journeys = {
 journeys.macro = async function macro() {
   const REGIMES = { zh: ['复苏', '过热', '滞胀', '衰退'], en: ['Recovery', 'Overheat', 'Stagflation', 'Recession'] };
   const ZH = { locale: 'zh-CN', lang: 'zh', heading: '宏观工作台', title: '资产配置假设模板', staticRef: '静态参考', mark: '假设',
-    disclaimer: '本页内容不构成投资建议。', methods: '方法与来源' };
+    disclaimer: '本页内容不构成投资建议。', methods: '方法与来源', tabsLabel: '工作台分区', tabs: ['概览', '指标', '关联', '方法与来源'] };
   const EN = { locale: 'en-US', lang: 'en', heading: 'Macro workbench', title: 'Asset allocation hypothesis template', staticRef: 'Static reference', mark: 'Hypothesis',
-    disclaimer: 'Nothing on this page is investment advice.', methods: 'Methods and sources' };
+    disclaimer: 'Nothing on this page is investment advice.', methods: 'Methods and sources', tabsLabel: 'Workbench sections', tabs: ['Overview', 'Indicators', 'Correlation', 'Method & sources'] };
   const cases = [
     { ...ZH, path: '/macro', region: 'US', shotName: 'macro-zh' },
     { ...ZH, path: '/macro?region=CN', region: 'CN', shotName: 'macro-cn' },
@@ -344,11 +344,36 @@ journeys.macro = async function macro() {
       && await footer.getByText(c.disclaimer).isVisible()
       && await methodsLink.count() === 1 && (await methodsLink.innerText()).trim() === c.methods,
       `footer=${await footer.count()} link=${await methodsLink.count()}`);
+    // #300: with MACRO_STRATEGY_ENABLED off (launch.sh pins it empty) the tab row lists only the four view tabs and
+    // no /macro/{transmission,history,review} link (those routes are notFound()).
+    const tabNav = page.getByRole('navigation', { name: c.tabsLabel, exact: true });
+    const tabLinks = tabNav.locator('a');
+    const tabTexts = (await tabLinks.allInnerTexts()).map((t) => t.trim());
+    const tabHrefs = await tabLinks.evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+    const wantHrefs = ['overview', 'indicators', 'correlation', 'methodology'].map((t) => `/macro?region=${c.region}&tab=${t}`);
+    check(`${tag}: strategy flag off → tab row "${c.tabsLabel}" has only the four view tabs, no transmission/history/review link`,
+      await tabNav.count() === 1 && JSON.stringify(tabTexts) === JSON.stringify(c.tabs) && JSON.stringify(tabHrefs) === JSON.stringify(wantHrefs)
+      && await page.locator('a[href^="/macro/transmission"], a[href^="/macro/history"], a[href^="/macro/review"]').count() === 0,
+      `${JSON.stringify(tabTexts)} ${JSON.stringify(tabHrefs)}`);
     await checkResearchChain(page, tag, c.lang, 'macro');
     if (c.shotName === 'macro-zh') {
       check('zh /macro overview fails closed with a read-failure notice (no DB)', await page.getByText(/读取失败/).first().isVisible());
     }
     await shot(page, c.shotName);
+    await ctx.close();
+  }
+  // The three strategy routes themselves are switched off too (notFound() → the app 404 page).
+  {
+    const ctx = await newCtx('zh-CN'); const page = await ctx.newPage();
+    for (const p of ['/macro/transmission', '/macro/history', '/macro/review']) {
+      const r = await page.goto(BASE + p, { waitUntil: 'domcontentloaded', timeout: 120_000 });
+      const nf = page.getByRole('heading', { name: '页面不存在', exact: true });
+      await nf.waitFor({ timeout: 30_000 }).catch(() => {});
+      // Like the topics-off pages, assert the rendered 404 page, not the status: (app) has a loading boundary, so
+      // notFound() lands after streaming started and next dev answers 200.
+      check(`strategy flag off: ${p} renders the app 404 page ("页面不存在"), no strategy screen`, await nf.isVisible()
+        && await page.getByRole('navigation', { name: '工作台分区', exact: true }).count() === 0, `status=${r?.status()} ${page.url()}`);
+    }
     await ctx.close();
   }
 };
