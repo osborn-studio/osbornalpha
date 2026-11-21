@@ -1,5 +1,5 @@
-// US fiscal bucket picks (§19.4). Run and offline replay share these picks and CN's decimal/finalize
-// implementation. Only included facts are needed for replay; exclusions are frozen in manifest roles.
+// US fiscal bucket picks (§19.4, §19.11). From 1.1, a non-USD fact for the same issuer and exact
+// fiscal period excludes the USD translation. Replay uses the manifest version and frozen roles.
 import type {FactRow} from '../facts/types';
 import {finalizeCell} from './aggregate';
 import type {AggregateCellResult,IssuerFacts,PoolFact} from './aggregate';
@@ -9,14 +9,16 @@ import {cellSpecsUs,isFinancialCodeUs} from './method-us';
 import type {ManifestCell,ManifestRole,RoleReason} from './types-us';
 export interface AggregateCellInputUs{code:string;period_end:string;members:readonly string[];issuers:ReadonlyMap<string,IssuerFacts>}
 type PickUs<F>={ok:true;facts:F[];values:string[]}|{ok:false;reason:RoleReason};
-export function pickInputsUs<F extends PoolFact>(spec:CellSpec,id:string,facts:readonly F[]):PickUs<F>{
+export function pickInputsUs<F extends PoolFact>(spec:CellSpec,id:string,facts:readonly F[],rule={dualCurrency:true}):PickUs<F>{
  const year=Number(spec.period_end.slice(0,4));
  const pick=(concept:string,y:number):PickUs<F>=>{
   const candidates=facts.filter(f=>f.issuer_id===id&&f.concept===concept&&f.duration==='12M'&&f.period_end>=`${y}-01-01`&&f.period_end<=`${y}-12-31`);
   const usd=candidates.filter(f=>f.unit==='USD');
   if(usd.length>1)return {ok:false,reason:'ambiguous_period'};
   if(!usd.length)return {ok:false,reason:candidates.length?'unit_excluded':'missing_concept'};
-  return {ok:true,facts:usd,values:[usd[0].value]};
+  const u=usd[0];
+  if(rule.dualCurrency&&facts.some(f=>f.issuer_id===id&&f.unit!=='USD'&&f.period_start===u.period_start&&f.period_end===u.period_end))return {ok:false,reason:'dual_currency'};
+  return {ok:true,facts:usd,values:[u.value]};
  };
  if(spec.metric==='member_count')return {ok:true,facts:[],values:[]};
  const concept=spec.metric==='gross_margin'?'gross_profit':spec.metric==='net_margin'||spec.metric==='net_income_parent_sum'||spec.metric==='net_income_yoy'?'net_income_parent':'revenue';

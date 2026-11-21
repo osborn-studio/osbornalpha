@@ -5,14 +5,17 @@ import {assertDay} from './method';
 import type {CellSpec} from './method';
 import {DISPLAY_MIN_COVERAGE} from './method-constants';
 import type {AggMetric,ExpectedGridUs} from './types-us';
-export const METHOD_VERSION_US='industry-agg-us/1.0';
+export const METHOD_VERSION_US_V1_0='industry-agg-us/1.0';
+export const METHOD_VERSION_US='industry-agg-us/1.1';
+export const US_METHOD_VERSIONS=[METHOD_VERSION_US_V1_0,METHOD_VERSION_US] as const;
+export const isUsMethodVersion=(v:string):boolean=>US_METHOD_VERSIONS.some(version=>version===v);
 export const US_HISTORY_BUCKETS=3;
 export const DISPLAY_MIN_MEMBERS_SIC=5;
 export const READINESS_MIN_PERCENT_US=50;
 export const AGG_CONCEPTS_US=['revenue','gross_profit','net_income_parent'] as const;
 export const AGG_METRICS_US:readonly AggMetric[]=['revenue_sum','net_income_parent_sum','gross_margin','net_margin','revenue_yoy','net_income_yoy','member_count'];
-export const METHOD_CONFIG_US={
- method_version:METHOD_VERSION_US,approach:'whole_method',market:'US',currency:'USD',consolidation:'consolidated',concepts:AGG_CONCEPTS_US,
+export const METHOD_CONFIG_US_V1_0={
+ method_version:METHOD_VERSION_US_V1_0,approach:'whole_method',market:'US',currency:'USD',consolidation:'consolidated',concepts:AGG_CONCEPTS_US,
  membership:'members_at(on=membership_on,known_by=facts_as_of)',history_class:'reconstruction',membership_on:'facts_as_of',
  facts_read:'one_read_facts_envelope_per_issuer_per_run(history=true,as_of=facts_as_of)',
  bucket:{rule:'fiscal_year_bucket/1',period_end:'fiscal_period_end_within_calendar_year',completed:'facts_as_of>=(Y+1)-04-01',history_buckets:US_HISTORY_BUCKETS,duration:'12M'},
@@ -21,6 +24,14 @@ export const METHOD_CONFIG_US={
  financial_sic_range:['6000','6799'],financial_exclusion:'gross_margin',display_min_members:'5',display_min_coverage:DISPLAY_MIN_COVERAGE,
  ratio_scale:10,rounding:'half_away_from_zero',
 } as const;
+export const CONFIG_HASH_US_V1_0=sha256Hex(canonicalJson(METHOD_CONFIG_US_V1_0));
+export const METHOD_CONFIG_US={...METHOD_CONFIG_US_V1_0,method_version:METHOD_VERSION_US,pick:{...METHOD_CONFIG_US_V1_0.pick,dual_currency:'non_USD_fact_same_issuer_same_exact_period_else_dual_currency'}} as const;
+export function methodConfigUs(v:string){
+ if(v===METHOD_VERSION_US)return METHOD_CONFIG_US;
+ if(v===METHOD_VERSION_US_V1_0)return METHOD_CONFIG_US_V1_0;
+ throw new Error(`unknown_us_method_version:${v}`);
+}
+export const usPickRule=(v:string):{dualCurrency:boolean}=>({dualCurrency:'dual_currency' in methodConfigUs(v).pick});
 export const CONFIG_HASH_US=sha256Hex(canonicalJson(METHOD_CONFIG_US));
 export function usBuckets(factsAsOf:string,n=US_HISTORY_BUCKETS):string[]{
  assertDay('factsAsOf',factsAsOf);if(!Number.isInteger(n)||n<1)throw new Error('invalid_bucket_count');

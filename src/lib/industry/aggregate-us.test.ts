@@ -1,9 +1,9 @@
 import {describe,it,expect} from 'vitest';
 import type {FactRow} from '../facts/types';
 import type {IssuerFacts} from './aggregate';
-import {computeAggregateCellUs} from './aggregate-us';
+import {computeAggregateCellUs,pickInputsUs} from './aggregate-us';
 import {buildAggregateManifest} from './manifest';
-import {CONFIG_HASH_US,METHOD_VERSION_US} from './method-us';
+import {CONFIG_HASH_US,CONFIG_HASH_US_V1_0,cellSpecsUs} from './method-us';
 import {replayFromManifest,replayCell} from './replay';
 let seq=0;
 export function usFact(concept:string,value:string,o:Partial<FactRow>={}):FactRow{
@@ -30,7 +30,40 @@ describe('US fiscal bucket aggregation',()=>{
  it('keeps a CNY SEC reporter in the denominator only',()=>{
   const r=compute([usFact('revenue','10',{unit:'CNY'})]);expect(reason(r)).toBe('unit_excluded');expect(cell(r)).toMatchObject({status:'missing',n_members:1,n_with_data:0,missing_reason:'empty_set'});
  });
- it('picks the single USD row despite foreign currency rows',()=>expect(cell(compute([usFact('revenue','2'),usFact('revenue','3',{unit:'EUR'})])).value_text).toBe('2'));
+ const foreign=[['Baidu','129079000000','18458000000'],['JD.com','1309085000000','187197000000'],['PDD Holdings','431845713000','61753116000']] as const;
+ const usdOnly=[['Daqo New Energy','665415000'],['Grab Holdings','3370000000']] as const;
+ const revenue=(issuer_id:string,value:string,unit='USD')=>usFact('revenue',value,{issuer_id,unit});
+ const industry=(rows:FactRow[])=>{
+  const members=[...new Set(rows.map(f=>f.issuer_id))];
+  return computeAggregateCellUs({code:'2000',period_end:'2025-12-31',members,issuers:new Map(members.map(id=>[id,env(rows.filter(f=>f.issuer_id===id),{issuer_id:id})]))});
+ };
+ it.each(foreign)('excludes the USD translation for %s', (issuer_id,cny,usd)=>{
+  const r=industry([revenue(issuer_id,cny,'CNY'),revenue(issuer_id,usd),usFact('net_income_parent','7',{issuer_id,unit:'CNY'}),usFact('net_income_parent','1',{issuer_id})]);
+  for(const metric of ['revenue_sum','net_income_parent_sum','net_margin'])expect(reason(r,metric)).toBe('dual_currency');
+  expect(cell(r)).toMatchObject({status:'missing',missing_reason:'empty_set',n_members:1,n_with_data:0});
+ });
+ it.each(usdOnly)('includes USD-only reporter %s',(id,value)=>expect(cell(industry([revenue(id,value)]))).toMatchObject({value_text:value,n_with_data:1}));
+ it('counts all three members while summing only USD reporters',()=>{
+  const [id,cny,usd]=foreign[0],r=industry([revenue(id,cny,'CNY'),revenue(id,usd),...usdOnly.map(([name,value])=>revenue(name,value))]);
+  expect(cell(r)).toMatchObject({value_text:'4035415000',n_members:3,n_with_data:2});
+  expect(cell(r,'member_count').value_text).toBe('3');
+ });
+ it('checks other concepts for a matching non-USD period',()=>{
+  const r=compute([usFact('revenue','10'),usFact('gross_profit','4'),usFact('net_income_parent','1'),usFact('net_income_parent','7',{unit:'CNY'})]);
+  for(const metric of ['revenue_sum','gross_margin'])expect(reason(r,metric)).toBe('dual_currency');
+ });
+ it('requires both fiscal dates to match',()=>{
+  for(const dates of [{period_start:'2025-01-02'},{period_end:'2025-12-30'}])expect(cell(compute([usFact('revenue','2'),usFact('revenue','3',{unit:'EUR',...dates})])).value_text).toBe('2');
+ });
+ it('distinguishes a dual-currency prior year from a dual-currency current year for YoY',()=>{
+  const prior={period_start:'2024-01-01',period_end:'2024-12-31'},rows=[usFact('revenue','2'),usFact('revenue','1',prior)];
+  expect(reason(compute([...rows,usFact('revenue','7',{...prior,unit:'CNY'})]),'revenue_yoy')).toBe('not_in_comparable_set');
+  expect(reason(compute([...rows,usFact('revenue','14',{unit:'CNY'})]),'revenue_yoy')).toBe('dual_currency');
+ });
+ it('picks the single USD row alongside another currency under the legacy rule',()=>{
+  const rows=[usFact('revenue','2'),usFact('revenue','3',{unit:'EUR'})];
+  expect(pickInputsUs(cellSpecsUs('2025-12-31')[0],'A',rows,{dualCurrency:false})).toMatchObject({ok:true,values:['2']});
+ });
  it('requires current ok consolidated annual rows in this bucket',()=>{
   for(const o of [{is_current:false},{status:'quarantined' as const},{consolidation:'standalone' as const},{duration:'3M' as const},{period_end:'2026-01-01'}])expect(reason(compute([usFact('revenue','1',o)]))).toBe('missing_concept');
  });
@@ -53,9 +86,9 @@ describe('US fiscal bucket aggregation',()=>{
   expect(cell(compute([usFact('revenue','0'),usFact('net_income_parent','1')]),'net_margin')).toMatchObject({missing_reason:'zero_denominator',n_with_data:1});
   expect(compute([],{members:[],code:'6000'}).cells.every(c=>c.missing_reason==='no_members')).toBe(true);
  });
- it('replays a US manifest offline and detects a tampered value',()=>{
+ it.each(['industry-agg-us/1.0','industry-agg-us/1.1'])('replays a %s manifest offline and detects a tampered value',method_version=>{
   const result=compute([usFact('revenue','10',{period_start:'2024-09-29',period_end:'2025-09-27'}),usFact('net_income_parent','2',{period_start:'2024-09-29',period_end:'2025-09-27'})]);
-  const m=buildAggregateManifest({header:{scheme:'sic',version:'sec-current',code:'2000',level:1,period_end:'2025-12-31',facts_as_of:'2026-04-01',knowledge_date:'2026-04-01',history_class:'reconstruction',method_version:METHOD_VERSION_US,config_hash:CONFIG_HASH_US,formula_version:'facts-derive/1.0',code_version:'test'},members:[{issuer_id:'A',ticker:null,valid_from:'2026-04-01',valid_to:null,available_date:'2026-04-01',valid_to_available_date:null,source_membership_id:null,raw_hash:null,locator:null,resolution_method:null}],unresolved:[],memberStateRevs:[{issuer_id:'A',state_rev:1}],result,filings:new Map()});
+  const m=buildAggregateManifest({header:{scheme:'sic',version:'sec-current',code:'2000',level:1,period_end:'2025-12-31',facts_as_of:'2026-04-01',knowledge_date:'2026-04-01',history_class:'reconstruction',method_version,config_hash:method_version==='industry-agg-us/1.0'?CONFIG_HASH_US_V1_0:CONFIG_HASH_US,formula_version:'facts-derive/1.0',code_version:'test'},members:[{issuer_id:'A',ticker:null,valid_from:'2026-04-01',valid_to:null,available_date:'2026-04-01',valid_to_available_date:null,source_membership_id:null,raw_hash:null,locator:null,resolution_method:null}],unresolved:[],memberStateRevs:[{issuer_id:'A',state_rev:1}],result,filings:new Map()});
   expect(replayFromManifest(m)).toMatchObject({reproduced:true,cells:m.cells});expect(replayCell(m,m.cells[0]).reproduced).toBe(true);
   const tampered=structuredClone(m);tampered.facts.find(f=>f.concept==='revenue')!.value_text='20';expect(replayFromManifest(tampered).reproduced).toBe(false);
  });

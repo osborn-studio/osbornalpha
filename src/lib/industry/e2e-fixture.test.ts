@@ -27,7 +27,7 @@ it('SIC fixture snapshot exposes passing and too-small industries and original r
  const deps=fixtureReadDeps(now);
  const v=await industryListView(deps,{scheme:'sic',version:'sec-current',level:1,metric:'revenue_sum',duration:'12M',periods:3});
  if(v.state!=='ok'||v.kind!=='aggregate')throw new Error(v.state);
- expect(v.header).toMatchObject({membershipOn:'2026-11-03',methodVersion:'industry-agg-us/1.0'});
+ expect(v.header).toMatchObject({membershipOn:'2026-11-03',methodVersion:'industry-agg-us/1.1'});
  expect(v.cells.find(c=>c.code==='3674')).toMatchObject({nMembers:6,display:'value',unit:'USD'});
  expect(v.cells.find(c=>c.code==='7372')).toMatchObject({nMembers:2,display:'members'});
  const detail=await industryDetailView(deps,{scheme:'sic',version:'sec-current',code:'3674',metrics:['revenue_sum'],durations:['12M'],window:'all'});
