@@ -67,7 +67,9 @@ export async function startLocalDatabase(options: { rehearsalDefaultTableGrants?
   try {
   // F3 (document pipeline spec §4.4): UTF8 like hosted Supabase, so length()/substr() count code points; LC_ALL=C alone gives SQL_ASCII.
   execFileSync(join(bin,'initdb'),['-D',join(directory,'data'),'-U','s4_admin','--auth-host=scram-sha-256','--auth-local=trust','--pwfile='+passwordFile,'--encoding=UTF8','--locale=C'],{ stdio:'pipe', timeout: 30_000 });
-  writeFileSync(join(directory,'data','postgresql.auto.conf'),`listen_addresses='127.0.0.1'\nport=${port}\nunix_socket_directories='${directory}'\n`);
+  // jit=off: Linux PostgreSQL builds ship LLVM JIT, Homebrew's does not. On never-analysed test tables a costly plan is
+  // JIT-compiled with inlining for seconds even when it returns no row, so the same test took 14 ms locally and 3.6-5 s in CI.
+  writeFileSync(join(directory,'data','postgresql.auto.conf'),`listen_addresses='127.0.0.1'\nport=${port}\nunix_socket_directories='${directory}'\njit=off\n`);
   execFileSync(join(bin,'pg_ctl'),['-D',join(directory,'data'),'-l',join(directory,'postgres.log'),'-w','start'],{ stdio:'pipe', timeout: 30_000 });
   const adminUrl = `postgres://s4_admin:${password}@127.0.0.1:${port}/postgres`;
   const runtimeUrl = `postgres://s4_app:${appPassword}@127.0.0.1:${port}/postgres`;
