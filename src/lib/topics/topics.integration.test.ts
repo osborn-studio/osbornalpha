@@ -6,6 +6,7 @@ import {Pool,type PoolClient} from 'pg';
 import {afterAll,afterEach,beforeAll,beforeEach,describe,expect,it} from 'vitest';
 
 import {quoteEntry,testLicence,checkPublishedExcerpt,fixtureVersion,topicsDbContract} from './db-contract';
+import {freshMigratedDatabase,replayFiles} from '../documents/fresh-db';
 import {emptyDraft} from './drafts';
 import {readTopic} from './public-read';
 import {pgTopicsDb} from './pg-db';
@@ -490,14 +491,19 @@ describe.skipIf(!enabled)('topics storage',()=>{
    expect(f.rows).toEqual([]);
   });
   it('replays the migration twice without changing definitions, options or grants',async()=>{
-   const sql=readFileSync('supabase/migrations/20261211090000_topics_excerpt_licence_mask.sql','utf8');
-   const catalog=async()=>({
-    views:(await pool.query("select relname,pg_get_viewdef(oid) as definition,reloptions from pg_class where relnamespace='public'::regnamespace and relname=any($1) order by relname",[views])).rows,
-    grants:(await pool.query("select * from information_schema.role_table_grants where table_schema='public' and table_name=any($1) order by table_name,grantee,privilege_type,grantor",[views])).rows,
+   const MASK_MIGRATION='supabase/migrations/20261211090000_topics_excerpt_licence_mask.sql';
+   const catalog=async(db:Pool)=>({
+    views:(await db.query("select relname,pg_get_viewdef(oid) as definition,reloptions from pg_class where relnamespace='public'::regnamespace and relname=any($1) order by relname",[views])).rows,
+    grants:(await db.query("select grantor,grantee,table_schema,table_name,privilege_type,is_grantable,with_hierarchy from information_schema.role_table_grants where table_schema='public' and table_name=any($1) order by table_name,grantee,privilege_type,grantor",[views])).rows,
    });
-   const before=await catalog();expect(before.views).toHaveLength(2);
-   for(let i=0;i<2;i++){await pool.query(sql);expect(await catalog()).toEqual(before);}
-  });
+   // Replayed in a private migrated database: DDL on the shared one contends with parallel suites (#283, #284).
+   const fresh=await freshMigratedDatabase(JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8')).adminUrl);
+   try{
+    const before=await catalog(fresh.pool);expect(before.views).toHaveLength(2);
+    expect(before).toEqual(await catalog(pool));
+    for(let i=0;i<2;i++){await replayFiles(fresh.pool,[MASK_MIGRATION]);expect(await catalog(fresh.pool)).toEqual(before);}
+   }finally{await fresh.drop();}
+  },60_000);
  });
  topicsDbContract('pg',async()=>harness());
 });

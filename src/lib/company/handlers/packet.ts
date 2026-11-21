@@ -5,12 +5,14 @@
 // derived metrics on the same envelope. Every value carries factId + availableDate and passes the evidence gate
 // (ineligible → {withheld, factId}); provenance {mappingGen, formulaVersion, stateRev}. The serialized JSON is
 // ≤ 32 KB, guaranteed by clipping periods (reported in `clipped`). No evidence dictionary (size; see plan note).
+// Merged issuers use a fenced lineage envelope and retain predecessor ownership on packet inputs.
+import {lineageMembers,readLineage,withLineageRetry} from '../lineage-read';
 import {MAPPING_GEN} from '@/lib/facts/concepts';
-import {FORMULA_VERSION,addDays,deriveMetrics} from '@/lib/facts/derive';
+import {FORMULA_VERSION,addDays,deriveLineageMetrics,deriveMetrics} from '@/lib/facts/derive';
 import {intParam} from '@/lib/facts/public-route';
-import type {Market,MetricRow} from '@/lib/facts/types';
+import type {LineageRev,Market,MetricRow} from '@/lib/facts/types';
 import {buildGated,cellFactIds,countWithheld,gateCell} from '../route';
-import type {Gated,Handler} from '../route';
+import type {Gated,Handler,RouteCtx} from '../route';
 import {buildStatementsGrid,derivedCellOf,periodKeyOf} from '../statements-grid';
 import type {Basis,Cell,PeriodCol,StatementKind,WithheldCounts,WithheldReason} from '../types';
 
@@ -18,23 +20,24 @@ export const PACKET_PARAMS=['annualPeriods','recentPeriods'] as const;
 export const PACKET_METRICS=['gross_margin','net_margin','fcf','revenue_yoy','net_income_yoy','roe'] as const;
 export const PACKET_MAX_BYTES=32*1024;
 const STATEMENTS:StatementKind[]=['IS','BS','CF'];
-export type PacketValue={value:string;factId:string;availableDate:string}|{withheld:WithheldReason;factId:string};
+export type PacketValue=({value:string;factId:string;availableDate:string}|{withheld:WithheldReason;factId:string})&{issuerId?:string};
 export interface PacketRow{concept:string;unit:string|null;values:Record<string,PacketValue>}
 export interface PacketSection{periods:PeriodCol[];IS:PacketRow[];BS:PacketRow[];CF:PacketRow[]}
-export interface PacketInput{factId:string;availableDate:string;quarter?:[string,string];ytdRule?:'a'|'b'}
+export interface PacketInput{issuerId?:string;factId:string;availableDate:string;quarter?:[string,string];ytdRule?:'a'|'b'}
 export type PacketMetric={metric:string;periodKey:string;unit:string;basis:string;factIds:string[];availableDate:string}&({value:string;inputUnit:string;inputs:PacketInput[]}|{withheld:WithheldReason;factId:string});
 export interface PacketDto{
  issuerId:string;ticker:string;market:Market;asOf:string;truncated:boolean;
- provenance:{mappingGen:number;formulaVersion:string;stateRev:number};
+ provenance:{mappingGen:number;formulaVersion:string;stateRev:number;lineage?:string[];stateRevs?:LineageRev[];conflicts?:number};
  annual:PacketSection;recent:PacketSection;metrics:PacketMetric[];clipped:{annual:number;recent:number};withheld:WithheldCounts;
 }
 const emptySection=():PacketSection=>({periods:[],IS:[],BS:[],CF:[]});
 const bytes=(x:unknown)=>Buffer.byteLength(JSON.stringify(x),'utf8');
 
-function valueOf(c:Cell):PacketValue|null{
+type OwnerLookup=(id:string)=>{issuerId?:string};
+function valueOf(c:Cell,owner?:OwnerLookup):PacketValue|null{
  if(!c)return null;
- if(c.kind==='withheld')return {withheld:c.reason,factId:c.factId};
- if(c.kind==='fact')return {value:c.value,factId:c.factId,availableDate:c.availableDate};
+ if(c.kind==='withheld')return {withheld:c.reason,factId:c.factId,...owner?.(c.factId)};
+ if(c.kind==='fact')return {value:c.value,factId:c.factId,availableDate:c.availableDate,...owner?.(c.factId)};
  return null;   // annual/disclosed grids carry fact cells only
 }
 interface Built{sections:Record<'annual'|'recent',Record<StatementKind,{periods:PeriodCol[];rows:{concept:string;unit:string|null;cells:Record<string,Cell>}[]}>>;metrics:MetricRow[]}
@@ -44,29 +47,33 @@ const cmpStr=(a:string,b:string)=>a<b?-1:a>b?1:0;
 const colOrder=(a:PeriodCol,b:PeriodCol)=>cmpStr(b.periodEnd,a.periodEnd)||cmpStr(b.periodStart,a.periodStart)||(DUR_ORDER[a.duration]??9)-(DUR_ORDER[b.duration]??9);
 // 计划第 3 轮审计 R4: out.periods is the union of every statement's retained (clipped) periods, so every
 // values key is declared — an annual IS 12M key and a BS INSTANT key both appear; clipping stays per statement.
-function sectionOf(b:Built['sections']['annual'],n:number,g:Gated):PacketSection{
+function sectionOf(b:Built['sections']['annual'],n:number,g:Gated,owner?:OwnerLookup):PacketSection{
  const out=emptySection();
  const periodsByKey=new Map<string,PeriodCol>();
  for(const s of STATEMENTS){
   const periods=b[s].periods.slice(0,n);
   for(const p of periods)periodsByKey.set(p.key,p);
-  out[s]=b[s].rows.map(r=>({concept:r.concept,unit:r.unit,values:Object.fromEntries(periods.flatMap(p=>{const v=valueOf(gateCell(r.cells[p.key]??null,g));return v?[[p.key,v]]:[];}))})).filter(r=>Object.keys(r.values).length>0);
+  out[s]=b[s].rows.map(r=>({concept:r.concept,unit:r.unit,values:Object.fromEntries(periods.flatMap(p=>{const v=valueOf(gateCell(r.cells[p.key]??null,g),owner);return v?[[p.key,v]]:[];}))})).filter(r=>Object.keys(r.values).length>0);
  }
  out.periods=[...periodsByKey.values()].sort(colOrder);
  return out;
 }
 // Lineage comes from the grid's derivedCellOf and the shared gateCell (zero inputs / any ineligible input → withheld).
-function metricsOf(ms:MetricRow[],ends:Set<string>,g:Gated):PacketMetric[]{
+function metricsOf(ms:MetricRow[],ends:Set<string>,g:Gated,owner?:OwnerLookup):PacketMetric[]{
  return ms.filter(m=>(PACKET_METRICS as readonly string[]).includes(m.metric)&&ends.has(m.period_end)).map(m=>{
   const d=derivedCellOf(m),gated=gateCell(d,g);
   const factIds=d.inputs.map(i=>i.factId);
   const availableDate=d.inputs.reduce((x,i)=>i.availableDate>x?i.availableDate:x,'');
   const base={metric:m.metric,periodKey:periodKeyOf(m),unit:m.unit,basis:m.basis,factIds,availableDate};
   if(gated&&gated.kind==='withheld')return {...base,withheld:gated.reason,factId:gated.factId};
-  return {...base,value:d.value,inputUnit:d.inputUnit,inputs:d.inputs.map(i=>({factId:i.factId,availableDate:i.availableDate,...(i.quarter?{quarter:i.quarter}:{}),...(i.ytdRule?{ytdRule:i.ytdRule}:{})}))};
+  return {...base,value:d.value,inputUnit:d.inputUnit,inputs:d.inputs.map(i=>({factId:i.factId,availableDate:i.availableDate,...owner?.(i.factId),...(i.quarter?{quarter:i.quarter}:{}),...(i.ytdRule?{ytdRule:i.ytdRule}:{})}))};
  });
 }
 export const packetHandler:Handler=async(ctx)=>{
+ const lineage=await lineageMembers(ctx);
+ return lineage.length>1?withLineageRetry('packet',()=>packetLineage(ctx)):packetSingle(ctx);
+};
+const packetSingle=async(ctx:RouteCtx)=>{
  const {params:p,issuer,deps,asOf}=ctx;
  const annualN=intParam(p,'annualPeriods',5,10),recentN=intParam(p,'recentPeriods',4,8);
  const snap=await deps.snapshot(issuer.issuerId,issuer.market,{concepts:null,asOf,from:addDays(asOf,-(annualN+2)*366),history:true});
@@ -82,6 +89,38 @@ export const packetHandler:Handler=async(ctx)=>{
   const annual=sectionOf(built.sections.annual,a,g),recent=sectionOf(built.sections.recent,r,g);
   const ends=new Set([...annual.periods,...recent.periods].map(x=>x.periodEnd));
   const metrics=metricsOf(built.metrics,ends,g);
+  const all=[...annual.IS,...annual.BS,...annual.CF,...recent.IS,...recent.BS,...recent.CF].flatMap(row=>Object.values(row.values));
+  const withheld=countWithheld([...all,...metrics].filter(v=>'withheld' in v).map(v=>({kind:'withheld',reason:(v as {withheld:WithheldReason}).withheld})));
+  return {...head,annual,recent,metrics,clipped:{annual:a0-a,recent:r0-r},withheld};
+ };
+ const maxOf=(k:'annual'|'recent')=>Math.max(0,...STATEMENTS.map(s=>built.sections[k][s].periods.length));
+ const a0=Math.min(annualN,maxOf('annual')),r0=Math.min(recentN,maxOf('recent'));
+ let a=a0,r=r0,body=make(a,r);
+ while(bytes(body)>PACKET_MAX_BYTES&&(a>1||r>1)){if(r>1&&(r>=a||a===1))r--;else a--;body=make(a,r);}
+ if(bytes(body)>PACKET_MAX_BYTES)body={...head,annual:emptySection(),recent:emptySection(),metrics:[],clipped:{annual:a0,recent:r0},withheld:{evidenceIncomplete:0,citationPending:0}};
+ return {body,empty:body.annual.periods.length===0&&body.recent.periods.length===0};
+};
+const packetLineage=async(ctx:RouteCtx)=>{
+ const {params:p,asOf}=ctx;
+ const annualN=intParam(p,'annualPeriods',5,10),recentN=intParam(p,'recentPeriods',4,8);
+ const L=await readLineage(ctx,{concepts:null,asOf,from:addDays(asOf,-(annualN+2)*366),history:true});
+ if(!L)return null;
+ const {issuer}=L,snap={stateRev:L.targetRev,rows:L.rows,truncated:L.truncated,filings:L.filings};
+ const head={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf,truncated:snap.truncated,provenance:{mappingGen:MAPPING_GEN,formulaVersion:FORMULA_VERSION,stateRev:L.targetRev,lineage:L.lineage,stateRevs:L.stateRevs,conflicts:L.conflicts.length}};
+ if(snap.truncated){if(!await L.stable())return null;const body:PacketDto={...head,annual:emptySection(),recent:emptySection(),metrics:[],clipped:{annual:0,recent:0},withheld:{evidenceIncomplete:0,citationPending:0}};return {body,empty:true};}
+ // Task 7 grid on the same envelope (current disclosures only for annual/disclosed); 40 columns, sectionOf clips to n.
+ const grid=(basis:Basis,s:StatementKind)=>{const o=buildStatementsGrid(snap,{statement:s,basis,periods:40,market:issuer.market,asOf});return o.ok?{periods:o.periods,rows:o.rows}:{periods:[],rows:[]};};
+ const built:Built={sections:{annual:{} as Built['sections']['annual'],recent:{} as Built['sections']['recent']},metrics:deriveLineageMetrics(L.rows,issuer.issuerId,L.lineage,{market:issuer.market,asOf,basedOn:L.stateRevs})};
+ for(const s of STATEMENTS){built.sections.annual[s]=grid('annual',s);built.sections.recent[s]=grid('disclosed',s);}
+ const ids=[...STATEMENTS.flatMap(s=>[...built.sections.annual[s].rows,...built.sections.recent[s].rows].flatMap(r=>Object.values(r.cells).flatMap(cellFactIds))),...built.metrics.flatMap(m=>m.inputs.map(i=>i.fact_id))];
+ const g=await buildGated(L.gateCtx,ids,snap.rows,snap.filings);
+ if(!await L.stable())return null;
+ const owners=L.ownersOf(ids);
+ const owner:OwnerLookup=id=>owners[id]&&owners[id]!==issuer.issuerId?{issuerId:owners[id]}:{};
+ const make=(a:number,r:number):PacketDto=>{
+  const annual=sectionOf(built.sections.annual,a,g,owner),recent=sectionOf(built.sections.recent,r,g,owner);
+  const ends=new Set([...annual.periods,...recent.periods].map(x=>x.periodEnd));
+  const metrics=metricsOf(built.metrics,ends,g,owner);
   const all=[...annual.IS,...annual.BS,...annual.CF,...recent.IS,...recent.BS,...recent.CF].flatMap(row=>Object.values(row.values));
   const withheld=countWithheld([...all,...metrics].filter(v=>'withheld' in v).map(v=>({kind:'withheld',reason:(v as {withheld:WithheldReason}).withheld})));
   return {...head,annual,recent,metrics,clipped:{annual:a0-a,recent:r0-r},withheld};

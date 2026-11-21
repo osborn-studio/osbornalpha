@@ -1,4 +1,5 @@
 // In-memory service wiring and synthetic seeds for broker research tests (plan Part C; spec §12.1).
+import {RULES_VERSION} from './versions';
 import {createHash} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
@@ -11,7 +12,7 @@ import {fakeF3Port} from './ports/f3';
 import type {F3Port} from './ports/f3';
 import {recordedLlmPort} from './ports/llm';
 import type {LlmPort} from './ports/llm';
-import {EXTRACT_RESPONSE,pipelineExtraction} from './fixtures/pipeline';
+import {EXTRACT_RESPONSE,PAGES,pipelineExtraction} from './fixtures/pipeline';
 import type {BrokerResearchDb,DocumentRow,LicenceInput,LicenceRow} from './types';
 export const ADMIN_ID='9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 export const OTHER_ADMIN='9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6e';
@@ -51,4 +52,16 @@ export async function seedParsed(d:MemoryDeps,licenceId:string):Promise<Document
  const r=await runParse(d,doc.document_id,ADMIN_ID,{deadline:DEADLINE()});
  if(r.status!=='succeeded')throw new Error(`seed: parse failed ${r.errorCode}`);
  return (await d.db.getDocument(doc.document_id))!;
+}
+
+export async function seedPublished(d:MemoryDeps){
+ const doc=await seedParsed(d,(await seedLicence(d.db)).licence_id),r=await d.db.ensureReport(doc.document_id,'test');
+ const inst=await d.db.upsertInstitution({name_en:'Synthetic Broker Research Ltd',name_zh:null,aliases:[],kind:'broker',rating_disclosure_url:null});
+ for(const [field,value] of [['institution','Synthetic Broker Research Ltd'],['title','Building the platform'],['sector','Robotics'],['published_date','2026-11-02']] as const){
+  const start=PAGES[0].indexOf(value);
+  await d.db.insertHumanField(r.report_id,{target_key:null,field,occurrence:1,value_text:value,value_num:null,value_currency:null,value_unit:null,value_date:field==='published_date'?value:null,page:1,char_start:start,char_end:start+value.length,value_source_text:value,parse_run_id:doc.current_parse_run_id!,status:'confirmed'},ADMIN_ID);
+ }
+ await d.db.updateReportDraft(r.report_id,{scope:'sector',institution_id:inst,review_status:'approved'});await d.db.materialize(r.report_id);
+ await d.db.insertRuleReceipt({report_id:r.report_id,rules_version:RULES_VERSION,input_hash:(await d.db.getReport(r.report_id))!.rules_input_hash!,results:[{rule:'disclosure',passed:true,blocking:false,target_key:null,reason_code:null,detail:{surface:'title_original'}}],code_version:'test'});
+ return {reportId:r.report_id,documentId:doc.document_id,...await d.db.publish(r.report_id,ADMIN_ID)};
 }

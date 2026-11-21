@@ -21,7 +21,7 @@ import type {CandidateFieldInput,PublicationRow,RunRow,TypedValue} from './types
 
 interface SnapField{field_id:string;field:string;target_key:string|null;occurrence:number;status:string;extractor:string;parse_run_id:string|null;run_id:string|null;artifact_hash:string|null;
  page:number|null;char_start:number|null;char_end:number|null;value_source_text:string|null;value_source_sha256:string|null;framed:boolean;extracted:TypedValue;value:TypedValue}
-export interface ReplayMismatch{field_id:string;check:'snapshot_source'|'artifact_hash'|'span_verbatim'|'candidate_missing'|'candidate_value'|'behavior_digest'|'response_unreadable';detail?:string}
+export interface ReplayMismatch{field_id:string;check:'snapshot_source'|'artifact_hash'|'span_verbatim'|'candidate_missing'|'candidate_source'|'candidate_value'|'extractor_mismatch'|'evidence_incomplete'|'behavior_digest'|'response_unreadable';detail?:string}
 type RDeps=Pick<BrokerDeps,'db'|'storage'>;
 const candidateValueMatches=(c:CandidateFieldInput,v:TypedValue)=>c.value_text===v.value_text&&
  (c.value_num===null||v.value_num===null?c.value_num===v.value_num:decimalEquals(c.value_num,v.value_num))&&
@@ -45,33 +45,42 @@ async function candidatesOf(deps:RDeps,run:RunRow,artifact:F3Artifact,extractor:
  const merge=mergeChunks([...last.entries()].sort(([a],[b])=>a-b).map(([chunk,extraction])=>({chunk,extraction})));
  return buildCandidateRows(merge,{pages:artifact.pages,extractor});
 }
-export async function replayFromSnapshot(deps:RDeps,pub:PublicationRow):Promise<{publicationId:string;ok:boolean;checked:number;mismatches:ReplayMismatch[]}>{
+export async function replayFromSnapshot(deps:RDeps,pub:PublicationRow):Promise<{publicationId:string;ok:boolean;eligible:number;checked:number;mismatches:ReplayMismatch[]}>{
  const snapshot=pub.snapshot as {fields?:SnapField[]};
  const fields=snapshot.fields??[];const load=artifactLoader(deps);const mismatches:ReplayMismatch[]=[];
  const runCache=new Map<string,Promise<CandidateFieldInput[]|null>>();
+ let eligible=0,checked=0;
  for(const f of fields){
-  if(f.status==='absent'||f.parse_run_id===null||f.page===null||f.char_start===null||f.char_end===null)continue;
+  if(f.status==='absent')continue;
+  eligible++;
+  if(f.parse_run_id==null||f.page==null||f.char_start==null||f.char_end==null){mismatches.push({field_id:f.field_id,check:'evidence_incomplete'});continue;}
   if(f.value_source_text===null||f.value_source_sha256===null||sha256Hex(f.value_source_text)!==f.value_source_sha256){mismatches.push({field_id:f.field_id,check:'snapshot_source'});continue;}
   const parse=await deps.db.getRun(f.parse_run_id);
   if(!parse||parse.artifact_hash!==f.artifact_hash){mismatches.push({field_id:f.field_id,check:'artifact_hash'});continue;}
   const artifact=await load(f.parse_run_id).catch(()=>null);
   if(!artifact){mismatches.push({field_id:f.field_id,check:'artifact_hash',detail:'unreadable'});continue;}
   if(sliceText(artifact.pages,f.page,f.char_start,f.char_end)!==f.value_source_text){mismatches.push({field_id:f.field_id,check:'span_verbatim'});continue;}
-  if(!f.extractor.startsWith('llm:')||!f.run_id)continue;
-  const run=await deps.db.getRun(f.run_id);
+  if(!f.run_id&&!f.extractor.startsWith('llm:')){checked++;continue;}
+  const run=f.run_id?await deps.db.getRun(f.run_id):null;
   if(!run){mismatches.push({field_id:f.field_id,check:'response_unreadable'});continue;}
+  const previous=mismatches.length;
   const digest=behaviorDigest({extractorVersion:run.extractor_version??'unknown',modelId:run.model_id??'',registryHash:run.registry_hash??'',promptVersion:run.prompt_version??'',schemaVersion:run.schema_version??''});
   if(digest!==run.behavior_digest)mismatches.push({field_id:f.field_id,check:'behavior_digest'});
-  if(f.framed)continue;   // human-framed span (snapshot provenance): the candidate never had this span
+  // Match extractorOf without importing the extraction service.
+  if(f.extractor!==`llm:${run.model_id}@${run.registry_hash}`){mismatches.push({field_id:f.field_id,check:'extractor_mismatch'});continue;}
+  if(f.framed){if(mismatches.length===previous)checked++;continue;}   // human-framed span (snapshot provenance): the candidate never had this span
   let p=runCache.get(run.run_id);if(!p){p=candidatesOf(deps,run,artifact,f.extractor).catch(()=>null);runCache.set(run.run_id,p);}
   const cands=await p;if(!cands){mismatches.push({field_id:f.field_id,check:'response_unreadable'});continue;}
-  const c=cands.find(x=>x.target_key===f.target_key&&x.field===f.field&&x.occurrence===f.occurrence&&x.char_start===f.char_start&&x.char_end===f.char_end);
+  const c=cands.find(x=>x.target_key===f.target_key&&x.field===f.field&&x.occurrence===f.occurrence&&x.page===f.page&&x.char_start===f.char_start&&x.char_end===f.char_end);
   if(!c){mismatches.push({field_id:f.field_id,check:'candidate_missing'});continue;}
+  if(c.value_source_text!==f.value_source_text)mismatches.push({field_id:f.field_id,check:'candidate_source'});
   if(!candidateValueMatches(c,f.extracted))mismatches.push({field_id:f.field_id,check:'candidate_value'});
+  if(mismatches.length===previous)checked++;
  }
- return {publicationId:pub.publication_id,ok:mismatches.length===0,checked:fields.filter(f=>f.status!=='absent'&&f.char_start!==null).length,mismatches};
+ return {publicationId:pub.publication_id,ok:mismatches.length===0,eligible,checked,mismatches};
 }
 export async function replayPublication(deps:RDeps,publicationId:string){
  const pub=await deps.db.getPublication(publicationId);if(!pub)throw new Error(`publication_not_found:${publicationId}`);
- return replayFromSnapshot(deps,pub);
+ const result=await replayFromSnapshot(deps,pub),snapshotHashOk=await deps.db.publicationSnapshotOk(publicationId);
+ return {...result,snapshotHashOk,ok:result.ok&&snapshotHashOk===true};
 }

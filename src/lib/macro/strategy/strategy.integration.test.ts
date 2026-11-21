@@ -26,6 +26,7 @@ import {strategyDbOver} from './db';
 import type {ReadRole,SelectSpec,StrategyTransport} from './db';
 import {strategyDbContract,testManifest} from './db-contract';
 import {canonicalJson,sha256Hex} from './hash';
+import {manifestSizes,sizedManifest} from './manifest-blob.fixture';
 import * as manifestHash from './hash';
 
 const enabled=!!process.env.S4_TEST_STATE;
@@ -551,6 +552,33 @@ describe.skipIf(!enabled)('large manifest persistence on real PostgreSQL',()=>{
   pool=new Pool({connectionString:state.adminUrl,statement_timeout:10000});
  });
  afterAll(async()=>{await pool?.end();});
+ async function checkManifestReads(transport:StrategyTransport,id:string,canonical:string){
+  const admin=strategyDbOver({...transport,select:(_role,spec)=>transport.select('admin',spec)});
+  expect(canonicalJson((await admin.manifest(id))?.body)).toBe(canonical);
+  expect(canonicalJson((await strategyDbOver(transport).manifest(id))?.body)).toBe(canonical);
+ }
+ it.each(manifestSizes)('stores, reads and replays a %i-byte manifest',async size=>{
+  const transport=pgTransport(pool,()=>null),db=strategyDbOver(transport);
+  const body=sizedManifest(size),canonical=canonicalJson(body),hash=sha256Hex(canonical);
+  const first=await db.putManifest(body);
+  expect(first.manifest_hash).toBe(hash);
+  const gzip=size>100_000;
+  const stored=await pool.query(`select manifest_hash,body is null as compressed,body_gz is not null as has_blob,body_bytes
+   from public.macro_strategy_manifests where manifest_id=$1`,[first.manifest_id]);
+  expect(stored.rows).toEqual([{manifest_hash:hash,compressed:gzip,has_blob:gzip,body_bytes:gzip?size:null}]);
+  await checkManifestReads(transport,first.manifest_id,canonical);
+  expect(await db.putManifest(body)).toEqual(first);
+ },60000);
+ it.each(manifestSizes.filter(size=>size<=1_000_000))('reads and reuses a legacy %i-byte jsonb row',async size=>{
+  const transport=pgTransport(pool,()=>null),db=strategyDbOver(transport);
+  const body=sizedManifest(size),canonical=canonicalJson(body),hash=sha256Hex(canonical);
+  const id=String(await transport.rpc('macro_put_manifest',{p_kind:body.kind,p_body:body,p_manifest_hash:hash,p_cutoff:body.cutoff,
+   p_method_version:body.method_version,p_code_version:body.code_version,p_catalog_version:body.catalog_version}));
+  await checkManifestReads(transport,id,canonical);
+  expect(await db.putManifest(body)).toMatchObject({manifest_id:id,manifest_hash:hash});
+  const stored=await pool.query('select manifest_id,body is not null as has_body from public.macro_strategy_manifests where manifest_hash=$1',[hash]);
+  expect(stored.rows).toEqual([{manifest_id:id,has_body:true}]);
+ },60000);
  it('round-trips every input, replays concurrently and detects a conflict in the last input',async()=>{
   const body=testManifest('cycle_table');
   body.params={...body.params,boundary:'event_day',columns:'[]'};

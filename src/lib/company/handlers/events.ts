@@ -5,21 +5,27 @@
 // computed 'live', own keyset over (occurred_on desc, event_id asc) — the order Task 3 eventsOfIssuer pages
 // the materialized table; truncated → 400 replay_truncated. Payload values pass the shared event gate
 // (event-dto.ts gateEvents, the same function the tracking inbox uses) in both modes.
+// Merged issuers always replay the fenced lineage and gate page inputs by their original owners.
+import type {LineageRead} from '../lineage-read';
+import {lineageMembers,readLineage,withLineageRetry} from '../lineage-read';
 import {QueryError,dateParam,intParam,listParam} from '@/lib/facts/public-route';
 import type {FactRow} from '@/lib/facts/types';
 import {eventIdOf} from '../canonical';
-import {gateEvents} from '../event-dto';
+import {eventFactIds,gateEvents,toPublicEvent} from '../event-dto';
 import type {PublicEvent} from '../event-dto';
 import {deriveIssuerEvents} from '../events';
-import {RouteError} from '../route';
-import type {Handler} from '../route';
+import {RouteError,buildGated,countWithheld} from '../route';
+import type {Handler,RouteCtx} from '../route';
 import {CompanyDbError,EVENT_KINDS} from '../types';
 import type {EventInput,EventKind,EventRow,EvidenceDto,FilingSummary,WithheldCounts} from '../types';
 
 export const EVENTS_PARAMS=['since','until','kinds','cursor','limit','asOf'] as const;
 const KINDS=new Set<string>(EVENT_KINDS);
 const CURSOR_RE=/^[A-Za-z0-9_-]{1,256}$/;
-export interface EventsDto{issuerId:string;ticker:string;market:'US'|'CN';asOf:string|null;computed:'materialized'|'live';stateRev:number|null;rows:PublicEvent[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts}
+export interface EventsDto{issuerId:string;ticker:string;market:'US'|'CN';asOf:string|null;computed:'materialized'|'live';stateRev:number|null;rows:PublicEvent[];nextCursor:string|null;evidence:Record<string,EvidenceDto>;withheld:WithheldCounts;
+ /** present only for a multi-member lineage */
+ lineage?:string[];stateRevs?:LineageRead['stateRevs'];conflicts?:LineageRead['conflicts'];factOwners?:Record<string,string>
+}
 const enc=(occ:string,id:string)=>Buffer.from(`${occ}~${id}`,'utf8').toString('base64url');
 function dec(c:string):{occ:string;id:string}{
  const s=Buffer.from(c,'base64url').toString('utf8');const m=/^(\d{4}-\d{2}-\d{2})~([0-9a-f]{64})$/.exec(s);
@@ -36,6 +42,10 @@ export function pageLive(all:LiveEvent[],f:{since?:string;until?:string;kinds?:s
  return {rows,nextCursor:xs.length>f.limit?enc(rows[rows.length-1].input.occurred_on,rows[rows.length-1].eventId):null};
 }
 export const eventsHandler:Handler=async(ctx)=>{
+ const lineage=await lineageMembers(ctx);
+ return lineage.length>1?withLineageRetry('events',()=>eventsLineage(ctx)):eventsSingle(ctx);
+};
+const eventsSingle=async(ctx:RouteCtx)=>{
  const {params:p,issuer,deps,asOf}=ctx;
  const since=dateParam(p,'since'),until=dateParam(p,'until');
  const kinds=listParam(p,'kinds',KINDS,KINDS.size) as EventKind[]|undefined;
@@ -57,5 +67,26 @@ export const eventsHandler:Handler=async(ctx)=>{
  const gated=await gateEvents(items.map(x=>({e:x.e,eventId:x.eventId,issuerId:issuer.issuerId,market:issuer.market})),deps,{admin:ctx.admin,asOf:ctx.asOfGiven?asOf:undefined,known,filings});
  const rows=gated.events;
  const body:EventsDto={issuerId:issuer.issuerId,ticker:issuer.ticker,market:issuer.market,asOf:ctx.asOfGiven?asOf:null,computed:ctx.asOfGiven?'live':'materialized',stateRev,rows,nextCursor,evidence:gated.evidence,withheld:gated.withheld};
+ return {body,empty:rows.length===0};
+};
+const eventsLineage=async(ctx:RouteCtx)=>{
+ const {params:p,asOf}=ctx;
+ const since=dateParam(p,'since'),until=dateParam(p,'until');
+ const kinds=listParam(p,'kinds',KINDS,KINDS.size) as EventKind[]|undefined;
+ const limit=intParam(p,'limit',50,200);
+ const cursor=p.get('cursor');if(cursor!==undefined&&!CURSOR_RE.test(cursor))throw new QueryError('cursor');
+ const L=await readLineage(ctx,{concepts:null,asOf,history:true});if(!L)return null;
+ if(L.truncated)throw new RouteError('replay_truncated',400,'replay read truncated');
+ const {issuerId,ticker,market}=L.issuer;
+ const all=deriveIssuerEvents({rows:L.rows,filings:L.filings,cutoff:asOf}).map(e=>({input:e,eventId:eventIdOf(issuerId,market,e.kind,e.natural_key)}));
+ const page=pageLive(all,{since,until,kinds,cursor,limit});
+ const ids=[...new Set(page.rows.flatMap(x=>eventFactIds(x.input)))];
+ const g=await buildGated(L.gateCtx,ids,L.rows,L.filings);
+ const rows=page.rows.map(({input:e,eventId})=>toPublicEvent({e,eventId,issuerId,market},g.eligibility,e.filing_id?g.filings.get(e.filing_id):undefined));
+ const evidence=Object.fromEntries(ids.filter(id=>g.evidence[id]).map(id=>[id,g.evidence[id]]));
+ const withheld=countWithheld(ids.map(id=>g.withheld(id)));
+ if(!await L.stable())return null;
+ const body:EventsDto={issuerId,ticker,market,asOf:ctx.asOfGiven?asOf:null,computed:'live',stateRev:L.targetRev,rows,nextCursor:page.nextCursor,
+  evidence,withheld,lineage:L.lineage,stateRevs:L.stateRevs,conflicts:L.conflicts,factOwners:L.ownersOf(ids)};
  return {body,empty:rows.length===0};
 };

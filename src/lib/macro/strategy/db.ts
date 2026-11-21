@@ -21,7 +21,8 @@ export interface RunDetail{explanation_id:string;user_id:string;state:Explanatio
 export const hasRecordedCompletion=(raw:unknown):boolean=>typeof raw==='object'&&raw!==null&&!Array.isArray(raw);
 /** Running rows scanned per recoverableRuns call. */
 export const RECOVERY_SCAN=50;
-export const MANIFEST_GZ_THRESHOLD_BYTES=1_000_000;
+// To reduce jsonb write latency, bodies above this size travel and are stored as gzip; smaller bodies stay jsonb.
+export const MANIFEST_GZ_THRESHOLD_BYTES=100_000;
 
 export class StrategyDbError extends Error{constructor(readonly code:'stale_generation'|'payload_conflict'|'invalid_transition'|'not_found'|'cutoff_mismatch'|'invalid_argument'|'rpc_failed',message?:string){super(message??code);this.name='StrategyDbError';}}
 export type FactViewKind='transmission'|'policy_response'|'cycle_table';

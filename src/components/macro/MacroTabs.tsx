@@ -2,6 +2,8 @@
 import Link from 'next/link';
 import type {Boundary} from '@/lib/macro/strategy/contract';
 import {useMacroT} from './use-macro-t';
+import {useStrategyFlag} from './strategy-flag';
+import {strategyLinkTabs} from './strategy-links';
 export const MACRO_TABS = ['overview','indicators','correlation','transmission','history','review','methodology'] as const;
 export type MacroTab = typeof MACRO_TABS[number];
 /** Construct fresh parameters in canonical order; boundary changes never append old query values. */
@@ -14,9 +16,11 @@ export function macroTabHref(tab: MacroTab, region: 'US'|'CN', boundary?: Bounda
 }
 export function MacroTabs({active,region='US',onView}:{active:MacroTab;region?:'US'|'CN';onView?:(tab:'overview'|'indicators'|'correlation'|'methodology')=>void}) {
  const {t}=useMacroT();
+ const linkTabs=strategyLinkTabs(useStrategyFlag());
  return <nav aria-label={t('tabs.label')} className="flex flex-nowrap gap-1 overflow-x-auto whitespace-nowrap border-b border-border">
   {MACRO_TABS.map(tab=>{
    const view=tab==='overview'||tab==='indicators'||tab==='correlation'||tab==='methodology';
+   if(!view&&!linkTabs.some(link=>link.key===tab))return null;
    return <Link key={tab} href={macroTabHref(tab,region)}
     aria-current={tab===active?'page':undefined}
     onClick={view&&onView?e=>{if(!e.metaKey&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();onView(tab);}}:undefined}
