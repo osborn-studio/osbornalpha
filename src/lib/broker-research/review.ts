@@ -87,7 +87,7 @@ export async function markAbsent(deps:RDeps,reportId:string,i:{field:FieldName;t
 }
 export interface BindInput{institutionId?:string|null;scope?:unknown;reportType?:string|null;primaryTargetKey?:string|null;supersedesReportId?:string|null;titlePublic?:string|null;analyst?:{analystId:string;fieldId:string;role?:string|null}}
 export async function bindReport(deps:RDeps,reportId:string,b:BindInput,by:string):Promise<{receipt:MaterializeReceipt;rules:RulesOutcome}>{
- await reportOr404(deps,reportId);const patch:Parameters<RDeps['db']['updateReportDraft']>[1]={};
+ await reportOr404(deps,reportId);const patch:Parameters<RDeps['db']['bindReport']>[1]={};
  const nullableStr=(v:unknown,k:string,max:number)=>{if(v!==null&&(typeof v!=='string'||!v.trim()||v.length>max))throw inv(k);return v as string|null;};
  if(b.institutionId!==undefined)patch.institution_id=nullableStr(b.institutionId,'institutionId',36);
  if(b.scope!==undefined){if(!SCOPES.includes(b.scope as ReportScope))throw inv('scope');patch.scope=b.scope as ReportScope;}
@@ -95,9 +95,9 @@ export async function bindReport(deps:RDeps,reportId:string,b:BindInput,by:strin
  if(b.primaryTargetKey!==undefined)patch.primary_target_key=nullableStr(b.primaryTargetKey,'primaryTargetKey',64);
  if(b.supersedesReportId!==undefined){const v=nullableStr(b.supersedesReportId,'supersedesReportId',36);if(v===reportId)throw inv('supersedesReportId');patch.supersedes_report_id=v;}
  if(b.titlePublic!==undefined){patch.title_public=nullableStr(b.titlePublic,'titlePublic',300);patch.title_public_by=patch.title_public===null?null:by;}
- if(Object.keys(patch).length)await deps.db.updateReportDraft(reportId,patch);
- if(b.analyst){const f=(await deps.db.listFields(reportId)).find(x=>x.field_id===b.analyst!.fieldId);if(!f||f.field!=='analyst'||!['confirmed','corrected'].includes(f.status))throw bad('analyst_field_required');await deps.db.bindAnalyst({report_id:reportId,analyst_id:b.analyst.analystId,role:b.analyst.role??null,field_id:f.field_id});}
- const receipt=await deps.db.materialize(reportId);return {receipt,rules:await afterChange(deps,reportId)};
+ let analyst:Parameters<RDeps['db']['bindReport']>[2]=null;
+ if(b.analyst){const f=(await deps.db.listFields(reportId)).find(x=>x.field_id===b.analyst!.fieldId);if(!f||f.field!=='analyst'||!['confirmed','corrected'].includes(f.status))throw bad('analyst_field_required');analyst={analyst_id:b.analyst.analystId,role:b.analyst.role??null,field_id:f.field_id};}
+ const receipt=await deps.db.bindReport(reportId,patch,analyst);return {receipt,rules:await afterChange(deps,reportId)};
 }
 export async function setOverride(deps:RDeps,reportId:string,i:{targetKey:string;securityTicker:string;note:string|null},by:string):Promise<{receipt:MaterializeReceipt;rules:RulesOutcome}>{
  const report=await reportOr404(deps,reportId),doc=await deps.db.getDocument(report.document_id);if(!doc)throw notFound('document_not_found');
@@ -119,7 +119,7 @@ export async function publishReport(deps:RDeps,reportId:string,by:string):Promis
 }
 export async function unpublishReport(deps:RDeps,reportId:string,reason:string,by:string):Promise<ReportRow>{
  const report=await reportOr404(deps,reportId);if(report.status!=='published')throw conflict('not_published');
- await deps.db.unpublish(reportId,by,reason);await deps.db.logAccess({document_id:report.document_id,user_id:by,action:'unpublish',detail:{report_id:reportId,reason}});
+ await deps.db.unpublishLogged(reportId,by,reason);
  await auditAdmin(deps.tables,by,'broker_research.unpublish',reportId,{reason},deps.now());return reportOr404(deps,reportId);
 }
 export async function recheckDisclosure(deps:RDeps,reportId:string,by:string):Promise<{restored:boolean;failures:string[]}>{

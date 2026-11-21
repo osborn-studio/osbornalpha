@@ -7,7 +7,7 @@ export const MAX_OBJECT_BYTES=52428800;
 export const SIGNED_READ_SECONDS=600;
 export type ObjectType='application/pdf'|'application/json'|'image/png';
 const U='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',S='[0-9a-f]{64}';
-const PATH_RE=new RegExp(`^(staging/${U}\\.pdf|reports/${S}\\.pdf|reports/${S}\\.extract\\.${U}\\.json|reports/${S}\\.pages\\.${U}/[1-9][0-9]{0,4}\\.png|runs/${U}\\.(request|response)\\.json|eval/${S}/${U}\\.(request|response)\\.json|licences/${S}\\.pdf)$`);
+const PATH_RE=new RegExp(`^(staging/${U}\\.pdf|reports/${S}\\.pdf|reports/${S}\\.extract\\.${U}\\.json|reports/${S}\\.pages\\.${U}/[1-9][0-9]{0,4}\\.png|runs/${U}\\.(call-[1-9][0-9]{0,3}\\.)?(request|response)\\.json|eval/${S}/${U}\\.(call-[1-9][0-9]{0,3}\\.)?(request|response)\\.json|licences/${S}\\.pdf)$`);
 const PREFIX_RE=new RegExp(`^(staging/|reports/${S}\\.pages\\.${U}/|eval/${S}/)$`);
 export const brokerPaths={
  staging:(intentId:string)=>`staging/${intentId}.pdf`,report:(sha:string)=>`reports/${sha}.pdf`,
@@ -15,6 +15,10 @@ export const brokerPaths={
  artifactPrefix:(sha:string,runId:string)=>`reports/${sha}.extract.${runId}`,
  pagesPrefix:(sha:string,runId:string)=>`reports/${sha}.pages.${runId}/`,
  request:(runId:string)=>`runs/${runId}.request.json`,response:(runId:string)=>`runs/${runId}.response.json`,
+ callRequest:(runId:string,seq:number)=>`runs/${runId}.call-${seq}.request.json`,
+ callResponse:(runId:string,seq:number)=>`runs/${runId}.call-${seq}.response.json`,
+ evalCallRequest:(sha:string,runId:string,seq:number)=>`eval/${sha}/${runId}.call-${seq}.request.json`,
+ evalCallResponse:(sha:string,runId:string,seq:number)=>`eval/${sha}/${runId}.call-${seq}.response.json`,
  evalRequest:(sha:string,runId:string)=>`eval/${sha}/${runId}.request.json`,
  evalResponse:(sha:string,runId:string)=>`eval/${sha}/${runId}.response.json`,evalPrefix:(sha:string)=>`eval/${sha}/`,
 };

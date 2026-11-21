@@ -49,6 +49,7 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   async getReport(id){const r=await one(`select * from ${rel('broker_research_reports')} where report_id=$1`,[id]);return r?reportFromRow(r):null;},
   async reportByDocument(id){const r=await one(`select * from ${rel('broker_research_reports')} where document_id=$1`,[id]);return r?reportFromRow(r):null;},
   async listReports(o){return (await q(`select * from ${rel('broker_research_reports')} where institution_id=$1 order by created_at,report_id`,[o.institutionId])).map(reportFromRow);},
+  async bindReport(id,patch,analyst){return receiptFrom(await fn('public.broker_report_bind($1,$2,$3)',[id,patch,analyst]));},
   async updateReportDraft(id,patch){await update('broker_research_reports',patch as R,'report_id=$1',[id]);},
   async setReportFlags(id,flags){const p=dropUndefined(flags as R);if(Object.keys(p).length&&!(await update('broker_research_reports',p,'report_id=$1',[id])).length)throw missing('report');},
   extractCommit:async(id,token,run,rows)=>receiptFrom(await fn('public.broker_extract_commit($1,$2,$3,$4::jsonb)',[id,token,run,JSON.stringify(rows)])),
@@ -70,6 +71,7 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   extractSetScope:async(id,token,run,scope)=>receiptFrom(await fn('public.broker_extract_set_scope($1,$2,$3,$4)',[id,token,run,scope])),
   extractFinalize:async(id,token,run,detail)=>{await fn('public.broker_extract_finalize($1,$2,$3,$4::jsonb)',[id,token,run,detail]);return 'ok';},
   async insertSummary(r){return String((await insert('broker_report_summaries',r as unknown as R,'summary_id')).summary_id);},
+  async approveSummary(id,by,check){await fn('public.broker_summary_approve($1,$2,$3)',[id,by,check]);},
   async setSummaryStatus(id,p){await update('broker_report_summaries',p as R,'summary_id=$1',[id]);},
   async getSummary(id){const r=await one(`select * from ${rel('broker_report_summaries')} where summary_id=$1`,[id]);return r?summaryFromRow(r):null;},
   async listSummaries(id){return (await q(`select * from ${rel('broker_report_summaries')} where report_id=$1 order by generated_at,summary_id`,[id])).map(summaryFromRow);},
@@ -77,7 +79,9 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   disclosureDigest:async id=>String(await fn('public.broker_report_disclosure_digest($1)',[id])),
   async disclosureRecheck(id,by,checks){const x=await fn<R>('public.broker_report_disclosure_recheck($1,$2,$3::jsonb)',[id,by,checks]);return {restored:x.restored===true,failures:((x.failures??[]) as unknown[]).map(String)};},
   publish:async(id,by)=>({publicationId:String(await fn('public.broker_report_publish($1,$2)',[id,by]))}),
+  async unpublishLogged(id,by,reason){await fn('public.broker_report_unpublish_logged($1,$2,$3)',[id,by,reason]);},
   async unpublish(id,by,reason){await fn('public.broker_report_unpublish($1,$2,$3)',[id,by,reason]);},
+  publicationSnapshotOk:id=>fn('public.broker_publication_snapshot_ok($1)',[id]),
   async getPublication(id){const r=await one(`select * from ${rel('broker_report_publications')} where publication_id=$1`,[id]);return r?publicationFromRow(r):null;},
   async upsertInstitution(r){
    const cols=['institution_id','name_en','name_zh','aliases','kind','rating_disclosure_url'];

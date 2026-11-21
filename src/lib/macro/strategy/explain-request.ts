@@ -14,7 +14,7 @@
 // recoverExplanation rebuilds validation / rendering from it and the manifest's frozen facts and finishes the run without
 // ever calling the provider (validator version changed → failed {validator_version_changed}), then settles a recorded,
 // unsettled finalize payload verbatim. finish also carries the payload so a failed recordCompletion still leaves it stored.
-import {readFileSync} from 'node:fs';
+import {MACRO_EXPLAIN_PROMPTS} from './prompts/macro-explain-v1';
 import Ajv from 'ajv';
 import {canonicalJson,sha256Hex} from './hash';
 import type {ExplanationProjection,StrategyManifest} from './contract';
@@ -98,11 +98,8 @@ export async function recoverUserExplanations(d:RecoveryDeps,userId:string,limit
  return ids.length;
 }
 
-const PROMPT_URLS={zh:new URL('./prompts/macro-explain-v1.zh.md',import.meta.url),en:new URL('./prompts/macro-explain-v1.en.md',import.meta.url)};
-const promptCache=new Map<'zh'|'en',string>();
 export function promptText(locale:'zh'|'en'):string{
- let t=promptCache.get(locale);if(t===undefined){t=readFileSync(PROMPT_URLS[locale],'utf8');promptCache.set(locale,t);}
- return t;
+ return MACRO_EXPLAIN_PROMPTS[locale];
 }
 export function userMessage(locale:'zh'|'en',facts:{fact_id:string;text:string}[]):string{
  return `${locale==='zh'?'事实清单（JSON）：':'Fact list (JSON):'}\n${JSON.stringify(facts)}`;

@@ -148,4 +148,6 @@ jobs:
       - name: Next-resolved patched image runtime
         run: node scripts/ci/sharp-runtime-smoke.mjs
       - run: npm run build
+      - name: Server bundle check (assets readable at runtime, explanation prompts bundled)
+        run: npx tsx scripts/ci/server-bundle-check.ts
       - run: npx tsx scripts/ci/npm-audit.ts

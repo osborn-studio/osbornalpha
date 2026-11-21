@@ -2,7 +2,7 @@
 import {decimalEquals} from '../facts/json-numbers';
 import {behaviorDigest} from './behavior';
 import {BrokerError,conflict,gone,notFound} from './errors';
-import {extractCandidates} from './extract/run';
+import {extractCandidates,ExtractFailure} from './extract/run';
 import {canonicalJson,sha256Hex} from './hash';
 import {processingAllowed,utcToday} from './licences';
 import {LEASE_SECONDS,artifactLoader} from './parse';
@@ -17,7 +17,7 @@ export interface EvalRow{target_key:string|null;field:string;occurrence:number;v
 export interface GoldDoc{sha256:string;fields:EvalRow[];absent:{target_key:string|null;field:string}[]}
 export interface ExtractedDoc{sha256:string;rows:EvalRow[]}
 export const EVAL_THRESHOLD=0.95,GOLD_MIN_DOCS=30;
-const id=(r:{target_key:string|null;field:string;occurrence?:number})=>`${r.target_key??''}\u0000${r.field}\u0000${r.occurrence??1}`;
+const id=(r:{target_key:string|null;field:string;occurrence:number})=>`${r.target_key??''}\u0000${r.field}\u0000${r.occurrence}`;
 const tf=(r:{target_key:string|null;field:string})=>`${r.target_key??''}\u0000${r.field}`;
 const norm=(s:string)=>s.toLowerCase().replace(/\s+/g,' ').trim();
 const sameNum=(a:string|null,b:string|null)=>a===null||b===null?a===b:decimalEquals(a,b);
@@ -30,10 +30,15 @@ const overlaps=(a:EvalRow,b:EvalRow)=>a.char_start!==null&&a.char_end!==null&&b.
 const matches=(gold:EvalRow,x:EvalRow)=>sameValue(gold,x)&&gold.page===x.page&&overlaps(gold,x);
 const ratio=(n:number,d:number)=>d===0?null:n/d;
 export function evalStats(gold:GoldDoc[],extracted:ExtractedDoc[]):Pick<EvalReceiptRow,'n_docs'|'per_field'|'absence'|'precision_min'|'recall_min'|'passed'>{
+ const goldShas=new Set(gold.map(g=>g.sha256)),bySha=new Map<string,EvalRow[]>(),duplicates=new Set<string>();
+ for(const e of extracted){if(bySha.has(e.sha256))duplicates.add(e.sha256);bySha.set(e.sha256,e.rows);}
+ const missing=[...goldShas].filter(s=>!bySha.has(s)),unexpected=[...bySha.keys()].filter(s=>!goldShas.has(s));
+ if(missing.length||unexpected.length||duplicates.size)throw new BrokerError('eval_document_set_mismatch',409,{missing,unexpected,duplicate:[...duplicates]});
  const per:Record<string,{tp:number;fp:number;fn:number}>={};const bump=(f:string,k:'tp'|'fp'|'fn')=>{(per[f]??={tp:0,fp:0,fn:0})[k]++;};
  const absence={tp:0,fp:0,fn:0};
  for(const gd of gold){
-  const rows=extracted.find(e=>e.sha256===gd.sha256)?.rows??[];
+  const rows=bySha.get(gd.sha256)!;
+  for(const r of [...gd.fields,...rows])if(!Number.isSafeInteger(r?.occurrence)||r.occurrence<1)throw new BrokerError('invalid_eval_row',400,{sha256:gd.sha256,field:typeof r?.field==='string'?r.field:null});
   const byId=new Map<string,EvalRow[]>();for(const r of rows){const k=id(r);byId.set(k,[...(byId.get(k)??[]),r]);}
   const used=new Set<EvalRow>();
   for(const gr of gd.fields){const hit=(byId.get(id(gr))??[]).find(x=>!used.has(x)&&matches(gr,x));if(hit){used.add(hit);bump(gr.field,'tp');}else bump(gr.field,'fn');}
@@ -74,11 +79,21 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
  const authorized:AuthorizedDoc[]=[];const versions=new Set<string>();
  for(const g of docs){const a=await authorizeGoldDoc(deps,g.sha256);authorized.push({sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,parse_run_id:a.parseRun.run_id,artifact_hash:a.parseRun.artifact_hash,extractor_version:a.parseRun.extractor_version});versions.add(a.parseRun.extractor_version??'unknown');}
  if(versions.size>1)throw conflict('mixed_extractor_versions',{versions:[...versions]});
+ const load=artifactLoader(deps);
+ for(const [i,g] of docs.entries()){
+  const artifact=await load(authorized[i].parse_run_id);
+  const invalid=(field:unknown,reason:string)=>new BrokerError('invalid_gold_manifest',400,{sha256:g.sha256,field:typeof field==='string'?field:null,reason});
+  for(const r of g.fields){
+   const page=artifact.pages.find(p=>p.page===r?.page);if(!page)throw invalid(r?.field,'unknown_page');
+   const {char_start:s,char_end:e}=r;if(s===null||e===null||!Number.isSafeInteger(s)||!Number.isSafeInteger(e)||s<0||s>=e||e>page.text.length)throw invalid(r.field,'invalid_span');
+  }
+  for(const a of g.absent)if(typeof a?.field!=='string'||(a.target_key!==null&&typeof a.target_key!=='string'))throw invalid(a?.field,'invalid_absent');
+ }
  const extractorVersion=[...versions][0]??'unknown',hash=corpusHash(docs);
  const digest=behaviorDigest({extractorVersion,modelId:info.modelId,registryHash:info.registryHash,promptVersion:EXTRACT_PROMPT_VERSION,schemaVersion:SCHEMA_VERSION});
  const approved=(await deps.db.getSettings()).approved_gold_corpus_hash===hash;
  if(o.dryRun)return {receiptId:null,authorized,corpusHash:hash,behaviorDigest:digest,approved,stats:null};
- const load=artifactLoader(deps);const extracted:ExtractedDoc[]=[];
+ const extracted:ExtractedDoc[]=[];
  for(const g of docs){
   const a=await authorizeGoldDoc(deps,g.sha256),pin=authorized.find(x=>x.sha256===g.sha256)!;
   if(a.licence.version!==pin.licence_version)throw conflict('licence_changed_during_eval');
@@ -86,14 +101,22 @@ export async function runGoldEval(deps:BrokerDeps,docs:GoldDoc[],o:{by:string;dr
   const token=deps.newId();if(!await deps.db.claimLease(a.doc.document_id,token,LEASE_SECONDS))throw conflict('lease_held',{sha256:g.sha256});
   try{
    let lost:'lease_lost'|'document_withdrawn'|null=null;
-   const hb=setInterval(()=>{void deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS).then(x=>{if(x!=='ok')lost=x;},()=>{lost='lease_lost';});},HEARTBEAT_MS);
+   const evalRun=deps.newId();
+   const put=async(path:string,record:unknown)=>{await trackedUpload(deps,{documentId:a.doc.document_id,path,writer:'eval',body:JSON.stringify(record),contentType:'application/json',lease:{token,ttlSeconds:LEASE_SECONDS}});};
+   const provenance={run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,document_id:a.doc.document_id,parse_run_id:pin.parse_run_id,artifact_hash:pin.artifact_hash,licence_id:pin.licence_id,licence_version:pin.licence_version,extractor_version:extractorVersion,model_id:info.modelId,registry_hash:info.registryHash,prompt_version:EXTRACT_PROMPT_VERSION,schema_version:SCHEMA_VERSION,behavior_digest:digest};
+   const requestPath=brokerPaths.evalRequest(g.sha256,evalRun),responsePath=brokerPaths.evalResponse(g.sha256,evalRun);
    let b:Awaited<ReturnType<typeof extractCandidates>>;
-   try{b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now});}
+   const hb=setInterval(()=>{void deps.db.renewLease(a.doc.document_id,token,LEASE_SECONDS).then(x=>{if(x!=='ok')lost=x;},()=>{lost='lease_lost';});},HEARTBEAT_MS);
+   try{b=await extractCandidates(deps.llm,info,await load(pin.parse_run_id),{deadline:new Date(deps.now().getTime()+(o.deadlineMs??600_000)),now:deps.now,recorder:{
+    request:(rec,seq)=>put(brokerPaths.evalCallRequest(g.sha256,evalRun,seq),rec),response:(rec,seq)=>put(brokerPaths.evalCallResponse(g.sha256,evalRun,seq),rec),
+   }});}
+   catch(e){if(e instanceof ExtractFailure){
+    await put(requestPath,{...provenance,calls:e.requests,error:e.code}).catch(()=>{});
+    await put(responsePath,{...provenance,calls:e.responses,error:e.code}).catch(()=>{});
+   }throw e;}
    finally{clearInterval(hb);}
    if(lost==='document_withdrawn')throw gone();if(lost)throw conflict('lease_lost',{sha256:g.sha256});
-   const evalRun=deps.newId();const put=(path:string,body:string)=>trackedUpload(deps,{documentId:a.doc.document_id,path,writer:'eval',body,contentType:'application/json',lease:{token,ttlSeconds:LEASE_SECONDS}});
-   await put(brokerPaths.evalRequest(g.sha256,evalRun),JSON.stringify({run_id:evalRun,purpose:'eval-gold',sha256:g.sha256,licence_id:a.licence.licence_id,licence_version:a.licence.version,calls:b.requests}));
-   await put(brokerPaths.evalResponse(g.sha256,evalRun),JSON.stringify({run_id:evalRun,calls:b.responses}));
+   await put(requestPath,{...provenance,calls:b.requests});await put(responsePath,{...provenance,calls:b.responses});
    extracted.push({sha256:g.sha256,rows:b.rows});
    o.log?.(`${g.sha256.slice(0,12)} licence_v=${a.licence.version} candidates=${b.rows.length} unverified=${b.unverified} calls=${b.requests.length}`);
   }finally{await deps.db.fencedUpdateDocument(a.doc.document_id,token,{releaseLease:true});}

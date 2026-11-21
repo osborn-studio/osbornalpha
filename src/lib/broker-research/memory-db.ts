@@ -33,6 +33,7 @@ export interface MemoryBrokerResearchDb extends BrokerResearchDb{
  tables:TableClient;
  setNow(iso:string|null):void;
  expireLease(documentId:string):void;
+ replaceSnapshot(id:string,snapshot:PublicationRow['snapshot']):void;
  outbox():OutboxEvent[];
 }
 
@@ -188,10 +189,11 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
  };
  /** All-or-nothing: snapshot every map a call may touch, restore on error (= one SQL transaction). */
  const atomic=<T>(fn:()=>T):T=>{
-  const snap=[new Map([...fields].map(([k,v])=>[k,clone(v)])),new Map([...reports].map(([k,v])=>[k,clone(v)])),new Map([...targets].map(([k,v])=>[k,clone(v)])),new Map([...overrides]),new Map([...snippets].map(([k,v])=>[k,clone(v)])),new Map([...summaries].map(([k,v])=>[k,clone(v)])),new Map([...scales].map(([k,v])=>[k,clone(v)])),outbox.length] as const;
+  const snap=[new Map([...fields].map(([k,v])=>[k,clone(v)])),new Map([...reports].map(([k,v])=>[k,clone(v)])),new Map([...targets].map(([k,v])=>[k,clone(v)])),new Map([...overrides]),new Map([...snippets].map(([k,v])=>[k,clone(v)])),new Map([...summaries].map(([k,v])=>[k,clone(v)])),new Map([...scales].map(([k,v])=>[k,clone(v)])),outbox.length,clone(bindings),clone(publications),access.length] as const;
   try{return fn();}catch(e){
    const restore=<K,V>(m:Map<K,V>,s:Map<K,V>)=>{m.clear();for(const [k,v] of s)m.set(k,v);};
    restore(fields,snap[0]);restore(reports,snap[1]);restore(targets,snap[2]);restore(overrides,snap[3]);restore(snippets,snap[4]);restore(summaries,snap[5]);restore(scales,snap[6]);outbox.length=snap[7];
+   bindings.splice(0,bindings.length,...snap[8]);restore(publications,snap[9]);access.length=snap[10];
    throw e;
   }
  };
@@ -349,10 +351,40 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
     upside_formula_version:x.t.upside_formula_version,prev_upside_formula_version:p?.t.upside_formula_version??null,code_version:x.r.code_version,prev_code_version:p?.r.code_version??null,available_at:x.r.available_at,prev_available_at:p?.r.available_at??null} as R;});
  };
 
+ const updateReportDraft:(...args:Parameters<BrokerResearchDb['updateReportDraft']>)=>void=(id,patch)=>{
+   const r=reports.get(id)??fail('report_not_found');
+   if(r.status==='withdrawn')fail('report_withdrawn');
+   const p=Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined)) as Partial<ReportRow>;
+   if(r.status==='published'&&Object.entries(p).some(([k,v])=>!['evidence_ok','disclosure_ok','supersedes_report_id'].includes(k)&&!same((r as unknown as R)[k],v)))fail('published_immutable');
+   if(p.title_public!==undefined&&p.title_public!==null&&!(p.title_public_by??r.title_public_by))fail('constraint_violation','broker_reports_title_public_by');
+   setReport(r,p);
+ };
+ const setSummaryStatus:(...args:Parameters<BrokerResearchDb['setSummaryStatus']>)=>void=(id,patch)=>{
+   const s=summaries.get(id)??fail('not_found','summary');const r=reports.get(s.report_id)!;
+   const next:SummaryRow={...s,...Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined))};
+   if(r.status==='published'&&!(next.status==='draft'||next.status==='rejected'))fail('published_immutable','broker_report_summaries');
+   if(next.status==='approved'){summaryGate(next);if(s.status!=='approved'){stampDigest(next);Object.assign(next,{approved_at:now(),draft_reason:null});}}
+   else if(s.status==='approved')Object.assign(next,{approved_by:null,approved_at:null});
+   Object.assign(s,next);
+ };
+ const bindAnalyst:(...args:Parameters<BrokerResearchDb['bindAnalyst']>)=>void=(row)=>{
+   childWritable(row.report_id);
+   const f=fields.get(row.field_id);if(!f||f.report_id!==row.report_id||f.field!=='analyst')fail('analyst_field_mismatch');
+   const i=bindings.findIndex(b=>b.report_id===row.report_id&&b.analyst_id===row.analyst_id);
+   if(i>=0)bindings[i]={...row};else bindings.push({...row});
+   draftTexts(row.report_id,'analyst_disclosure');                       // = SQL broker_report_analysts_after_change (P-R1-04)
+ };
+ const unpublish:(...args:Parameters<BrokerResearchDb['unpublish']>)=>void=(id,by,reason)=>{
+   if(!by)fail('invalid_publisher');if(!reason||!reason.trim())fail('reason_required');
+   const r=reports.get(id)??fail('report_not_found');if(r.status!=='published')fail('report_not_published');
+   const p=publications.get(r.current_publication_id!)!;Object.assign(p,{unpublished_at:now(),unpublish_reason:reason});
+   setReport(r,{status:'draft',revision:r.revision+1,current_publication_id:null,review_status:'in_review'});
+ };
  const db:MemoryBrokerResearchDb={
   tables,
   setNow(iso){fixedNow=iso;},
   expireLease(id){const d=req(documents,id,'document');if(d.lease_token)d.lease_until=new Date(Date.parse(now())-1000).toISOString();},
+  replaceSnapshot(id,snapshot){req(publications,id,'publication').snapshot=clone(snapshot);},
   outbox:()=>clone(outbox),
   async getSettings(){return clone(settings);},
   async setPublicEnabled(flag,by){Object.assign(settings,{public_enabled:flag,updated_by:by,updated_at:now()});},
@@ -460,14 +492,14 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    const r=reports.get(id)??fail('not_found','report');if(r.status==='withdrawn')fail('report_withdrawn');
    setReport(r,Object.fromEntries(Object.entries(flags).filter(([,v])=>v!==undefined)) as Partial<ReportRow>);
   },
-  async updateReportDraft(id,patch){
-   const r=reports.get(id)??fail('report_not_found');
-   if(r.status==='withdrawn')fail('report_withdrawn');
-   const p=Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined)) as Partial<ReportRow>;
-   if(r.status==='published'&&Object.entries(p).some(([k,v])=>!['evidence_ok','disclosure_ok','supersedes_report_id'].includes(k)&&!same((r as unknown as R)[k],v)))fail('published_immutable');
-   if(p.title_public!==undefined&&p.title_public!==null&&!(p.title_public_by??r.title_public_by))fail('constraint_violation','broker_reports_title_public_by');
-   setReport(r,p);
-  },
+  async bindReport(id,patch,analyst){return atomic(()=>{
+   req(reports,id,'report');
+   if(!patch||typeof patch!=='object'||Array.isArray(patch)||Object.keys(patch).some(k=>!['institution_id','scope','report_type','primary_target_key','supersedes_report_id','title_public','title_public_by'].includes(k)))fail('invalid_payload','patch');
+   if(Object.keys(patch).length)updateReportDraft(id,patch);
+   if(analyst)bindAnalyst({...analyst,report_id:id});
+   return materializeNow(id);
+  });},
+  async updateReportDraft(id,patch){updateReportDraft(id,patch);},
   async extractCommit(documentId,token,runId,rows){return atomic(()=>{
    if(!Array.isArray(rows))fail('invalid_rows');
    if(rows.some(x=>x.status!=='extracted'&&x.status!=='unverified'))fail('invalid_rows','status');
@@ -537,13 +569,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   async listFields(reportId,opts){return clone(fieldsOf(reportId).filter(f=>opts?.includeSuperseded||f.superseded_by_run_id===null)
    .sort((a,b)=>(a.target_key===null?0:1)-(b.target_key===null?0:1)||cmp(a.target_key??'',b.target_key??'')||cmp(a.field,b.field)||a.occurrence-b.occurrence||cmp(a.created_at,b.created_at)||cmp(a.field_id,b.field_id)));},
   async listTargets(reportId){return clone(targets.get(reportId)??[]);},
-  async bindAnalyst(row){
-   childWritable(row.report_id);
-   const f=fields.get(row.field_id);if(!f||f.report_id!==row.report_id||f.field!=='analyst')fail('analyst_field_mismatch');
-   const i=bindings.findIndex(b=>b.report_id===row.report_id&&b.analyst_id===row.analyst_id);
-   if(i>=0)bindings[i]={...row};else bindings.push({...row});
-   draftTexts(row.report_id,'analyst_disclosure');                       // = SQL broker_report_analysts_after_change (P-R1-04)
-  },
+  async bindAnalyst(row){bindAnalyst(row);},
   async listReportAnalysts(reportId){return clone(bindings.filter(b=>b.report_id===reportId).sort((a,b)=>cmp(a.analyst_id,b.analyst_id)));},
   async insertRuleReceipt(row){const x:RuleReceiptRow={...clone(row),receipt_id:randomUUID(),created_at:stamp()};ruleReceipts.push(x);return x.receipt_id;},
   async insertSnippet(row){
@@ -593,14 +619,12 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    if(s.status==='approved')fail('approver_required');
    summaries.set(s.summary_id,s);return s.summary_id;
   },
-  async setSummaryStatus(id,patch){
-   const s=summaries.get(id)??fail('not_found','summary');const r=reports.get(s.report_id)!;
-   const next:SummaryRow={...s,...Object.fromEntries(Object.entries(patch).filter(([,v])=>v!==undefined))};
-   if(r.status==='published'&&!(next.status==='draft'||next.status==='rejected'))fail('published_immutable','broker_report_summaries');
-   if(next.status==='approved'){summaryGate(next);if(s.status!=='approved'){stampDigest(next);Object.assign(next,{approved_at:now(),draft_reason:null});}}
-   else if(s.status==='approved')Object.assign(next,{approved_by:null,approved_at:null});
-   Object.assign(s,next);
-  },
+  async approveSummary(id,by,check){atomic(()=>{
+   const s=req(summaries,id,'summary');
+   for(const other of summaries.values())if(other.report_id===s.report_id&&other.lang===s.lang&&other.summary_id!==id&&other.status==='approved')setSummaryStatus(other.summary_id,{status:'draft',approved_by:null});
+   setSummaryStatus(id,{status:'approved',disclosure_check:check,approved_by:by});
+  });},
+  async setSummaryStatus(id,patch){setSummaryStatus(id,patch);},
   async getSummary(id){return clone(summaries.get(id)??null);},
   async listSummaries(reportId){return clone([...summaries.values()].filter(s=>s.report_id===reportId).sort((a,b)=>cmp(a.generated_at,b.generated_at)||cmp(a.summary_id,b.summary_id)));},
   async publishBlockers(id){return blockersOf(id);},
@@ -660,12 +684,12 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    }
    return {publicationId:pubId};
   });},
-  async unpublish(id,by,reason){
-   if(!by)fail('invalid_publisher');if(!reason||!reason.trim())fail('reason_required');
-   const r=reports.get(id)??fail('report_not_found');if(r.status!=='published')fail('report_not_published');
-   const p=publications.get(r.current_publication_id!)!;Object.assign(p,{unpublished_at:now(),unpublish_reason:reason});
-   setReport(r,{status:'draft',revision:r.revision+1,current_publication_id:null,review_status:'in_review'});
-  },
+  async unpublishLogged(id,by,reason){atomic(()=>{
+   unpublish(id,by,reason);
+   access.push({document_id:req(reports,id,'report').document_id,user_id:by,action:'unpublish',detail:{report_id:id,reason},id:randomUUID(),created_at:stamp()});
+  });},
+  async unpublish(id,by,reason){unpublish(id,by,reason);},
+  async publicationSnapshotOk(id){const p=publications.get(id);return p?sha256Hex(canonicalJson(p.snapshot))===p.snapshot_hash:null;},
   async getPublication(id){return clone(publications.get(id)??null);},
   async upsertInstitution(row){
    const id=row.institution_id??randomUUID();

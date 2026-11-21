@@ -18,11 +18,14 @@ import {memoryBrokerStorage,brokerPaths} from './storage';
 import type {MemoryBrokerStorage} from './storage';
 import {fakeF3Port} from './ports/f3';
 import {recordedLlmPort} from './ports/llm';
-import {EXTRACT_RESPONSE,PAGES,PIPELINE_TICKER,SUMMARY_RESPONSE,pipelineExtraction} from './fixtures/pipeline';
+import {EXTRACT_OBJECT,EXTRACT_RESPONSE,PAGES,PIPELINE_TICKER,SUMMARY_RESPONSE,pipelineExtraction} from './fixtures/pipeline';
 import {ADMIN_ID,LICENCE_INPUT,sha256,syntheticPdf} from './testing';
 import {commitIntent,createIntent} from './upload';
 import {runParse} from './parse';
 import {runExtract} from './extract/run';
+import {toTyped} from './extract/typed';
+import type {Evidence} from './extract/schema';
+import {runGoldEval} from './eval';
 import {bindReport,fieldAction,publishBlockersOf,publishReport,reviewAction,unpublishReport} from './review';
 import {approveSnippet,createSnippet} from './snippets';
 import {approveSummary,runSummary} from './summary/run';
@@ -121,6 +124,30 @@ describe.skipIf(!enabled)('broker research pipeline (critical, real PostgreSQL)'
   const sum=await runSummary(deps,reportId,'zh',ADMIN_ID,{deadline:deadline()});
   expect(sum.status).toBe('draft');
   expect((await approveSummary(deps,sum.summaryId,ADMIN_ID)).status).toBe('approved');
+ });
+ it('persists the one-document gold evaluation and keeps blocker 13',async()=>{
+  requireReport();
+  const x=EXTRACT_OBJECT,t=x.targets[0],doc=(await deps.db.getDocument(documentId))!;
+  const gold=(field:FieldRow['field'],ev:Evidence,target_key:string|null=null,quote=ev.quote)=>{
+   const {page,charStart,charEnd}=span(quote,ev.page);expect(charStart).toBeGreaterThanOrEqual(0);
+   return {field,target_key,occurrence:1,...toTyped(field,ev.value,quote).value,page,char_start:charStart,char_end:charEnd};
+  };
+  const key=PIPELINE_TICKER,goldDoc={sha256:doc.sha256,absent:[],fields:[
+   gold('institution',x.institution),gold('analyst',x.analysts[0]),gold('published_date',x.published_date),gold('title',x.title),
+   gold('valuation_method',x.valuation_method),gold('wacc',x.wacc),gold('terminal_growth',x.terminal_growth),
+   gold('ticker',t.ticker,key),gold('rating',t.rating,key),gold('target_price',t.target_price,key,'120.00'),gold('target_currency',t.target_currency,key),
+   gold('target_horizon',t.target_horizon_months,key),gold('price_at_report',t.price_at_report,key),gold('price_currency',t.price_currency,key),
+   gold('price_as_of_date',t.price_as_of_date,key),gold('upside_stated',t.upside_stated,key)]};
+  const runId=live(await deps.db.listFields(reportId)).find(f=>f.field==='institution')!.run_id!;
+  const run=(await deps.db.getRun(runId))!,result=await runGoldEval(deps,[goldDoc],{by:ADMIN_ID,dryRun:false});
+  expect(result.stats).toMatchObject({n_docs:1,per_field:{institution:{tp:1},target_price:{tp:0,fp:1,fn:1}}});
+  const receipt=await pool.query('select corpus_kind,corpus_hash,behavior_digest,n_docs,per_field,absence,precision_min,recall_min,passed from public.broker_eval_receipts where receipt_id=$1',[result.receiptId]);
+  expect(receipt.rows).toEqual([{...result.stats,corpus_kind:'gold',corpus_hash:result.corpusHash,behavior_digest:run.behavior_digest}]);
+  const objects=await deps.storage.list(brokerPaths.evalPrefix(doc.sha256));
+  const request=objects.find(path=>/\/[0-9a-f-]{36}\.request\.json$/.test(path));
+  expect(request).toBeDefined();expect(objects).toContain(request!.replace(/\.request\.json$/,'.response.json'));
+  expect(await deps.db.getDocument(documentId)).toMatchObject({lease_token:null,lease_until:null});
+  expect((await publishBlockersOf(deps,reportId)).blockers).toContain('eval_receipt_missing');
  });
  it('a gold eval receipt + approved_gold_corpus_hash (test DB only) lifts blocker 13; publish succeeds; anon sees the report',async()=>{
   requireReport();
