@@ -210,8 +210,7 @@ interface TencentKlineTarget {
  * Verified historical coverage:
  * - Shanghai/Shenzhen A-shares: qfqday (front-adjusted)
  * - Hong Kong: day (unadjusted)
- * Tencent's public endpoint currently returns only two sentinel rows for US
- * symbols, so US is intentionally unsupported here and uses Sina instead.
+ * US history requires an exchange-qualified symbol resolved by fetchTencentUsKline.
  */
 export function tencentKlineTarget(
   ticker: string,
@@ -248,6 +247,12 @@ export function parseTencentKlineResponse(
   if (!node || !Array.isArray(node[target.dataKey])) {
     throw new KlineProviderError('protocol', `Tencent K-line response is missing ${target.dataKey}`);
   }
+  if (target.symbol.startsWith('us')) {
+    const quote = objectValue(node.qt)?.[target.symbol];
+    if (!Array.isArray(quote) || quote[2] !== target.symbol.slice(2)) {
+      throw new KlineProviderError('protocol', 'Tencent US K-line security does not match the requested listing');
+    }
+  }
 
   const bars: SourceKlineBar[] = [];
   for (const row of node[target.dataKey] as unknown[]) {
@@ -265,47 +270,73 @@ export function parseTencentKlineResponse(
   return bars;
 }
 
+function klineSignal(timeoutMs: number, externalSignal?: AbortSignal): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return externalSignal ? AbortSignal.any([deadline, externalSignal]) : deadline;
+}
+
+async function tencentKlineRequest(url: string, signal: AbortSignal): Promise<Response> {
+  const response = await fetch(url, {
+    headers: {
+      Referer: 'https://gu.qq.com/',
+      'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
+    },
+    signal,
+    cache: 'no-store',
+  });
+  if (!response.ok) {
+    const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
+    throw new KlineProviderError(
+      response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol',
+      `Tencent K-line HTTP ${response.status}`,
+      retryable,
+      response.status,
+    );
+  }
+  return response;
+}
+
+async function fetchTencentHistory(target: TencentKlineTarget, limit: number, signal: AbortSignal) {
+  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${target.symbol},day,,,${limit},${target.mode}`;
+  const response = await tencentKlineRequest(url, signal);
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new KlineProviderError('protocol', 'Tencent K-line response is not JSON');
+  }
+  const bars = parseTencentKlineResponse(payload, target);
+  // An unrecognised US listing can still return one or two placeholder bars.
+  if (!bars.length || (target.symbol.startsWith('us') && limit > 2 && bars.length <= 2)) return null;
+  return { source: 'tencent', bars, adjustment: target.adjustment, volumeUnit: 'shares' } as const;
+}
+
 export async function fetchTencentKline(
   ticker: string,
   limit: number,
   adjustment: Extract<KlineAdjustment, 'qfq' | 'none'>,
   externalSignal?: AbortSignal,
   timeoutMs = 2500,
-): Promise<{ source: 'tencent'; bars: SourceKlineBar[]; adjustment: KlineAdjustment; volumeUnit: 'shares' } | null> {
+) {
   const target = tencentKlineTarget(ticker, adjustment);
   if (!target) return null;
+  return fetchTencentHistory(target, limit, klineSignal(timeoutMs, externalSignal));
+}
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  const signal = externalSignal ? AbortSignal.any([ctrl.signal, externalSignal]) : ctrl.signal;
-  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${target.symbol},day,,,${limit},${target.mode}`;
-  try {
-    const response = await fetch(url, {
-      headers: {
-        Referer: 'https://gu.qq.com/',
-        'User-Agent': 'Mozilla/5.0 (compatible; StockMonitor/1.0)',
-      },
-      signal,
-      cache: 'no-store',
-    });
-    if (!response.ok) {
-      const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
-      throw new KlineProviderError(
-        response.status === 429 ? 'rate_limited' : retryable ? 'transient' : 'protocol',
-        `Tencent K-line HTTP ${response.status}`,
-        retryable,
-        response.status,
-      );
-    }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new KlineProviderError('protocol', 'Tencent K-line response is not JSON');
-    }
-    const bars = parseTencentKlineResponse(payload, target);
-    return bars.length > 0 ? { source: 'tencent', bars, adjustment, volumeUnit: 'shares' } : null;
-  } finally {
-    clearTimeout(timer);
-  }
+/** Resolve Tencent's exchange suffix first. An unqualified US ticker has no usable daily history. */
+export async function fetchTencentUsKline(ticker: string, limit: number, externalSignal?: AbortSignal, timeoutMs = 6000) {
+  const code = ticker.trim().toUpperCase().replace(/[-/]/g, '.');
+  if (code.length > 10 || !/^[A-Z][A-Z0-9]*(?:\.[A-Z0-9]+)?$/.test(code)) return null;
+  const signal = klineSignal(timeoutMs, externalSignal);
+  const response = await tencentKlineRequest(`https://qt.gtimg.cn/q=us${code}`, signal);
+  const raw = iconv.decode(Buffer.from(await response.arrayBuffer()), 'gbk');
+  const quote = raw.trim().match(/^v_us([A-Z0-9.]+)="([^"]*)";?$/);
+  if (!quote || quote[1] !== code) return null;
+  const listing = quote[2].split('~')[2];
+  const suffix = listing?.match(/\.(OQ|N|AM)$/);
+  if (!suffix || listing.slice(0, suffix.index) !== code) return null;
+  return fetchTencentHistory({
+    symbol: `us${listing}`, adjustment: 'none', mode: 'bfq', dataKey: 'day', volumeMultiplier: 1,
+  }, limit, signal);
 }

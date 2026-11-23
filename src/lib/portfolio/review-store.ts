@@ -6,19 +6,20 @@
 import { getServerSupabase } from '@/lib/supabase/server';
 import type { Decision, DecisionReview } from '@/lib/supabase/database.types';
 import type { KlineBar } from '@/lib/data/sources/eastmoney';
-import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
+import { fetchScoringBars } from '@/lib/scoring/daily-bars';
 import { exchangeDate } from '@/lib/scoring/forward';
 import { scoreDecision } from './review';
 import type { DecisionReviewDraft } from './review';
 import { coerceDecisionRow } from './store';
 
 // 60 trading days ≈ 86-91 calendar days (more across CNY/Golden Week); 130 days leaves room to
-// resolve the 60d window on a manual refresh while the base bar stays inside the 120-bar fetch.
+// resolve the 60d window on a manual refresh while the base bar stays inside the one-year fetch.
 // Same cap as the analyst layer (MAX_SCORING_AGE_MS in analyst/score-store.ts).
 const MAX_SCORING_AGE_MS = 130 * 24 * 60 * 60 * 1000;
 
+// A window of at least this many bars is a full window (src/lib/scoring/daily-bars.ts fetches a
+// calendar year); fewer bars means the whole listing history is in hand (new IPO).
 export const REVIEW_KLINE_BARS = 120;
-const REVIEW_KLINE_FETCH_TIMEOUT_MS = 20_000;
 
 
 // PostgREST serializes Postgres `numeric` as JSON strings; coerce at the read
@@ -93,18 +94,8 @@ export async function refreshReviews(): Promise<{ scored: number; skipped: numbe
   const candidates = decisions.filter((d) => needsScoring(d, reviewsByDecisionId.get(d.id)));
   if (candidates.length === 0) return { scored: 0, skipped: 0 };
 
-  const tickers = [...new Set(candidates.map((d) => d.ticker))];
-  const barsByTicker = new Map<string, KlineBar[] | null>();
-  for (const ticker of tickers) {
-    try {
-      // signal → cache: 'no-store'; the next.revalidate variant stalls inside POST handlers on Vercel
-      // (see KLINE_FETCH_TIMEOUT_MS in src/lib/analyst/score-store.ts).
-      barsByTicker.set(ticker, (await fetchEastmoneyKline(ticker, 'D', REVIEW_KLINE_BARS, { signal: AbortSignal.timeout(REVIEW_KLINE_FETCH_TIMEOUT_MS) }))?.bars ?? null);
-    } catch {
-      // Skip this ticker's candidates rather than failing the whole refresh.
-      barsByTicker.set(ticker, null);
-    }
-  }
+  // A ticker with no bars (every provider failed) skips its candidates rather than failing the refresh.
+  const barsByTicker = await fetchScoringBars(candidates.map((d) => d.ticker));
 
   const { drafts, skipped } = buildReviewDrafts(candidates, barsByTicker);
 

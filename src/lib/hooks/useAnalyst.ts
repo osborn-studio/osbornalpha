@@ -6,6 +6,7 @@
 import type { AnalystProfile, Recommendation } from '@/lib/supabase/database.types';
 import type { Book, BookSummary } from '@/lib/analyst/book';
 import type { RecommendationView } from '@/lib/analyst/store';
+import type { RefreshResult } from '@/lib/analyst/score-store';
 
 export type ProfileWithSummary = AnalystProfile & { summary: BookSummary };
 export type { RecommendationView, Book, BookSummary };
@@ -39,4 +40,18 @@ export const withdrawRecommendation = (id: string, reason?: string) =>
 
 export const fetchBook = (analyst: string) =>
   fetch(`/api/analyst/book?analyst=${encodeURIComponent(analyst)}`).then((r) => json<{ profile: AnalystProfile; book: Book }>(r));
-export const refreshScores = () => post('/api/analyst/scores').then((r) => json<{ scored: number; skipped: number }>(r));
+export async function refreshScores(): Promise<RefreshResult> {
+  let cursor = '';
+  const total: RefreshResult = { scored: 0, skipped: 0, reasons: { price_unavailable: 0, too_recent: 0, before_window: 0 } };
+  for (;;) {
+    const page = await json<RefreshResult>(await post(`/api/analyst/scores?afterTicker=${encodeURIComponent(cursor)}`));
+    total.scored += page.scored;
+    total.skipped += page.skipped;
+    for (const reason of ['price_unavailable', 'too_recent', 'before_window'] as const) {
+      total.reasons[reason] += page.reasons?.[reason] ?? 0;
+    }
+    if (!page.nextTicker) return total;
+    if (page.nextTicker <= cursor) throw new Error('Invalid score refresh cursor');
+    cursor = page.nextTicker;
+  }
+}
