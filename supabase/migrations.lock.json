@@ -344,6 +344,10 @@
     {
       "file": "20261212090000_broker_research_r15.sql",
       "sha256": "6e0ae65bfc3aad98e9b4d49da560b1d5e91f8ccf79f5b530214d16c572221bde"
+    },
+    {
+      "file": "20261213090000_feishu_simulation_ingestion.sql",
+      "sha256": "689734f60197e70f8da2a3aafa24e9d7aac4dfb6c81620afc9354d99992bc30f"
     }
   ]
 }
