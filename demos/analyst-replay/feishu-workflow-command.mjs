@@ -25,12 +25,13 @@ const adviceOnlyCommand = /^(仅登记建议|只登记建议|只记建议|取消
 const numericAdvice = new Set(['reference_price','target_price','stop_loss','confidence']);
 const actionEvidence = {
   buy:/买|购|建|开仓|做多/,
-  add:/仓|加|增|配|上调|往上|提高|抬/,
+  add:/加仓|增持|补仓|加码|增配|多配|(?:仓位|持仓|配置)(?:再|稍微|稍作|小幅)?(?:往上调|上调|调高|提高|抬高)/,
   sell:/卖|清|退出|出掉|离场/,
-  trim:/减|降|下调|往下|少配|收回/,
+  trim:/减仓|减持|减配|少配|(?:仓位|持仓|配置)(?:再|稍微|稍作|小幅)?(?:往下调|下调|调低|降低)/,
   hold:/持|留|维持|不动|照旧|原样/,
   pass:/观望|暂缓|再看|等待|等等|不参与|不操作|先不动/,
 };
+const excludedActionContext = /(?:不(?:要|再|想|建议|打算|计划|准备|应|会|可|能)|别|禁止|避免|取消|尚未|没有|早已|已经|曾经)[^，,。.!！?？;；\n]{0,24}$/;
 
 function invalid(message) {
   throw Object.assign(new Error(message), {status:400});
@@ -41,8 +42,17 @@ export function proposalIntent(text, directedToBot = false) {
     detectNaturalProposal(text,{directedToBot});
 }
 
-export function canInterpretWithAily(text) {
+export function canInterpretWithModel(text) {
   return !/[|｜]/.test(text) && !adviceOnlyCommand.test(text) && !nonActionableSuggestion(text.normalize('NFKC'));
+}
+
+function supportsModelAction(source, evidence, action) {
+  const match = actionEvidence[action].exec(evidence);
+  if (!match) return false;
+  for (let index = source.indexOf(evidence); index !== -1; index = source.indexOf(evidence, index + evidence.length)) {
+    if (!excludedActionContext.test(source.slice(0,index + match.index))) return true;
+  }
+  return false;
 }
 
 function interpretedFields(text, interpretation, options) {
@@ -54,14 +64,12 @@ function interpretedFields(text, interpretation, options) {
     const evidence = comparable(result.evidence);
     return evidence && source.includes(evidence) ? {...result,evidence} : null;
   };
-  // Local recognition remains authoritative for explicit symbols, trade amounts and currency.
+  // Local recognition of the complete message has priority over extracted fragments.
   const extracted = extractNatural(text,options);
   const action = field('action');
-  if (action && Object.hasOwn(actions,action.value)) {
-    const literal = extractNatural(action.evidence,options).action;
-    if (literal === action.value || (!literal && !extracted.action && actionEvidence[action.value].test(action.evidence))) {
-      extracted.action = action.value;
-    }
+  if (!extracted.action && action && Object.hasOwn(actions,action.value) &&
+      supportsModelAction(source,action.evidence,action.value)) {
+    extracted.action = action.value;
   }
   for (const key of ['rationale','thesis_ref']) {
     const result = field(key);

@@ -24,6 +24,18 @@ PM 的目标群列表也会显示已预先绑定的分析师。首次收到该�
 
 需要同时申请模拟成交时，请写明股数和模拟成交价，例如「我想给腾讯控股加仓100股，模拟成交价447.4港元」。成交申请缺少一项时会提示补充。回复「仅登记建议」可以跳过成交。原有竖线格式仍可使用。Demo 登记和正式系统同步分别保留回执，重复确认沿用同一提案编号。
 
+### 直连本机模型或阿里云百炼
+
+连接器可以通过 OpenAI 兼容接口提取自然语言建议。在私有的 `build/analyst-replay/feishu-app.env` 配置以下变量，然后重启连接器。使用本机 Ollama 时，模型名需和本机模型列表一致，API Key 可以省略。
+
+```dotenv
+FEISHU_LLM_BASE_URL=http://127.0.0.1:11434/v1
+FEISHU_LLM_MODEL=inkling-2-mini:26b-a5b-nvfp4
+FEISHU_LLM_TIMEOUT_MS=35000
+```
+
+切换到百炼时，使用 API Key 所属地域的 HTTPS OpenAI 兼容 Base URL 和文本模型名，并在同一私有文件配置 `FEISHU_LLM_API_KEY`。本机和百炼通过配置显式切换。连接器仅将已绑定分析师 @机器人的单条文本和同一提案的补充内容交给模型。认证、股票代码校验、缺项追问、审批和登记在本机执行。模型不可用时，连接器继续使用本机规则。[Ollama 兼容接口](https://docs.ollama.com/api/openai-compatibility) · [阿里云百炼兼容接口](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)
+
 ### 启用飞书 Aily 提取建议
 
 在飞书 Aily 创建并发布工作流，开启「渠道管理 → 开放接入 → 支持使用应用身份调用 API 和 SDK」。现有群机器人继续收发消息，使用这个工作流对应的飞书渠道应用凭证调用 Aily 技能。工作流只需开始节点、模型节点和结束节点。[Aily 应用身份接入说明](https://aily.feishu.cn/hc/8qluoxsa_mqnk8i5v) · [技能调用接口](https://aily.feishu.cn/hc/8qluoxsa_kmcc4e3h)

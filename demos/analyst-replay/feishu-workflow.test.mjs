@@ -76,10 +76,10 @@ test('the group receipt identifies the Beijing suggestion time and New York pric
   assert.match(h.messages[1].text,/纽约交易日.*2025-11-24/);
 });
 
-test('Aily interprets directed language and an authorized follow-up without accepting invented fields', async t => {
+test('the model interprets directed language and an authorized follow-up without accepting invented fields', async t => {
   const h = harness(t);
   const requests = [];
-  const workflow = h.open({extractWithAily:async request => {
+  const workflow = h.open({extractWithModel:async request => {
     requests.push(request);
     return request.isSupplement
       ? {intent:'proposal',fields:{
@@ -112,22 +112,35 @@ test('Aily interprets directed language and an authorized follow-up without acce
   assert.deepEqual(h.registrations.map(r => [r.fields.ticker,r.fields.action]),[['00700.HK','add']]);
 });
 
-test('an ambiguous Aily result requires clarification even when the local fields are complete', async t => {
+test('an ambiguous model result requires clarification even when the local fields are complete', async t => {
   const h = harness(t);
-  const workflow = h.open({extractWithAily:async () => ({intent:'ambiguous',fields:{}})});
+  const workflow = h.open({extractWithModel:async () => ({intent:'ambiguous',fields:{}})});
   workflow.receive(event(1,{text:'买入腾讯控股',directedToBot:true}));
   await workflow.drain();
   assert.match(h.messages[0].text,/存在歧义/);
   assert.equal(workflow.view().proposals.length,0);
 });
 
-test('an unavailable Aily skill uses existing local rules for recognizable suggestions', async t => {
+test('an unavailable model uses existing local rules for recognizable suggestions', async t => {
   const h = harness(t);
-  const workflow = h.open({extractWithAily:async () => {throw Error('offline');}});
+  const workflow = h.open({extractWithModel:async () => {throw Error('offline');}});
   workflow.receive(event(1,{text:'买入腾讯控股',directedToBot:true}));
   await workflow.drain();
   assert.match(h.messages[0].text,/00700.HK · HK · 买入/);
   assert.equal(workflow.view().proposals.length,1);
+});
+
+test('model failure does not turn a reported past trade into a current suggestion', async t => {
+  const h = harness(t);
+  const workflow = h.open({extractWithModel:async () => {throw Error('offline');}});
+  workflow.receive(event(1,{text:'我想买腾讯控股。昨天已经加仓了。',directedToBot:true}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/00700.HK · HK · 买入/);
+  assert.equal(h.registrations.length,0);
+  workflow.receive(approval(2));
+  await workflow.drain();
+  assert.equal(h.registrations[0].fields.action,'buy');
+  assert.equal(h.registrations[0].fields.recommended_at,proposedAt);
 });
 
 test('a colloquial buy plus add uses the exact HK ticker and the explicit add action', async t => {

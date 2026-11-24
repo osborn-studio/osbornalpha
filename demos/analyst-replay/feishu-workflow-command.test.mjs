@@ -6,6 +6,31 @@ import { parseRegistration } from './registrations.mjs';
 const sentAt = '2025-06-16T08:30:00.000Z';
 const parse = (text, draft) => evaluateProposal('A','分析师 A',text,sentAt,[],draft);
 
+test('a model fragment cannot override the direction from the full sentence', () => {
+  const cases = [
+    ['不要卖出腾讯控股，我建议买入腾讯控股', 'sell', '卖出'],
+    ['我想买腾讯控股。昨天已经加仓了。', 'add', '加仓'],
+  ];
+  for (const [text, action, evidence] of cases) {
+    const model = {intent:'proposal',fields:{action:{value:action,evidence}}};
+    assert.equal(evaluateProposal('A','分析师 A',text,sentAt,[],{},model).body.recommendation.action,'buy');
+  }
+});
+
+test('requires current position evidence before filling in a missing action', () => {
+  const cases = [
+    ['腾讯控股的股价提高了一点', '提高'],
+    ['腾讯控股的仓位不要再往上调', '往上调'],
+    ['不要把腾讯控股的仓位往上调', '仓位往上调'],
+  ];
+  for (const [text, evidence] of cases) {
+    const model = {intent:'proposal',fields:{action:{value:'add',evidence}}};
+    const result = evaluateProposal('A','分析师 A',text,sentAt,[],{},model);
+    assert.deepEqual(result.missing,['建议动作']);
+    assert.equal(result.body,null);
+  }
+});
+
 test('a plain suggestion has the same registration payload as the minimal web form', () => {
   const {body,missing} = parse('我想加仓腾讯控股');
   assert.deepEqual(missing,[]);

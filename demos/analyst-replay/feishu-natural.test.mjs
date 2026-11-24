@@ -24,6 +24,16 @@ test('a specific position adjustment can refine a colloquial direction but not a
   }
 });
 
+test('recognizes the current direction alongside negated and already completed actions', () => {
+  assert.equal(extractNatural('不要卖出腾讯控股，我建议买入腾讯控股').action, 'buy');
+  assert.equal(extractNatural('我想买腾讯控股。昨天已经加仓了。').action, 'buy');
+  assert.equal(extractNatural('我想卖腾讯控股。昨天已经减仓了。').action, 'sell');
+  assert.deepEqual(extractNatural('我想买腾讯控股。昨天已经加仓200股。', {receivedAt}),
+    {ticker:'00700.HK',market:'HK',action:'buy'});
+  assert.throws(() => extractNatural('我想买腾讯控股。之后还要加仓。'), /多个不同的建议动作/);
+  assert.equal(detectNaturalProposal('昨天已经加仓腾讯控股', { directedToBot:true }), false);
+});
+
 test('initial intent includes partial suggestions and directed stock codes; ignores chatter, questions, conditional and negative orders', () => {
   for (const text of ['我想加仓，参考价40','我对腾讯控股有条建议，参考价447.4','加仓','买入','我建议买入未收录的公司']) {
     assert.equal(detectNaturalProposal(text),true,text);
