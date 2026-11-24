@@ -25,9 +25,23 @@ const jwtSecret = randomBytes(32).toString('hex');
 const bridgeToken = randomBytes(32).toString('hex');
 const owner = randomUUID(), outsider = randomUUID(), analyst = randomUUID();
 const chatId = 'oc_isolated_test', author = 'ou_isolated_analyst', approver = 'ou_isolated_pm';
-const appId = 'cli_0123456789abcdef';
+const appId = 'cli_0123456789abcdef', botOpenId = 'ou_isolated_bot';
 const suggestedAt = '2026-06-16T02:30:00.000Z', approvedAt = '2026-06-16T02:31:00.000Z';
 const ingestPath = '/api/integrations/feishu/simulation';
+const proposal = '我想加仓100股，模拟成交价400港元，手续费20港元，期限10日';
+const supplement = '腾讯控股，参考价447.4，目标480，止损420';
+const modelFields = new Map([
+  [proposal,{
+    action:{value:'add',evidence:'加仓'},quantity:{value:100,evidence:'100股'},
+    price:{value:400,evidence:'模拟成交价400港元'},fee:{value:20,evidence:'手续费20港元'},
+    horizon:{value:'10d',evidence:'期限10日'},
+  }],
+  [supplement,{
+    securityName:{value:'腾讯控股',evidence:'腾讯控股'},
+    reference_price:{value:447.4,evidence:'参考价447.4'},
+    target_price:{value:480,evidence:'目标480'},stop_loss:{value:420,evidence:'止损420'},
+  }],
+]);
 
 function docker(args, input) {
   return execFileSync('docker',['--context','desktop-linux',...args],{
@@ -82,7 +96,7 @@ globalThis.fetch=(input,init)=>new URL(input instanceof Request?input.url:String
   }
 }
 
-function openConnector(messages) {
+function openConnector(messages, extractWithModel) {
   let dispatch;
   let workflow;
   class MockSocket {
@@ -90,6 +104,10 @@ function openConnector(messages) {
     close() {}
   }
   class MockClient {
+    async request(options) {
+      assert.equal(options.url,'/open-apis/bot/v3/info');
+      return {code:0,bot:{open_id:botOpenId}};
+    }
     record(data, destination) {
       const id = 'om_local_reply_' + (messages.length + 1);
       messages.push({id,...destination,text:JSON.parse(data.content).text,uuid:data.uuid});
@@ -105,14 +123,17 @@ function openConnector(messages) {
     }};
   }
   const connector = makeFeishuConnector({appId,appSecret:'synthetic-only-secret', intervalMs:60000, log:() => {},
-    createWorkflow:options => (workflow = createLocalFeishuWorkflow(options)),
+    createWorkflow:options => (workflow = createLocalFeishuWorkflow({...options,extractWithModel})),
     sdk:{...sdk,WSClient:MockSocket,Client:MockClient},
   });
   return {start:() => connector.start(), stop:() => connector.stop(), view:() => workflow.view(), async send(messageId,text,sender,at,parentId) {
+    const mention = sender === author && !parentId;
+    const mentions = mention ? [{key:'@_user_1',id:{open_id:botOpenId}}] : [];
     await dispatch({schema:'2.0',header:{event_type:'im.message.receive_v1',event_id:'ev_' + messageId,app_id:appId},event:{
       sender:{sender_type:'user',sender_id:{open_id:sender}},
       message:{message_id:messageId,chat_id:chatId,chat_type:'group',message_type:'text',
-        create_time:String(Date.parse(at)),parent_id:parentId,content:JSON.stringify({text})},
+        create_time:String(Date.parse(at)),parent_id:parentId,mentions,
+        content:JSON.stringify({text:mention ? '@_user_1 '+text : text})},
     }});
     await workflow.drain();
   },drain:() => workflow.drain()};
@@ -195,7 +216,14 @@ async function main() {
       simulationAccount:{id:owner,confirmed:true},
     }),{mode:0o600});
     const messages = [];
-    connector = openConnector(messages);
+    const extractionCalls = [];
+    const fixtureModel = async request => {
+      extractionCalls.push(request);
+      const fields = modelFields.get(request.text);
+      assert.ok(fields,'Unexpected input for the isolated model fixture');
+      return {intent:'proposal',fields};
+    };
+    connector = openConnector(messages,fixtureModel);
     await connector.start();
     const keys = JSON.parse(readFileSync(join(directory,'role-keys.json'),'utf8'));
     async function postDemo(path, role, body) {
@@ -206,7 +234,6 @@ async function main() {
       return response.json();
     }
     await postDemo('/api/webhook','PM',{mode:'app'});
-    const proposal = '我想加仓100股，模拟成交价400港元，手续费20港元，期限10日';
     await connector.send('om_proposal',proposal,author,suggestedAt);
     assert.equal(snapshots.length,0);
     assert.equal(sql('select count(*) from public.recommendations;'),'0');
@@ -215,7 +242,9 @@ async function main() {
     assert.doesNotMatch(prompt.text,/参考价|目标价|止损|理由|关联研究/);
     await connector.send('om_premature','同意',approver,suggestedAt,prompt.id);
     assert.equal(connector.view().proposals.length,0);
-    await connector.send('om_fill','腾讯控股，参考价447.4，目标480，止损420',author,suggestedAt,prompt.id);
+    await connector.send('om_fill',supplement,author,suggestedAt,prompt.id);
+    assert.deepEqual(extractionCalls.map(({text,isSupplement}) => [text,isSupplement]),[[proposal,false],[supplement,true]]);
+    assert.equal(extractionCalls[1].priorFields.quantity,100);
     const summary = connector.view().proposals[0].summaryId;
     assert.ok(summary);
     await connector.send('om_wrong_approval','同意',author,approvedAt,summary);
@@ -226,7 +255,7 @@ async function main() {
     assert.equal(snapshots[0]?.status,201);
     assert.equal(sql('select count(*) from public.trades;'),'1');
     assert.equal(await connector.stop(),0);
-    connector = openConnector(messages);
+    connector = openConnector(messages,fixtureModel);
     await connector.start();
     await delay(2200);
     await connector.drain();
@@ -244,6 +273,7 @@ async function main() {
     assert.equal(recorded.tradeId,snapshots[0].receipt.tradeId);
     await connector.send('om_approve','同意',approver,approvedAt,summary);
     await connector.send('om_second_approval','同意',approver,approvedAt,summary);
+    assert.equal(extractionCalls.length,2);
     assert.equal(snapshots.length,2);
 
     const state = await (await fetch(demo.origin + '/api/state',{headers:{authorization:'Bearer '+keys.A}})).json();
@@ -288,7 +318,7 @@ async function main() {
       body:JSON.stringify({...snapshots[0].payload,expectedOwnerId:outsider})});
     assert.equal(badOwner.status,403);
     assert.equal(sql(`select count(*) from public.positions where user_id='${outsider}';`),'0');
-    console.log(JSON.stringify({scope:'isolated formal PostgreSQL/PostgREST and Demo SQLite; mocked Feishu transport',
+    console.log(JSON.stringify({scope:'isolated formal PostgreSQL/PostgREST and Demo SQLite; mocked Feishu transport and model',
       migrations:migrations.length,demoScoring:'T+5/T+10 fixture',appBroadcasts:'group score and PM acceptance',
       formalWrites:1,retry:'same receipt',holding:'100 HKD shares at 400.20 average cost',wrongOwner:'rejected'}));
   } finally {

@@ -34,6 +34,22 @@ test('recognizes the current direction alongside negated and already completed a
   assert.equal(detectNaturalProposal('昨天已经加仓腾讯控股', { directedToBot:true }), false);
 });
 
+test('spoken budgets do not obscure the stock name or turn into a trade size', () => {
+  const expected = {ticker:'NVDA',market:'US',action:'buy'};
+  for (const text of [
+    '我想申请买100万美金英伟达',
+    '买20万人民币的英伟达股票',
+    '买200000人民币的英伟达股票',
+    '买人民币200000的英伟达股票',
+    '买英伟达吧。',
+    '买英伟达！',
+    '买入Nvidia',
+    '买入 NVDA.',
+  ]) assert.deepEqual(extractNatural(text),expected,text);
+  assert.deepEqual(extractNatural('买200股英伟达股票'),{...expected,quantity:200});
+  assert.deepEqual(extractNatural('买腾讯音乐股票'),{action:'buy'});
+});
+
 test('initial intent includes partial suggestions and directed stock codes; ignores chatter, questions, conditional and negative orders', () => {
   for (const text of ['我想加仓，参考价40','我对腾讯控股有条建议，参考价447.4','加仓','买入','我建议买入未收录的公司']) {
     assert.equal(detectNaturalProposal(text),true,text);

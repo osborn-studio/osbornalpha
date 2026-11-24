@@ -18,7 +18,7 @@
 
 PM 的目标群列表也会显示已预先绑定的分析师。首次收到该成员的配对消息后，列表会显示实际配对编号和机器人回复状态。
 
-已绑定的分析师可以直接发「我想加仓腾讯控股」。系统从发送者确定分析师，从标的确定市场，识别动作后发摘要。需要保留价格或研究信息时，也可以发「我想加仓腾讯控股，参考价447.4港元，目标480，止损420」。参考价、目标价、止损价、理由、关联研究和期限均可省略。信心默认与页面一致，为 70%。未注明建议时间时以原消息发送时刻登记。历史回放可以写「建议时间 2026年6月16日 16:30」，摘要以北京时间显示。
+已绑定的分析师 @应用机器人发送「我想加仓腾讯控股」。语言模型提取标的、动作和已填写的选填项，本机根据飞书发送者确定分析师，并核验证券代码、市场和字段。需要保留价格或研究信息时，也可以发「我想加仓腾讯控股，参考价447.4港元，目标480，止损420」。参考价、目标价、止损价、理由、关联研究和期限均可省略。信心默认与页面一致，为 70%。未注明建议时间时以原消息发送时刻登记。历史回放可以写「建议时间 2026年6月16日 16:30」，摘要以北京时间显示。
 
 如果只发「我想加仓」，机器人会追问标的。原分析师在这条追问上点回复，@机器人发送「00700.HK」即可继续。不同提案各有自己的回复链。字段齐全后，PM 在机器人的待确认摘要上点回复，再 @机器人发送「同意」。
 
@@ -34,7 +34,7 @@ FEISHU_LLM_MODEL=inkling-2-mini:26b-a5b-nvfp4
 FEISHU_LLM_TIMEOUT_MS=35000
 ```
 
-切换到百炼时，使用 API Key 所属地域的 HTTPS OpenAI 兼容 Base URL 和文本模型名，并在同一私有文件配置 `FEISHU_LLM_API_KEY`。本机和百炼通过配置显式切换。连接器仅将已绑定分析师 @机器人的单条文本和同一提案的补充内容交给模型。认证、股票代码校验、缺项追问、审批和登记在本机执行。模型不可用时，连接器继续使用本机规则。[Ollama 兼容接口](https://docs.ollama.com/api/openai-compatibility) · [阿里云百炼兼容接口](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)
+切换到百炼时，使用 API Key 所属地域的 HTTPS OpenAI 兼容 Base URL 和文本模型名，并在同一私有文件配置 `FEISHU_LLM_API_KEY`。本机和百炼通过配置显式切换。连接器仅将已绑定分析师 @机器人的单条文本和同一提案的补充内容交给模型。认证、股票代码校验、缺项追问、审批和登记在本机执行。模型不可用时，机器人保留草稿并提示原分析师直接回复原句重试。[Ollama 兼容接口](https://docs.ollama.com/api/openai-compatibility) · [阿里云百炼兼容接口](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)
 
 ### 启用飞书 Aily 提取建议
 
@@ -54,7 +54,7 @@ FEISHU_LLM_TIMEOUT_MS=35000
 
 `intent` 可用 `proposal`、`other`、`ambiguous`。动作可用 `buy`、`add`、`trim`、`sell`、`hold`、`pass`。还可提取 `rationale`、`thesis_ref`、`reference_price`、`target_price`、`stop_loss`、`confidence`。询问、转述、未达到的条件、闲聊归为 `other`。多只证券或多个互斥动作归为 `ambiguous`。
 
-在连接器的私有 `build/analyst-replay/feishu-app.env` 填好以下四项后重启连接器。建议用 Aily API 调试台先验证示例输入与输出。连接器只向 Aily 提交已绑定分析师主动 @机器人的文本，以及他们对同一条提案追问的补充。技能超时时使用本机规则，必要时向分析师补问。
+在连接器的私有 `build/analyst-replay/feishu-app.env` 填好以下四项后重启连接器。建议用 Aily API 调试台先验证示例输入与输出。连接器只向 Aily 提交已绑定分析师主动 @机器人的文本，以及他们对同一条提案追问的补充。技能超时时，连接器保留草稿并提示回复重试。
 
 ```dotenv
 FEISHU_AILY_APP_ID=

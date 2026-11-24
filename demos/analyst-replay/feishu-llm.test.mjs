@@ -44,6 +44,7 @@ test('uses loopback JSON mode with scoped context, omitting identifiers and earl
     assert.deepEqual(response_format,{type:'json_object'});
     assert.equal(reasoning_effort,'none');
     assert.match(messages[0].content,/JSON/);
+    assert.match(messages[0].content,/带时区的 ISO 8601/);
     assert.deepEqual(JSON.parse(messages[1].content),{
       text:'[飞书标识] [飞书标识] ' + input.text, receivedAt:input.receivedAt,isSupplement:true,
       priorFields:{action:'add',reference_price:447.5},
@@ -82,6 +83,44 @@ test('drops evidence absent from the current text and rejects malformed or incom
     const failed = createFeishuLlmExtractor(local,{fetchImpl:async () => getResponse()});
     await assert.rejects(failed(input),{message:'飞书建议识别模型暂时不可用。'});
   }
+});
+
+test('discard a budget reported as quantity while retaining a stated share count', async () => {
+  const mock = quantity => createFeishuLlmExtractor(local,{fetchImpl:async () => completion(JSON.stringify({
+    intent:'proposal',fields:{quantity},
+  }))});
+  const budget = {value:200000,evidence:'20万人民币'};
+  const shares = {value:200,evidence:'200股'};
+  assert.deepEqual(await mock(budget)({...input,text:'买20万人民币的英伟达股票'}),{intent:'proposal',fields:{}});
+  assert.deepEqual(await mock(shares)({...input,text:'买200股英伟达股票'}),{intent:'proposal',fields:{quantity:shares}});
+});
+
+test('accepts a bare share count only as evidence for the missing quantity of a draft', async () => {
+  const shares = {value:200,evidence:'200'};
+  const extract = createFeishuLlmExtractor(local,{fetchImpl:async () => completion(JSON.stringify({
+    intent:'proposal',fields:{quantity:shares},
+  }))});
+  const draft = {ticker:'NVDA',action:'buy',price:150};
+  const next = {...input,text:'200',priorFields:draft,isSupplement:true};
+  assert.deepEqual(await extract(next),{intent:'proposal',fields:{quantity:shares}});
+  assert.deepEqual(await extract({...next,isSupplement:false}),{intent:'proposal',fields:{}});
+  assert.deepEqual(await extract({...next,priorFields:{ticker:'NVDA',action:'buy'}}),{intent:'proposal',fields:{}});
+  assert.deepEqual(await extract({...next,text:'200美元'}),{intent:'proposal',fields:{}});
+  assert.deepEqual(await extract({...next,text:'200股'}),{intent:'proposal',fields:{}});
+});
+
+test('delivers a model date and explicit signature only with current-message evidence', async () => {
+  const current = {
+    analyst:{value:'张三',evidence:'分析师：张三'},
+    action:{value:'add',evidence:'占比再抬一点'},
+    recommended_at:{value:'2026-06-16T16:30:00+08:00',evidence:'回放日期是 2026 年 6 月 16 日 16:30'},
+  };
+  const extract = createFeishuLlmExtractor(local,{fetchImpl:async () => completion(JSON.stringify({
+    intent:'proposal',fields:current,
+  }))});
+  const text = '分析师：张三，把占比再抬一点，回放日期是 2026 年 6 月 16 日 16:30';
+  assert.deepEqual(await extract({...input,text}),{intent:'proposal',fields:current});
+  assert.deepEqual(await extract({...input,text:'把占比再抬一点'}),{intent:'proposal',fields:{action:current.action}});
 });
 
 test('bounds the response body and honors request deadlines', async () => {

@@ -14,6 +14,48 @@ const approver = 'ou_pm';
 const proposedAt = '2026-06-16T08:30:00.000Z';
 const approvedAt = '2026-06-16T08:31:00.000Z';
 const command = '建议｜分析师：张三｜01810.HK｜加仓｜1000股｜模拟成交价：40.20港元｜理由：复核财报';
+const quote = (value,evidence = String(value)) => ({value,evidence});
+const packet = fields => ({intent:'proposal',fields});
+const position = {ticker:quote('01810.HK'),action:quote('add','加仓')};
+const signedOrder = (name, overrides = {}) => ({
+  ...position, analyst:quote(name,'分析师：'+name), quantity:quote(1000,'1000股'),
+  price:quote(40.2,'模拟成交价：40.20港元'), rationale:quote('复核财报','理由：复核财报'), ...overrides,
+});
+const modelFixtures = new Map([
+  [command,packet(signedOrder('张三'))],
+  [command.replace('张三','甲组研究员'),packet(signedOrder('甲组研究员'))],
+  [command.replace('张三','乙组研究员'),packet(signedOrder('乙组研究员'))],
+  [command.replace('1000股',''),packet(signedOrder('张三',{quantity:undefined}))],
+  [command.replace('40.20港元','40.20美元'),packet(signedOrder('张三',{price:quote(40.2,'模拟成交价：40.20美元')}))],
+  [command.replace('加仓','加仓｜卖出'),{intent:'ambiguous',fields:{}}],
+  ['我想买入NVDA',packet({ticker:quote('NVDA'),action:quote('buy','买入')})],
+  ['我想买01800.HK或者加仓',{intent:'ambiguous',fields:{}}],
+  ['我想买01800.HK 港股 加仓',packet({ticker:quote('01800.HK'),action:quote('add','加仓')})],
+  ['00700.HK',packet({ticker:quote('00700.HK')})],
+  ['先观望',packet({action:quote('pass','先观望')})],
+  ['我建议加仓，参考价 40 港元',packet({action:position.action,reference_price:quote(40,'参考价 40 港元')})],
+  ['标的是 01810.HK，目标价 46，止损价 38',packet({
+    ticker:position.ticker,target_price:quote(46,'目标价 46'),stop_loss:quote(38,'止损价 38'),
+  })],
+  ['建议｜加仓｜参考价：40',packet({action:position.action,reference_price:quote(40,'参考价：40')})],
+  ['建议｜00700.HK｜100股｜参考价：447',packet({
+    ticker:quote('00700.HK'),quantity:quote(100,'100股'),reference_price:quote(447,'参考价：447'),
+  })],
+  ['买入',packet({action:quote('buy','买入')})],
+  ['模拟成交价 446',packet({price:quote(446,'模拟成交价 446')})],
+  ['标的 01810.HK',packet({ticker:position.ticker})],
+  ['建议｜01810.HK｜参考价：40',packet({ticker:position.ticker,reference_price:quote(40,'参考价：40')})],
+  ['建议｜动作：加仓｜分析师：李四',packet({action:position.action,analyst:quote('李四','分析师：李四')})],
+  ['加仓',packet({action:position.action})],
+  ['建议｜01810.HK｜加仓｜100股',packet({...position,quantity:quote(100,'100股')})],
+  ['建议｜01810.HK｜加仓',packet(position)],
+]);
+
+async function fixtureModel({text}) {
+  const result = modelFixtures.get(text);
+  assert.ok(result,'Missing model fixture for '+text);
+  return {...result,fields:Object.fromEntries(Object.entries(result.fields).filter(([,value]) => value !== undefined))};
+}
 
 function harness(t, patch = {}) {
   const db = new DatabaseSync(':memory:');
@@ -39,6 +81,7 @@ function harness(t, patch = {}) {
   const options = {
     config:() => config,
     now:() => current,
+    extractWithModel:fixtureModel,
     register:async request => {
       registrations.push(request);
       return {id:recommendationId,status:'final',score:{hit:true,score_5d:2.3,hit_10d:false,score_10d:-6.5},
@@ -55,12 +98,32 @@ function harness(t, patch = {}) {
 
 function event(n, extra = {}) {
   return {eventId:'event_'+n,messageId:'om_'+n,chatId:group,senderId:proposer,
-    createdAt:proposedAt,text:command,...extra};
+    createdAt:proposedAt,text:command,directedToBot:true,...extra};
 }
 
 function approval(n, parentId = 'om_sent_1', extra = {}) {
   return event(n,{senderId:approver,createdAt:approvedAt,text:'同意',parentId,...extra});
 }
+
+test('labeled cash budget and model name evidence produce a single NVDA advice with no fill', async t => {
+  const h = harness(t);
+  const workflow = h.open({extractWithModel:async () => ({intent:'proposal',fields:{
+    action:{value:'buy',evidence:'买20万人民币的英伟达股票'},
+    securityName:{value:'英伟达',evidence:'英伟达股票'},
+    quantity:{value:200000,evidence:'20万人民币'},
+    currency:{value:'CNY',evidence:'20万人民币'},
+  }})});
+  workflow.receive(event(1,{text:'买20万人民币的英伟达股票',directedToBot:true}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/NVDA · US · 买入/);
+  assert.match(h.messages[0].text,/仅登记建议/);
+  assert.equal(h.messages.length,1);
+  assert.equal(h.registrations.length,0);
+  workflow.receive(approval(2));
+  await workflow.drain();
+  assert.equal(h.registrations[0].fields.ticker,'NVDA');
+  assert.equal(workflow.view().proposals[0].simulationStatus,'not_requested');
+});
 
 test('the group receipt identifies the Beijing suggestion time and New York pricing date', async t => {
   const h = harness(t);
@@ -93,14 +156,14 @@ test('the model interprets directed language and an authorized follow-up without
       }};
   }});
   const speech = '这只股票的仓位往上调一点';
-  assert.equal(workflow.receive(event(1,{text:speech})).accepted,false);
+  assert.equal(workflow.receive(event(1,{text:speech,directedToBot:false})).accepted,false);
   assert.equal(workflow.receive(event(2,{text:speech,directedToBot:true,senderId:'ou_unbound'})).accepted,false);
   assert.equal(workflow.receive(event(3,{text:speech,directedToBot:true})).accepted,true);
   await workflow.drain();
   assert.match(h.messages[0].text,/补充标的代码/);
   assert.equal(workflow.view().proposals.length,0);
   assert.equal(workflow.receive(event(4,{text:'腾讯控股',parentId:'om_sent_1',senderId:'ou_second'})).accepted,false);
-  workflow.receive(event(5,{text:'腾讯控股',parentId:'om_sent_1'}));
+  workflow.receive(event(5,{text:'腾讯控股',parentId:'om_sent_1',directedToBot:false}));
   await workflow.drain();
   assert.equal(requests.length,2);
   assert.equal(requests[1].priorFields.action,'add');
@@ -121,23 +184,96 @@ test('an ambiguous model result requires clarification even when the local field
   assert.equal(workflow.view().proposals.length,0);
 });
 
-test('an unavailable model uses existing local rules for recognizable suggestions', async t => {
+test('an unavailable model asks the analyst to retry before any proposal or registration', async t => {
   const h = harness(t);
-  const workflow = h.open({extractWithModel:async () => {throw Error('offline');}});
+  let available = false;
+  const workflow = h.open({extractWithModel:async () => {
+    if (!available) throw Error('offline');
+    return packet({ticker:quote('00700.HK','腾讯控股'),action:quote('buy','买入')});
+  }});
   workflow.receive(event(1,{text:'买入腾讯控股',directedToBot:true}));
   await workflow.drain();
-  assert.match(h.messages[0].text,/00700.HK · HK · 买入/);
+  assert.match(h.messages[0].text,/模型.*不可用.*重试/);
+  assert.equal(workflow.view().proposals.length,0);
+  workflow.receive(approval(2,'om_sent_1'));
+  await workflow.drain();
+  assert.equal(h.registrations.length,0);
+  available = true;
+  workflow.receive(event(3,{text:'买入腾讯控股',parentId:'om_sent_1',directedToBot:false}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/00700.HK · HK · 买入/);
   assert.equal(workflow.view().proposals.length,1);
+  assert.equal(h.registrations.length,0);
 });
 
-test('model failure does not turn a reported past trade into a current suggestion', async t => {
+test('a model omission is clarified and a nonproposal classification creates no proposal', async t => {
   const h = harness(t);
-  const workflow = h.open({extractWithModel:async () => {throw Error('offline');}});
-  workflow.receive(event(1,{text:'我想买腾讯控股。昨天已经加仓了。',directedToBot:true}));
+  const requests = [];
+  const workflow = h.open({extractWithModel:async request => {
+    requests.push(request.text);
+    return request.text === command ? packet({ticker:position.ticker}) : {intent:'other',fields:{}};
+  }});
+  assert.equal(workflow.receive(event(0,{directedToBot:false})).accepted,false);
+  workflow.receive(event(1,{text:'买入腾讯控股'}));
   await workflow.drain();
-  assert.match(h.messages[0].text,/00700.HK · HK · 买入/);
+  assert.deepEqual(h.messages,[]);
+  workflow.receive(event(2));
+  await workflow.drain();
+  assert.deepEqual(requests,['买入腾讯控股',command]);
+  assert.match(h.messages[0].text,/补充建议动作/);
+  assert.equal(workflow.view().proposals.length,0);
+});
+
+test('a missing model configuration prompts and keeps the pending advice out of registration', async t => {
+  const h = harness(t);
+  const workflow = h.open({extractWithModel:undefined});
+  workflow.receive(event(1));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/模型.*不可用.*重试/);
+  assert.equal(workflow.view().proposals.length,0);
   assert.equal(h.registrations.length,0);
-  workflow.receive(approval(2));
+});
+
+test('recognition of existing pending proposal events is delegated to the configured model', async t => {
+  const h = harness(t);
+  const seen = [];
+  const workflow = h.open({extractWithModel:async request => {
+    seen.push(request.text);
+    return {intent:'other',fields:{}};
+  }});
+  const enqueue = h.db.prepare(`INSERT INTO feishu_workflow_events
+    (event_id,message_id,chat_id,sender_id,kind,text,received_at) VALUES (?,?,?,?,?,?,?)`);
+  for (const kind of ['proposal','proposal_ai']) {
+    enqueue.run('event_'+kind,'om_'+kind,group,proposer,kind,command,proposedAt);
+  }
+  await workflow.drain();
+  assert.deepEqual(seen,[command,command]);
+  assert.deepEqual(h.messages,[]);
+  assert.equal(workflow.view().proposals.length,0);
+});
+
+test('the original suggestion time survives a model outage and retry with a past trade note', async t => {
+  const h = harness(t);
+  const text = '我想买腾讯控股。昨天已经加仓200股。';
+  let online = false;
+  const workflow = h.open({extractWithModel:async () => {
+    if (!online) throw Error('offline');
+    return packet({
+      securityName:quote('腾讯控股'),
+      action:quote('buy','我想买'),
+      quantity:quote(200,'200股'),
+    });
+  }});
+  workflow.receive(event(1,{text}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/模型暂时不可用/);
+  assert.equal(workflow.view().proposals.length,0);
+  online = true;
+  workflow.receive(event(2,{text,parentId:'om_sent_1'}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/00700.HK · HK · 买入/);
+  assert.equal(h.registrations.length,0);
+  workflow.receive(approval(3,'om_sent_2'));
   await workflow.drain();
   assert.equal(h.registrations[0].fields.action,'buy');
   assert.equal(h.registrations[0].fields.recommended_at,proposedAt);
@@ -148,7 +284,7 @@ test('a colloquial buy plus add uses the exact HK ticker and the explicit add ac
   const workflow = h.open();
   workflow.receive(event(1,{text:'我想买01800.HK或者加仓'}));
   await workflow.drain();
-  assert.match(h.messages[0].text,/多个不同的建议动作/);
+  assert.match(h.messages[0].text,/存在歧义/);
   workflow.receive(event(2,{text:'我想买01800.HK 港股 加仓',parentId:'om_sent_1'}));
   await workflow.drain();
   assert.match(h.messages[1].text,/01800.HK · HK · 加仓/);
@@ -163,7 +299,7 @@ test('a colloquial buy plus add uses the exact HK ticker and the explicit add ac
 test('an analyst can mention the bot with just a ticker and reply with the action alone', async t => {
   const h = harness(t);
   const workflow = h.open();
-  assert.equal(workflow.receive(event(1,{text:'00700.HK'})).accepted,false);
+  assert.equal(workflow.receive(event(1,{text:'00700.HK',directedToBot:false})).accepted,false);
   assert.equal(workflow.receive(event(2,{text:'00700.HK',directedToBot:true})).accepted,true);
   await workflow.drain();
   assert.match(h.messages[0].text,/补充建议动作/);
@@ -362,7 +498,7 @@ test('rejects analysts advertising another name, ambiguous or incomplete simulat
   assert.match(h.messages[0].text,/署名/);
   assert.match(h.messages[1].text,/格式|股数|数量/);
   assert.match(h.messages[2].text,/币种/);
-  assert.match(h.messages[3].text,/重复/);
+  assert.match(h.messages[3].text,/存在歧义/);
 });
 
 test('only the bound group member can sign with their own formal name or configured group name', async t => {
