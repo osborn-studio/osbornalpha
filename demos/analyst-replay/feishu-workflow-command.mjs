@@ -2,7 +2,7 @@ import { inferCoreMarket, normalizeSecurityTicker } from '../../src/lib/securiti
 import { currencyCodeOfMarket } from '../../src/lib/utils.ts';
 import { parseRegistration } from './registrations.mjs';
 import { beijingInputValue } from './public/beijing-time.mjs';
-import { detectNaturalProposal, extractNatural } from './feishu-natural.mjs';
+import { detectNaturalProposal, extractNatural, nonActionableSuggestion } from './feishu-natural.mjs';
 
 const actions = {buy:'买入', add:'加仓', hold:'持有', pass:'观望', trim:'减仓', sell:'卖出'};
 const actionByLabel = Object.fromEntries(Object.entries(actions).map(([key,value]) => [value,key]));
@@ -21,6 +21,16 @@ const horizonLabels = {short:'短期',mid:'中期',long:'长期','5d':'5日','10
 const currencyNames = {港元:'HKD',港币:'HKD',人民币:'CNY',美元:'USD',美金:'USD'};
 const amountPattern = /^(\d+(?:\.\d+)?)\s*(港元|港币|人民币|美元|美金|元|HKD|USD|CNY)?$/i;
 const prefix = /^\/?(?:建议|提案)(?:\s+|[|｜]|$)/;
+const adviceOnlyCommand = /^(仅登记建议|只登记建议|只记建议|取消模拟成交)[。！! ]*$/;
+const numericAdvice = new Set(['reference_price','target_price','stop_loss','confidence']);
+const actionEvidence = {
+  buy:/买|购|建|开仓|做多/,
+  add:/仓|加|增|配|上调|往上|提高|抬/,
+  sell:/卖|清|退出|出掉|离场/,
+  trim:/减|降|下调|往下|少配|收回/,
+  hold:/持|留|维持|不动|照旧|原样/,
+  pass:/观望|暂缓|再看|等待|等等|不参与|不操作|先不动/,
+};
 
 function invalid(message) {
   throw Object.assign(new Error(message), {status:400});
@@ -29,6 +39,56 @@ function invalid(message) {
 export function proposalIntent(text, directedToBot = false) {
   return (/^\/?(?:建议|提案)\s*[|｜]/.test(text) || /^\/?(?:建议|提案)$/.test(text)) ||
     detectNaturalProposal(text,{directedToBot});
+}
+
+export function canInterpretWithAily(text) {
+  return !/[|｜]/.test(text) && !adviceOnlyCommand.test(text) && !nonActionableSuggestion(text.normalize('NFKC'));
+}
+
+function interpretedFields(text, interpretation, options) {
+  const comparable = value => value.normalize('NFKC').trim();
+  const source = comparable(text);
+  const field = key => {
+    const result = interpretation.fields[key];
+    if (!result || typeof result.evidence !== 'string') return null;
+    const evidence = comparable(result.evidence);
+    return evidence && source.includes(evidence) ? {...result,evidence} : null;
+  };
+  // Local recognition remains authoritative for explicit symbols, trade amounts and currency.
+  const extracted = extractNatural(text,options);
+  const action = field('action');
+  if (action && Object.hasOwn(actions,action.value)) {
+    const literal = extractNatural(action.evidence,options).action;
+    if (literal === action.value || (!literal && !extracted.action && actionEvidence[action.value].test(action.evidence))) {
+      extracted.action = action.value;
+    }
+  }
+  for (const key of ['rationale','thesis_ref']) {
+    const result = field(key);
+    if (!extracted[key] && typeof result?.value === 'string' && result.value.trim() &&
+        result.evidence.includes(comparable(result.value))) extracted[key] = result.value;
+  }
+  const localTicker = extracted.ticker;
+  const security = field('ticker');
+  if (!localTicker && security && typeof security.value === 'string') {
+    const verified = extractNatural(security.evidence,options);
+    const market = verified.market;
+    if (market && verified.ticker === normalizeSecurityTicker(security.value,market)) {
+      extracted.ticker = verified.ticker;
+      extracted.market = market;
+    } else if (verified.securityName) extracted.securityName = verified.securityName;
+  }
+  for (const key of numericAdvice) {
+    const result = field(key);
+    if (extracted[key] != null || !Number.isFinite(result?.value)) continue;
+    const verified = extractNatural(result.evidence,options);
+    if (verified[key] === result.value) {
+      extracted[key] = result.value;
+      if (verified.currency && extracted.currency && verified.currency !== extracted.currency) invalid('金额币种不一致，请核对。');
+      extracted.currency ??= verified.currency;
+    }
+  }
+  return extracted;
 }
 
 function amountFields(key, text) {
@@ -115,20 +175,21 @@ function validateFields(fields, signatures) {
   if (['hold','pass'].includes(fields.action) && ['quantity','price','fee'].some(key => fields[key] != null)) invalid('持有和观望提案不能附带模拟成交。');
 }
 
-export function evaluateProposal(role, analystName, command, receivedAt, analystAliases = [], priorFields = {}) {
+export function evaluateProposal(role, analystName, command, receivedAt, analystAliases = [], priorFields = {}, interpretation) {
   const text = command.trim();
   const adviceOnly = /(?:仅|只)(?:登记|记录|提交|录入|记|录)(?:分析)?建议|(?:不做|不录入|不登记|取消)(?:模拟)?成交/.test(text);
   const pending = missingFields(priorFields);
   let update;
-  if (adviceOnly && /^(仅登记建议|只登记建议|只记建议|取消模拟成交)[。！! ]*$/.test(text)) {
+  if (adviceOnlyCommand.test(text)) {
     update = {};
   } else if (pending.length === 1 && Object.hasOwn(priceLabels,pending[0]) && amountPattern.test(text)) {
     update = amountFields(pending[0],text);
   } else if (pending.length === 1 && pending[0] === 'quantity' && /^\d+(?:\.\d+)?\s*股?$/.test(text)) {
     update = {quantity:Number.parseFloat(text)};
   } else {
-    update = /[|｜]/.test(text) ? structuredFields(text) :
-      extractNatural(text, {market:priorFields.market,securityName:priorFields.securityName,receivedAt});
+    const options = {market:priorFields.market,securityName:priorFields.securityName,receivedAt};
+    update = /[|｜]/.test(text) ? structuredFields(text) : interpretation ?
+      interpretedFields(text,interpretation,options) : extractNatural(text,options);
   }
   if (priorFields.currency && update.currency && priorFields.currency !== update.currency) invalid('补充价格的币种与原提案不同，请核对。');
   const fields = {...priorFields,...update};

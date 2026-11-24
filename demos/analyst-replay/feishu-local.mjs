@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { openFeishuWorkflow } from './feishu-workflow.mjs';
+import { createAilyExtractor } from './feishu-aily.mjs';
 import { deliverAppPending, hasAppDelivery, recoverAppDelivery } from './delivery.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../../build/analyst-replay/', import.meta.url));
@@ -94,7 +95,7 @@ export function createLocalFeishuWorkflow({sendMessage}) {
     const workflow = openFeishuWorkflow(db, transaction, {
       register: payload => localRegister(payload, port),
       syncFormal: configuredTarget ? syncFormal : undefined,
-      sendMessage, config: () => bindings(directory),
+      extractWithAily:createAilyExtractor(), sendMessage, config: () => bindings(directory),
     });
     const replayFile = join(directory,'replay.sqlite');
     let replay;

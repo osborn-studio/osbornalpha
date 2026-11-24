@@ -76,6 +76,60 @@ test('the group receipt identifies the Beijing suggestion time and New York pric
   assert.match(h.messages[1].text,/纽约交易日.*2025-11-24/);
 });
 
+test('Aily interprets directed language and an authorized follow-up without accepting invented fields', async t => {
+  const h = harness(t);
+  const requests = [];
+  const workflow = h.open({extractWithAily:async request => {
+    requests.push(request);
+    return request.isSupplement
+      ? {intent:'proposal',fields:{
+        ticker:{value:'00700.HK',evidence:'腾讯控股'},
+        price:{value:999,evidence:'腾讯控股'},
+        quantity:{value:400,evidence:'腾讯控股'},
+      }}
+      : {intent:'proposal',fields:{
+        action:{value:'add',evidence:'仓位往上调一点'},
+        ticker:{value:'01810.HK',evidence:'原文没有的代码'},
+      }};
+  }});
+  const speech = '这只股票的仓位往上调一点';
+  assert.equal(workflow.receive(event(1,{text:speech})).accepted,false);
+  assert.equal(workflow.receive(event(2,{text:speech,directedToBot:true,senderId:'ou_unbound'})).accepted,false);
+  assert.equal(workflow.receive(event(3,{text:speech,directedToBot:true})).accepted,true);
+  await workflow.drain();
+  assert.match(h.messages[0].text,/补充标的代码/);
+  assert.equal(workflow.view().proposals.length,0);
+  assert.equal(workflow.receive(event(4,{text:'腾讯控股',parentId:'om_sent_1',senderId:'ou_second'})).accepted,false);
+  workflow.receive(event(5,{text:'腾讯控股',parentId:'om_sent_1'}));
+  await workflow.drain();
+  assert.equal(requests.length,2);
+  assert.equal(requests[1].priorFields.action,'add');
+  assert.match(h.messages[1].text,/00700.HK · HK · 加仓/);
+  assert.match(h.messages[1].text,/仅登记建议/);
+  assert.equal(h.registrations.length,0);
+  workflow.receive(approval(6,'om_sent_2'));
+  await workflow.drain();
+  assert.deepEqual(h.registrations.map(r => [r.fields.ticker,r.fields.action]),[['00700.HK','add']]);
+});
+
+test('an ambiguous Aily result requires clarification even when the local fields are complete', async t => {
+  const h = harness(t);
+  const workflow = h.open({extractWithAily:async () => ({intent:'ambiguous',fields:{}})});
+  workflow.receive(event(1,{text:'买入腾讯控股',directedToBot:true}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/存在歧义/);
+  assert.equal(workflow.view().proposals.length,0);
+});
+
+test('an unavailable Aily skill uses existing local rules for recognizable suggestions', async t => {
+  const h = harness(t);
+  const workflow = h.open({extractWithAily:async () => {throw Error('offline');}});
+  workflow.receive(event(1,{text:'买入腾讯控股',directedToBot:true}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/00700.HK · HK · 买入/);
+  assert.equal(workflow.view().proposals.length,1);
+});
+
 test('a colloquial buy plus add uses the exact HK ticker and the explicit add action', async t => {
   const h = harness(t);
   const workflow = h.open();

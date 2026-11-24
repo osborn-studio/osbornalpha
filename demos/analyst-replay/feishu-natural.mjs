@@ -45,6 +45,10 @@ const explicitTicker = /(?:股票代码|标的代码|证券代码|代码|标的|
 const stockWord = /(?<![A-Za-z0-9.])[A-Z][A-Z0-9]{0,5}(?:[.-][A-Z])?(?![A-Za-z0-9.])/gi;
 const nonTickers = new Set(['HK','US','HKD','USD','RMB','CNY','PM','AI','ETF','PE','PB','EPS','ADR','GDP','CEO','IPO','MACD','RSI','ROE','ROA','YOY','QOQ','FY','A']);
 
+export function nonActionableSuggestion(text) {
+  return uncertainSpeech.test(text) || conditionalAction.test(text) || shopping.test(text);
+}
+
 function invalid(message) { throw Object.assign(new Error(message),{status:400}); }
 
 function put(fields,key,value) {
@@ -213,7 +217,7 @@ function readNotes(text,fields) {
 
 export function detectNaturalProposal(raw, {directedToBot = false} = {}) {
   const text = cleanText(raw);
-  if (uncertainSpeech.test(text) || conditionalAction.test(text) || shopping.test(text)) return false;
+  if (nonActionableSuggestion(text)) return false;
   if (!directedToBot && /买|卖/.test(text) && !/(?:买入|买进|卖出|卖掉|加仓|减仓|清仓|股份|股票|[0-9]\s*股|建议|推荐|参考|目标|止损|现价|成交)/.test(text)) return false;
   const action = actionsIn(text).size > 0;
   if (!action && Object.values(actionPatterns).some(pattern=>new RegExp(pattern.source).test(text))) return false;
@@ -235,7 +239,7 @@ export function detectNaturalProposal(raw, {directedToBot = false} = {}) {
 export function extractNatural(raw, {market, receivedAt, securityName} = {}) {
   const fields = {};
   let text = readNotes(cleanText(raw),fields);
-  if (uncertainSpeech.test(text) || conditionalAction.test(text) || shopping.test(text) || (!actionsIn(text).size && Object.values(actionPatterns).some(p=>new RegExp(p.source).test(text)))) invalid('请明确陈述你本人的证券建议，例如「建议加仓」或「继续观望」。');
+  if (nonActionableSuggestion(text) || (!actionsIn(text).size && Object.values(actionPatterns).some(p=>new RegExp(p.source).test(text)))) invalid('请明确陈述你本人的证券建议，例如「建议加仓」或「继续观望」。');
   text = text.replace(/(?:分析师|署名)\s*[:=]?\s*([\w.-]+|[\p{Script=Han}]{2,8})(?=\s|[,。;|]|$)/gu,(_,name)=>{put(fields,'analyst',name);return ' ';});
   text = text.replace(/(?:市场|交易所)\s*[:=是为]?\s*(HK|US|A)(?![A-Za-z\d])/gi,(_,code)=>{put(fields,'market',code.toUpperCase());return ' ';});
   text = readDate(text,fields,receivedAt);

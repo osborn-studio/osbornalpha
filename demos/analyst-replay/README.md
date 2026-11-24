@@ -24,6 +24,33 @@ PM 的目标群列表也会显示已预先绑定的分析师。首次收到该�
 
 需要同时申请模拟成交时，请写明股数和模拟成交价，例如「我想给腾讯控股加仓100股，模拟成交价447.4港元」。成交申请缺少一项时会提示补充。回复「仅登记建议」可以跳过成交。原有竖线格式仍可使用。Demo 登记和正式系统同步分别保留回执，重复确认沿用同一提案编号。
 
+### 启用飞书 Aily 提取建议
+
+在飞书 Aily 创建并发布工作流，开启「渠道管理 → 开放接入 → 支持使用应用身份调用 API 和 SDK」。现有群机器人继续收发消息，使用这个工作流对应的飞书渠道应用凭证调用 Aily 技能。工作流只需开始节点、模型节点和结束节点。[Aily 应用身份接入说明](https://aily.feishu.cn/hc/8qluoxsa_mqnk8i5v) · [技能调用接口](https://aily.feishu.cn/hc/8qluoxsa_kmcc4e3h)
+
+开始节点输入 `text`（String）、`receivedAt`（String）、`isSupplement`（Boolean）、`priorFields`（String，已识别字段的 JSON）。结束节点输出 `extraction`（String，以下结构的 JSON）。模型只提取当前消息中分析师明确表达的内容。字段证据须逐字来自当前消息。未提及的字段省略。分析师署名、身份、批准和执行由本机处理。
+
+```json
+{
+  "intent": "proposal",
+  "fields": {
+    "action": {"value": "add", "evidence": "仓位往上调一点"},
+    "ticker": {"value": "00700.HK", "evidence": "腾讯控股"}
+  }
+}
+```
+
+`intent` 可用 `proposal`、`other`、`ambiguous`。动作可用 `buy`、`add`、`trim`、`sell`、`hold`、`pass`。还可提取 `rationale`、`thesis_ref`、`reference_price`、`target_price`、`stop_loss`、`confidence`。询问、转述、未达到的条件、闲聊归为 `other`。多只证券或多个互斥动作归为 `ambiguous`。
+
+在连接器的私有 `build/analyst-replay/feishu-app.env` 填好以下四项后重启连接器。建议用 Aily API 调试台先验证示例输入与输出。连接器只向 Aily 提交已绑定分析师主动 @机器人的文本，以及他们对同一条提案追问的补充。技能超时时使用本机规则，必要时向分析师补问。
+
+```dotenv
+FEISHU_AILY_APP_ID=
+FEISHU_AILY_SKILL_ID=
+FEISHU_AILY_CHANNEL_APP_ID=
+FEISHU_AILY_CHANNEL_APP_SECRET=
+```
+
 ### 接入正式系统的专用模拟账号
 
 在目标系统部署 `/api/integrations/feishu/simulation` 及对应数据库迁移后，由该系统管理者配置 `FEISHU_SIMULATION_INGEST_ENABLED=true`、`FEISHU_SIMULATION_OWNER_ID`、`FEISHU_SIMULATION_ANALYSTS`（Demo 角色 ID 到该账号内已有分析师 UUID 的 JSON 对象）和专用 `FEISHU_SIMULATION_INGEST_TOKEN`。使用至少 32 个字符的随机接入令牌。目标服务使用自己的 Supabase 服务端凭证。
