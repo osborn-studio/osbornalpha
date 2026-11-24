@@ -15,6 +15,41 @@ test('a free-form HK proposal separates prices, quantity, and stock without a te
   assert.deepEqual(extractNatural('建议买入700.HK'),{ticker:'00700.HK',market:'HK',action:'buy'});
 });
 
+test('a specific position adjustment can refine a colloquial direction but not a distinct instruction', () => {
+  assert.deepEqual(extractNatural('我想买01800.HK 港股 加仓'),{ticker:'01800.HK',market:'HK',action:'add'});
+  assert.deepEqual(extractNatural('我想卖01800.HK港股，减仓'),{ticker:'01800.HK',market:'HK',action:'trim'});
+  assert.deepEqual(extractNatural('我想买01800.HK'),{ticker:'01800.HK',market:'HK',action:'buy'});
+  for (const text of ['买01800.HK或者加仓','买01800.HK然后加仓','买入01800.HK并且加仓','买01800.HK减仓','加仓腾讯，卖出小米']) {
+    assert.throws(() => extractNatural(text),/多个不同的建议动作/,text);
+  }
+});
+
+test('recognizes the current direction alongside negated and already completed actions', () => {
+  assert.equal(extractNatural('不要卖出腾讯控股，我建议买入腾讯控股').action, 'buy');
+  assert.equal(extractNatural('我想买腾讯控股。昨天已经加仓了。').action, 'buy');
+  assert.equal(extractNatural('我想卖腾讯控股。昨天已经减仓了。').action, 'sell');
+  assert.deepEqual(extractNatural('我想买腾讯控股。昨天已经加仓200股。', {receivedAt}),
+    {ticker:'00700.HK',market:'HK',action:'buy'});
+  assert.throws(() => extractNatural('我想买腾讯控股。之后还要加仓。'), /多个不同的建议动作/);
+  assert.equal(detectNaturalProposal('昨天已经加仓腾讯控股', { directedToBot:true }), false);
+});
+
+test('spoken budgets do not obscure the stock name or turn into a trade size', () => {
+  const expected = {ticker:'NVDA',market:'US',action:'buy'};
+  for (const text of [
+    '我想申请买100万美金英伟达',
+    '买20万人民币的英伟达股票',
+    '买200000人民币的英伟达股票',
+    '买人民币200000的英伟达股票',
+    '买英伟达吧。',
+    '买英伟达！',
+    '买入Nvidia',
+    '买入 NVDA.',
+  ]) assert.deepEqual(extractNatural(text),expected,text);
+  assert.deepEqual(extractNatural('买200股英伟达股票'),{...expected,quantity:200});
+  assert.deepEqual(extractNatural('买腾讯音乐股票'),{action:'buy'});
+});
+
 test('initial intent includes partial suggestions and directed stock codes; ignores chatter, questions, conditional and negative orders', () => {
   for (const text of ['我想加仓，参考价40','我对腾讯控股有条建议，参考价447.4','加仓','买入','我建议买入未收录的公司']) {
     assert.equal(detectNaturalProposal(text),true,text);

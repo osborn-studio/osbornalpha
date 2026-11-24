@@ -11,6 +11,7 @@ const defaultListings = new Map([
 ]);
 const chineseNames = new Set([...defaultListings.keys(), ...MOCK_UNIVERSE.map(row => row.n).filter(name => /^[\p{Script=Han}]{2,}$/u.test(name))]);
 const usSymbols = new Set(MOCK_UNIVERSE.filter(row => row.m === 'US').map(row => row.t));
+const usCompanyAliases = new Map([['NVIDIA','NVDA']]);
 const actionPatterns = {
   buy:/买入|买进|建仓|开仓买|买(?!盘|点|方|单|家|卖)/g,
   add:/加仓|增持|补仓|加码/g,
@@ -40,10 +41,20 @@ const uncertainSpeech = /[?？]|是否|要不要|能不能|可不可以|怎么�
 const conditionalAction = /(?:回调|回落|跌破|下破|跌到|涨到|涨至|反弹至|升至|突破|低于|高于)[^,，。!?！？;；\n]{0,28}(?:再|才|则|后|时|就|考虑)(?:会|可|去|考虑|建议|执行|分批|继续|逐步|择机|择时|\s)*(?:买|卖|加仓|减仓|补仓|清仓)/;
 const shopping = /(?:买|卖|换|订|挑)[^,。;\n]{0,12}(?:手机|电脑|充电器|平板|电饭煲|家电|耳机|果汁|水果|手表)|(?:手机|平板|电饭煲|耳机|水果)[^,。;\n]{0,6}(?:买|卖)/;
 const negated = /(?:不(?:再|要|应|会|能|宜|可|想|计划|打算|准备|建议)?|别|禁止|避免|取消|尚未|没有|不能再)\s*$/;
+const completedAction = /(?:早已|已经|曾经|已)\s*$/;
+const separatedAction = /[\/、;；。!！?？\n]|\.(?![A-Za-z0-9])|或者|还是|或|以及|并且|然后|之后|以后|同时|接着|再|接下来/;
+const completedTradeNote = /(^|[,，。!?！？;；\n]|\.(?![A-Za-z0-9]))\s*(?:我(?:们)?\s*)?(?:(?:昨天|昨日|前天|此前|之前|上次|上周)\s*)?(?:早已|已经|曾经|已)\s*(?:买|卖|建仓|加仓|减仓|清仓|增持|减持|补仓)[^,，。!?！？;；\n]*/g;
 const symbolPattern = /(?<![A-Za-z0-9.])(?:\d{1,5}\.HK|HK\s*\d{1,5}|\d{6}(?:\.(?:SH|SZ|BJ|SS))?|(?:SH|SZ|BJ)\d{6}|0\d{4})(?![A-Za-z0-9.%])/gi;
 const explicitTicker = /(?:股票代码|标的代码|证券代码|代码|标的|港股|美股|A股)\s*(?:是|为|[:=])?\s*\$?([A-Za-z][A-Za-z0-9.-]{0,9}|\d{1,6}(?:\.[A-Za-z]{2})?)(?![A-Za-z0-9.])/gi;
-const stockWord = /(?<![A-Za-z0-9.])[A-Z][A-Z0-9]{0,5}(?:[.-][A-Z])?(?![A-Za-z0-9.])/gi;
+const stockWord = /(?<![A-Za-z0-9.])[A-Z][A-Z0-9]{0,5}(?:[.-][A-Z])?(?![A-Za-z0-9]|\.[A-Za-z0-9])/gi;
 const nonTickers = new Set(['HK','US','HKD','USD','RMB','CNY','PM','AI','ETF','PE','PB','EPS','ADR','GDP','CEO','IPO','MACD','RSI','ROE','ROA','YOY','QOQ','FY','A']);
+const amountBeforeCode = /(?:人民币|港元|港币|美元|美金|CNY|RMB|HKD|USD|US\$|HK\$|[¥$])\s*$/i;
+const amountAfterCode = /^\s*(?:万|亿|元|块钱|港币|港元|美元|美金|人民币|HKD|USD|RMB|CNY)/i;
+const relatedSecurity = /^\s*(?:的\s*)?(?:(?:股票|个股)\s*)?(?:供应商|供应链|产业链|合作伙伴|客户|上下游|相关|概念|旗下|子公司|期权|权证|基金|ETF)/iu;
+
+export function nonActionableSuggestion(text) {
+  return uncertainSpeech.test(text) || conditionalAction.test(text) || shopping.test(text);
+}
 
 function invalid(message) { throw Object.assign(new Error(message),{status:400}); }
 
@@ -89,14 +100,26 @@ function readPrices(text, fields) {
 }
 
 function actionsIn(text) {
-  const found = new Set();
+  const matchesByAction = new Map();
   for (const [action,pattern] of Object.entries(actionPatterns)) {
+    const matches = [];
     for (const match of text.matchAll(pattern)) {
       if (action === 'hold' && /^\s*(?:约|计划)?\s*(?:5|10|五|十)\s*(?:个)?(?:交易日|日|天)/.test(text.slice(match.index+match[0].length))) continue;
-      if (!negated.test(text.slice(0,match.index))) found.add(action);
+      const prefix = text.slice(0,match.index);
+      if (!negated.test(prefix) && !completedAction.test(prefix)) matches.push(match);
     }
+    if (matches.length) matchesByAction.set(action,matches);
   }
-  return found;
+  // An unlabeled 买/卖 can state the direction of a more specific position adjustment.
+  // Keep full verbs and cases where the author explicitly separates the actions.
+  for (const [direction,adjustment,word] of [['buy','add','买'],['sell','trim','卖']]) {
+    const broad = matchesByAction.get(direction);
+    const specific = matchesByAction.get(adjustment);
+    if (broad?.length !== 1 || specific?.length !== 1 || broad[0][0] !== word) continue;
+    const [first,second] = [broad[0],specific[0]].sort((a,b) => a.index-b.index);
+    if (!separatedAction.test(text.slice(first.index+first[0].length,second.index))) matchesByAction.delete(direction);
+  }
+  return new Set(matchesByAction.keys());
 }
 
 function cleanSymbol(raw) { return raw.replace(/^HK\s*(\d+)$/i,'$1.HK'); }
@@ -105,7 +128,8 @@ function mentionsName(text, name) {
   // Common abbreviations are also prefixes of other issuers and funds (e.g. 腾讯音乐).
   for (const match of text.matchAll(new RegExp(name,'g'))) {
     const tail = text.slice(match.index+name.length);
-    if (/^(?:$|[\s,。;|!:()、\d]|和|与|及|现|目标|参考|止损|继续|打算|建议|计划|预计|准备|先|可以|暂|看|想|要|拟|未来|短期|中期|长期|最近|有(?:一)?(?:条|个)?(?:建议|提议|想法)|意见|今[天日]|明[天日]|昨[天日]|认为|港股|A股|美股|[买卖加减持增补清观]|的(?:股|目标|参考|止损|现价|港股|A股|美股))/.test(tail)) return true;
+    if (relatedSecurity.test(tail)) continue;
+    if (/^(?:$|[\s\p{P}\p{S}\d]|和|与|及|现|目标|参考|止损|继续|打算|建议|计划|预计|准备|先|可以|暂|看|想|要|拟|未来|短期|中期|长期|最近|有(?:一)?(?:条|个)?(?:建议|提议|想法)|意见|今[天日]|明[天日]|昨[天日]|认为|港股|A股|美股|股票|股价|股份公司|[买卖加减持增补清观]|(?:吧|呢|啊|一下)(?=$|[\s\p{P}\p{S}])|(?:降|提|抬)(?:低|高|点|一点|些|仓)|的(?:股|仓位|持仓|目标|参考|止损|现价|港股|A股|美股))/u.test(tail)) return true;
   }
   return false;
 }
@@ -114,7 +138,8 @@ function readTicker(text, fields, knownMarket, priorName) {
   const candidates = new Set();
   const market = fields.market ?? knownMarket;
   function consider(raw) {
-    const code = cleanSymbol(raw).toUpperCase();
+    const symbol = cleanSymbol(raw).toUpperCase();
+    const code = usCompanyAliases.get(symbol) ?? symbol;
     if (nonTickers.has(code)) return;
     const inferred = inferCoreMarket(code);
     if (!inferred) return;
@@ -123,11 +148,22 @@ function readTicker(text, fields, knownMarket, priorName) {
     if (market && inferred !== market) invalid('证券代码与市场不一致，请明确交易市场及代码。');
     candidates.add(ticker);
   }
-  for (const match of text.matchAll(symbolPattern)) consider(match[0]);
-  for (const match of text.matchAll(explicitTicker)) consider(match[1]);
+  for (const match of text.matchAll(symbolPattern)) {
+    const after = text.slice(match.index + match[0].length);
+    if (relatedSecurity.test(after)) continue;
+    // A bare amount in an order budget can have the same number of digits as a code.
+    if (/^\d+$/.test(match[0]) &&
+        (amountBeforeCode.test(text.slice(0,match.index)) || amountAfterCode.test(after))) continue;
+    consider(match[0]);
+  }
+  for (const match of text.matchAll(explicitTicker)) {
+    if (!relatedSecurity.test(text.slice(match.index + match[0].length))) consider(match[1]);
+  }
   for (const match of text.matchAll(stockWord)) {
     const original = match[0], symbol = original.toUpperCase();
-    if (usSymbols.has(symbol) || (original === symbol && (text.trim() === symbol || /(?:买入|买|卖出|卖|加仓|减仓|观望|持有|\$)\s*$/.test(text.slice(0,match.index))))) consider(symbol);
+    if (relatedSecurity.test(text.slice(match.index+original.length))) continue;
+    if (usSymbols.has(symbol) || usCompanyAliases.has(symbol) ||
+        (original === symbol && (text.trim() === symbol || /(?:买入|买|卖出|卖|加仓|减仓|观望|持有|\$)\s*$/.test(text.slice(0,match.index))))) consider(symbol);
   }
   const resolvedNames = new Set();
   const names = [...chineseNames].filter(name => mentionsName(text,name));
@@ -146,6 +182,44 @@ function readTicker(text, fields, knownMarket, priorName) {
   for (const ticker of resolvedNames) candidates.add(ticker);
   for (const ticker of candidates) put(fields,'ticker',ticker);
   if (fields.ticker) put(fields,'market',inferCoreMarket(fields.ticker));
+}
+
+export function resolveNamedSecurity(name, market) {
+  const fields = {};
+  readTicker(cleanText(name),fields,market);
+  return {ticker:fields.ticker,market:fields.market,securityName:fields.securityName};
+}
+
+export function resolveModelSecurity(text, quote, options = {}, expectedName) {
+  const source = cleanText(text);
+  const evidence = cleanText(quote);
+  if (!evidence) return {};
+  if (expectedName !== undefined) {
+    const name = cleanText(expectedName).replace(/(?:的)?(?:股票|个股|这只票)$/u,'');
+    if (chineseNames.has(name)) {
+      if (mentionsName(evidence,name) && mentionsName(source,name)) return resolveNamedSecurity(name,options.market);
+      return {};
+    }
+    if (!usCompanyAliases.has(name.toUpperCase()) && !usSymbols.has(name.toUpperCase())) return {};
+    const fields = resolveModelSecurity(source,name.toUpperCase(),options);
+    return evidence.toUpperCase().includes(name.toUpperCase()) ? fields : {};
+  }
+  // A clipped company name is insufficient when the full message names a different issuer.
+  for (const name of chineseNames) {
+    if (mentionsName(evidence,name) && !mentionsName(source,name)) return {};
+  }
+  const comparableSource = source.toUpperCase();
+  const comparableEvidence = evidence.toUpperCase();
+  for (let index = comparableSource.indexOf(comparableEvidence); index !== -1; index = comparableSource.indexOf(comparableEvidence,index+1)) {
+    const before = source.slice(0,index);
+    const after = source.slice(index+evidence.length);
+    if (relatedSecurity.test(after)) continue;
+    if (/^[A-Za-z\d][A-Za-z\d./-]*$/.test(evidence) &&
+        (/[A-Za-z\d.]$/.test(before) || /^(?:[A-Za-z\d]|\.[A-Za-z\d])/.test(after))) continue;
+    if (/^\d+$/.test(evidence) && (amountBeforeCode.test(before) || amountAfterCode.test(after))) continue;
+    return resolveNamedSecurity(evidence,options.market);
+  }
+  return {};
 }
 
 const datePart = String.raw`(?:(?<year>20\d\d)[年/.-](?<month>\d{1,2})[月/.-](?<day>\d{1,2})(?:日|号)?|(?<relative>今天|今日|昨天|昨日|前天))`;
@@ -185,6 +259,14 @@ function readDate(text,fields,receivedAt) {
   return text;
 }
 
+export function validateModelDate(evidence, value, receivedAt) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return null;
+  const fields = {};
+  const normalized = cleanText(evidence).replace(/(\d)\s*([年月])\s*(?=\d)/g,'$1$2').replace(/(\d)\s*([日号])/g,'$1$2');
+  readDate(normalized,fields,receivedAt);
+  return fields.recommended_at && Date.parse(fields.recommended_at) === Date.parse(value) ? fields.recommended_at : null;
+}
+
 function readNotes(text,fields) {
   // Remove labeled prose before extracting action words, other securities or quoted prices from a thesis.
   const noteLabel = '理由|原因|逻辑|因为|关联研究|研究关联|关联研报|研究引用';
@@ -201,11 +283,13 @@ function readNotes(text,fields) {
 
 export function detectNaturalProposal(raw, {directedToBot = false} = {}) {
   const text = cleanText(raw);
-  if (uncertainSpeech.test(text) || conditionalAction.test(text) || shopping.test(text)) return false;
+  if (nonActionableSuggestion(text)) return false;
   if (!directedToBot && /买|卖/.test(text) && !/(?:买入|买进|卖出|卖掉|加仓|减仓|清仓|股份|股票|[0-9]\s*股|建议|推荐|参考|目标|止损|现价|成交)/.test(text)) return false;
   const action = actionsIn(text).size > 0;
   if (!action && Object.values(actionPatterns).some(pattern=>new RegExp(pattern.source).test(text))) return false;
-  const loneCode = (usSymbols.has(text.toUpperCase()) || /^\$?[A-Z]{1,6}(?:[.-][A-Z])?$/.test(text) || /^(?:\d{5,6}|HK\s*\d{1,5}|\d{1,5}\.HK|(?:SH|SZ|BJ)\d{6}|\d{6}\.(?:SH|SZ|BJ))$/i.test(text)) && !nonTickers.has(text.toUpperCase());
+  const loneCode = (usSymbols.has(text.toUpperCase()) || usCompanyAliases.has(text.toUpperCase()) ||
+    /^\$?[A-Z]{1,6}(?:[.-][A-Z])?$/.test(text) || /^(?:\d{5,6}|HK\s*\d{1,5}|\d{1,5}\.HK|(?:SH|SZ|BJ)\d{6}|\d{6}\.(?:SH|SZ|BJ))$/i.test(text)) &&
+    !nonTickers.has(text.toUpperCase());
   if (directedToBot && (chineseNames.has(text) || loneCode || /^(?:股票代码|代码|证券代码|标的代码|标的)\s*(?:是|为|[:=])?\s*[A-Z0-9][A-Z0-9.-]*[。.]?$/i.test(text) || /^(?:港股|美股|A股)\s*[\p{Script=Han}A-Za-z0-9.]{1,15}$/u.test(text))) return true;
   const symbol = [...chineseNames].some(name=>text.includes(name)) || new RegExp(symbolPattern.source,'i').test(text) ||
     /(?:美股|港股|A股|证券代码|股票代码)|(?:买入|卖出|加仓|减仓|观望|持有)\s*[A-Z]|[A-Z]{1,5}\s*(?:买入|卖出|加仓|减仓|观望|持有)/.test(text);
@@ -220,10 +304,14 @@ export function detectNaturalProposal(raw, {directedToBot = false} = {}) {
     (action && (quote || /(?:我(?:想|要|准备|打算)|计划|打算|拟|建议|申请)/.test(text)));
 }
 
+export function withoutCompletedTradeNotes(text) {
+  return text.replace(completedTradeNote,'$1');
+}
+
 export function extractNatural(raw, {market, receivedAt, securityName} = {}) {
   const fields = {};
-  let text = readNotes(cleanText(raw),fields);
-  if (uncertainSpeech.test(text) || conditionalAction.test(text) || shopping.test(text) || (!actionsIn(text).size && Object.values(actionPatterns).some(p=>new RegExp(p.source).test(text)))) invalid('请明确陈述你本人的证券建议，例如「建议加仓」或「继续观望」。');
+  let text = withoutCompletedTradeNotes(readNotes(cleanText(raw),fields));
+  if (nonActionableSuggestion(text) || (!actionsIn(text).size && Object.values(actionPatterns).some(p=>new RegExp(p.source).test(text)))) invalid('请明确陈述你本人的证券建议，例如「建议加仓」或「继续观望」。');
   text = text.replace(/(?:分析师|署名)\s*[:=]?\s*([\w.-]+|[\p{Script=Han}]{2,8})(?=\s|[,。;|]|$)/gu,(_,name)=>{put(fields,'analyst',name);return ' ';});
   text = text.replace(/(?:市场|交易所)\s*[:=是为]?\s*(HK|US|A)(?![A-Za-z\d])/gi,(_,code)=>{put(fields,'market',code.toUpperCase());return ' ';});
   text = readDate(text,fields,receivedAt);

@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { openFeishuWorkflow } from './feishu-workflow.mjs';
+import { createAilyExtractor } from './feishu-aily.mjs';
+import { createFeishuLlmExtractor } from './feishu-llm.mjs';
 import { deliverAppPending, hasAppDelivery, recoverAppDelivery } from './delivery.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../../build/analyst-replay/', import.meta.url));
@@ -64,7 +66,7 @@ async function syncFormal(payload) {
   return receipt;
 }
 
-export function createLocalFeishuWorkflow({sendMessage}) {
+export function createLocalFeishuWorkflow({sendMessage,extractWithModel = createFeishuLlmExtractor() ?? createAilyExtractor()}) {
   const directory = resolve(process.env.REPLAY_DATA_DIR || defaultDirectory);
   mkdirSync(directory, {recursive:true, mode:0o700});
   const port = Number(process.env.REPLAY_PORT || 4317);
@@ -94,7 +96,7 @@ export function createLocalFeishuWorkflow({sendMessage}) {
     const workflow = openFeishuWorkflow(db, transaction, {
       register: payload => localRegister(payload, port),
       syncFormal: configuredTarget ? syncFormal : undefined,
-      sendMessage, config: () => bindings(directory),
+      extractWithModel, sendMessage, config: () => bindings(directory),
     });
     const replayFile = join(directory,'replay.sqlite');
     let replay;

@@ -18,11 +18,50 @@
 
 PM 的目标群列表也会显示已预先绑定的分析师。首次收到该成员的配对消息后，列表会显示实际配对编号和机器人回复状态。
 
-已绑定的分析师可以直接发「我想加仓腾讯控股」。系统从发送者确定分析师，从标的确定市场，识别动作后发摘要。需要保留价格或研究信息时，也可以发「我想加仓腾讯控股，参考价447.4港元，目标480，止损420」。参考价、目标价、止损价、理由、关联研究和期限均可省略。信心默认与页面一致，为 70%。未注明建议时间时以原消息发送时刻登记。历史回放可以写「建议时间 2026年6月16日 16:30」，摘要以北京时间显示。
+已绑定的分析师 @应用机器人发送「我想加仓腾讯控股」。语言模型提取标的、动作和已填写的选填项，本机根据飞书发送者确定分析师，并核验证券代码、市场和字段。需要保留价格或研究信息时，也可以发「我想加仓腾讯控股，参考价447.4港元，目标480，止损420」。参考价、目标价、止损价、理由、关联研究和期限均可省略。信心默认与页面一致，为 70%。未注明建议时间时以原消息发送时刻登记。历史回放可以写「建议时间 2026年6月16日 16:30」，摘要以北京时间显示。
 
 如果只发「我想加仓」，机器人会追问标的。原分析师在这条追问上点回复，@机器人发送「00700.HK」即可继续。不同提案各有自己的回复链。字段齐全后，PM 在机器人的待确认摘要上点回复，再 @机器人发送「同意」。
 
 需要同时申请模拟成交时，请写明股数和模拟成交价，例如「我想给腾讯控股加仓100股，模拟成交价447.4港元」。成交申请缺少一项时会提示补充。回复「仅登记建议」可以跳过成交。原有竖线格式仍可使用。Demo 登记和正式系统同步分别保留回执，重复确认沿用同一提案编号。
+
+### 直连本机模型或阿里云百炼
+
+连接器可以通过 OpenAI 兼容接口提取自然语言建议。在私有的 `build/analyst-replay/feishu-app.env` 配置以下变量，然后重启连接器。使用本机 Ollama 时，模型名需和本机模型列表一致，API Key 可以省略。
+
+```dotenv
+FEISHU_LLM_BASE_URL=http://127.0.0.1:11434/v1
+FEISHU_LLM_MODEL=inkling-2-mini:26b-a5b-nvfp4
+FEISHU_LLM_TIMEOUT_MS=35000
+```
+
+切换到百炼时，使用 API Key 所属地域的 HTTPS OpenAI 兼容 Base URL 和文本模型名，并在同一私有文件配置 `FEISHU_LLM_API_KEY`。本机和百炼通过配置显式切换。连接器仅将已绑定分析师 @机器人的单条文本和同一提案的补充内容交给模型。认证、股票代码校验、缺项追问、审批和登记在本机执行。模型不可用时，机器人保留草稿并提示原分析师直接回复原句重试。[Ollama 兼容接口](https://docs.ollama.com/api/openai-compatibility) · [阿里云百炼兼容接口](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)
+
+### 启用飞书 Aily 提取建议
+
+在飞书 Aily 创建并发布工作流，开启「渠道管理 → 开放接入 → 支持使用应用身份调用 API 和 SDK」。现有群机器人继续收发消息，使用这个工作流对应的飞书渠道应用凭证调用 Aily 技能。工作流只需开始节点、模型节点和结束节点。[Aily 应用身份接入说明](https://aily.feishu.cn/hc/8qluoxsa_mqnk8i5v) · [技能调用接口](https://aily.feishu.cn/hc/8qluoxsa_kmcc4e3h)
+
+开始节点输入 `text`（String）、`receivedAt`（String）、`isSupplement`（Boolean）、`priorFields`（String，已识别字段的 JSON）。结束节点输出 `extraction`（String，以下结构的 JSON）。模型只提取当前消息中分析师明确表达的内容。字段证据须逐字来自当前消息。未提及的字段省略。分析师署名、身份、批准和执行由本机处理。
+
+```json
+{
+  "intent": "proposal",
+  "fields": {
+    "action": {"value": "add", "evidence": "仓位往上调一点"},
+    "ticker": {"value": "00700.HK", "evidence": "腾讯控股"}
+  }
+}
+```
+
+`intent` 可用 `proposal`、`other`、`ambiguous`。动作可用 `buy`、`add`、`trim`、`sell`、`hold`、`pass`。还可提取 `rationale`、`thesis_ref`、`reference_price`、`target_price`、`stop_loss`、`confidence`。询问、转述、未达到的条件、闲聊归为 `other`。多只证券或多个互斥动作归为 `ambiguous`。
+
+在连接器的私有 `build/analyst-replay/feishu-app.env` 填好以下四项后重启连接器。建议用 Aily API 调试台先验证示例输入与输出。连接器只向 Aily 提交已绑定分析师主动 @机器人的文本，以及他们对同一条提案追问的补充。技能超时时，连接器保留草稿并提示回复重试。
+
+```dotenv
+FEISHU_AILY_APP_ID=
+FEISHU_AILY_SKILL_ID=
+FEISHU_AILY_CHANNEL_APP_ID=
+FEISHU_AILY_CHANNEL_APP_SECRET=
+```
 
 ### 接入正式系统的专用模拟账号
 

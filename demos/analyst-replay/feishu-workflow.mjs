@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { isUuid } from '../../src/lib/portfolio/validate.ts';
 import { pairingReference, validateAnalystAliases } from './feishu-pairing.mjs';
-import { proposalIntent, evaluateProposal, summary } from './feishu-workflow-command.mjs';
+import { evaluateProposal, isAdviceOnlyCommand, summary } from './feishu-workflow-command.mjs';
 import { beijingDateTime, marketCalendarLabel } from './public/beijing-time.mjs';
 
 const identifier = value => typeof value === 'string' && /^[\w:-]{1,160}$/.test(value);
+const proposalKinds = new Set(['proposal','proposal_ai','supplement']);
 
 function stableId(...parts) {
   const hex = createHash('sha256').update(JSON.stringify(parts)).digest('hex');
@@ -33,7 +34,7 @@ function demoResult(entry) {
   return ['Demo 建议已登记 ' + entry.id, suggested, status, ...scores, rate, marketNote].filter(Boolean).join('\n');
 }
 
-export function openFeishuWorkflow(db, transaction, {register, sendMessage, syncFormal, config, now = Date.now}) {
+export function openFeishuWorkflow(db, transaction, {register, sendMessage, syncFormal, extractWithModel, config, now = Date.now}) {
   db.exec(`CREATE TABLE IF NOT EXISTS feishu_workflow_events (
     seq INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, message_id TEXT NOT NULL UNIQUE,
     chat_id TEXT NOT NULL, sender_id TEXT NOT NULL, parent_id TEXT, kind TEXT NOT NULL,
@@ -124,7 +125,9 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
         } else if (hasParent && pendingClarification.get(event.chatId,event.senderId)) {
           // The user can reply before Feishu returns the outgoing prompt's message ID.
           kind = 'supplement';
-        } else if (proposalIntent(content,event.directedToBot === true)) kind = 'proposal';
+        } else if (event.directedToBot === true) {
+          kind = 'proposal_ai';
+        }
       }
     }
     if (!kind) return {accepted:false};
@@ -141,14 +144,28 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     notice(event,'clarification',message + '\n请直接回复这条消息，@机器人 后补充。',id);
   }
 
-  function handleProposal(event, current) {
+  async function getInterpretation(event) {
+    if (!proposalKinds.has(event.kind)) return null;
+    const current = settings();
     const role = roleFor(current,event.sender_id);
-    if (!role) return 'ignored';
+    if (current.chatId !== event.chat_id || !role) return null;
     const draft = event.kind === 'supplement' ? clarification.get(event.chat_id,event.parent_id) : null;
-    if (draft && (draft.sender_id !== event.sender_id || draft.role !== role)) return 'ignored';
-    // An unrelated thread reply might have arrived while the send receipt was in flight.
-    // It can only start a new proposal if it independently expresses a proposal.
-    if (event.kind === 'supplement' && !draft && !proposalIntent(event.text)) return 'ignored';
+    if (event.kind === 'supplement' && (draft?.sender_id !== event.sender_id || draft.role !== role)) return null;
+    if (draft && isAdviceOnlyCommand(event.text)) return {role,packet:{intent:'proposal',fields:{}}};
+    try {
+      const packet = await extractWithModel?.({text:event.text,receivedAt:draft?.received_at ?? event.received_at,
+        priorFields:draft ? JSON.parse(draft.fields) : {},isSupplement:Boolean(draft)});
+      return {role,packet};
+    } catch {
+      return {role};
+    }
+  }
+
+  function handleProposal(event, current, inference) {
+    const role = roleFor(current,event.sender_id);
+    if (!role || inference?.role !== role) return 'ignored';
+    const draft = event.kind === 'supplement' ? clarification.get(event.chat_id,event.parent_id) : null;
+    if (event.kind === 'supplement' && (draft?.sender_id !== event.sender_id || draft.role !== role)) return 'ignored';
 
     const origin = draft?.origin ?? event.message_id;
     const receivedAt = draft?.received_at ?? event.received_at;
@@ -156,10 +173,26 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     const names = current.analystNamesByRole ?? {};
     const name = Object.hasOwn(names,role) ? names[role] : ['A','B'].includes(role) ? '分析师 ' + role : null;
     const aliases = current.analystAliasesByRole ?? {};
+    const interpretation = inference.packet;
+    if (interpretation?.intent === 'other') {
+      if (draft) requestDetails(event,id,'没有识别到这条建议的补充内容。');
+      return 'ignored';
+    }
+    if (interpretation?.intent === 'ambiguous') {
+      if (!draft) saveDraft.run(id,origin,event.chat_id,event.sender_id,role,receivedAt,'{}');
+      requestDetails(event,id,'这句话存在歧义，请明确要登记的单条建议。');
+      return 'awaiting_details';
+    }
+    if (interpretation?.intent !== 'proposal' || !interpretation.fields || typeof interpretation.fields !== 'object' ||
+        Array.isArray(interpretation.fields)) {
+      if (!draft) saveDraft.run(id,origin,event.chat_id,event.sender_id,role,receivedAt,'{}');
+      requestDetails(event,id,'建议识别模型暂时不可用。请直接回复原句重试。');
+      return 'awaiting_details';
+    }
     let parsed;
     try {
       parsed = evaluateProposal(role,name,event.text,receivedAt,Object.hasOwn(aliases,role) ? aliases[role] : [],
-        draft ? JSON.parse(draft.fields) : undefined);
+        draft ? JSON.parse(draft.fields) : undefined, interpretation);
     } catch (error) {
       if (error.status !== 400 && error.status !== 403) throw error;
       if (draft) {
@@ -197,7 +230,7 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     return 'processed';
   }
 
-  function handleEvent(event) {
+  function handleEvent(event, interpretation) {
     const current = settings();
     if (event.kind === 'pair' && (!current.chatId || current.chatId === event.chat_id)) {
       const reference = pairingReference(event.chat_id,event.sender_id);
@@ -205,7 +238,7 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       return 'paired';
     }
     if (current.chatId !== event.chat_id) return 'ignored';
-    if (event.kind === 'proposal' || event.kind === 'supplement') return handleProposal(event,current);
+    if (proposalKinds.has(event.kind)) return handleProposal(event,current,interpretation);
     if (!isApprover(current, event.sender_id)) return 'ignored';
     const proposal = proposalBySummary.get(event.chat_id,event.parent_id);
     if (!proposal || proposal.sender_id === event.sender_id || roleFor(current, proposal.sender_id) !== proposal.role) return 'ignored';
@@ -355,11 +388,12 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     for (let count = 0; count < 50; count++) {
       const event = nextEvent.get();
       if (event) {
+        const interpretation = await getInterpretation(event);
         transaction(() => {
           if (event.kind === 'supplement' && !clarification.get(event.chat_id,event.parent_id) &&
               pendingClarification.get(event.chat_id,event.sender_id)) return;
           if (event.kind !== 'approval' || proposalBySummary.get(event.chat_id,event.parent_id)) {
-            finishEvent.run(handleEvent(event),event.seq);
+            finishEvent.run(handleEvent(event,interpretation),event.seq);
           } else {
             // A reply can be delivered while the summary send is still awaiting its HTTP response.
             const pending = db.prepare(`SELECT 1 FROM feishu_workflow_messages WHERE chat_id=? AND kind='summary'
