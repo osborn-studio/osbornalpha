@@ -76,6 +76,23 @@ test('the group receipt identifies the Beijing suggestion time and New York pric
   assert.match(h.messages[1].text,/纽约交易日.*2025-11-24/);
 });
 
+test('a colloquial buy plus add uses the exact HK ticker and the explicit add action', async t => {
+  const h = harness(t);
+  const workflow = h.open();
+  workflow.receive(event(1,{text:'我想买01800.HK或者加仓'}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/多个不同的建议动作/);
+  workflow.receive(event(2,{text:'我想买01800.HK 港股 加仓',parentId:'om_sent_1'}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/01800.HK · HK · 加仓/);
+  assert.equal(h.registrations.length,0);
+  workflow.receive(approval(3,'om_sent_2'));
+  await workflow.drain();
+  assert.equal(h.registrations.length,1);
+  assert.equal(h.registrations[0].fields.ticker,'01800.HK');
+  assert.equal(h.registrations[0].fields.action,'add');
+});
+
 test('an analyst can mention the bot with just a ticker and reply with the action alone', async t => {
   const h = harness(t);
   const workflow = h.open();

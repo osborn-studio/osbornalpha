@@ -89,14 +89,26 @@ function readPrices(text, fields) {
 }
 
 function actionsIn(text) {
-  const found = new Set();
+  const matchesByAction = new Map();
   for (const [action,pattern] of Object.entries(actionPatterns)) {
+    const matches = [];
     for (const match of text.matchAll(pattern)) {
       if (action === 'hold' && /^\s*(?:约|计划)?\s*(?:5|10|五|十)\s*(?:个)?(?:交易日|日|天)/.test(text.slice(match.index+match[0].length))) continue;
-      if (!negated.test(text.slice(0,match.index))) found.add(action);
+      if (!negated.test(text.slice(0,match.index))) matches.push(match);
     }
+    if (matches.length) matchesByAction.set(action,matches);
   }
-  return found;
+  // An unlabeled 买/卖 can state the direction of a more specific position adjustment.
+  // Keep full verbs and cases where the author explicitly separates the actions.
+  const separateActions = /[\/、;\n]|或者|还是|或|以及|并且|然后|之后|以后|同时|接着|再|接下来/;
+  for (const [direction,adjustment,word] of [['buy','add','买'],['sell','trim','卖']]) {
+    const broad = matchesByAction.get(direction);
+    const specific = matchesByAction.get(adjustment);
+    if (broad?.length !== 1 || specific?.length !== 1 || broad[0][0] !== word) continue;
+    const [first,second] = [broad[0],specific[0]].sort((a,b) => a.index-b.index);
+    if (!separateActions.test(text.slice(first.index+first[0].length,second.index))) matchesByAction.delete(direction);
+  }
+  return new Set(matchesByAction.keys());
 }
 
 function cleanSymbol(raw) { return raw.replace(/^HK\s*(\d+)$/i,'$1.HK'); }
