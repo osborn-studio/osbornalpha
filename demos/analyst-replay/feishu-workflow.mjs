@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isUuid } from '../../src/lib/portfolio/validate.ts';
 import { pairingReference, validateAnalystAliases } from './feishu-pairing.mjs';
-import { proposalCommand, readProposal, summary } from './feishu-workflow-command.mjs';
+import { proposalIntent, evaluateProposal, summary } from './feishu-workflow-command.mjs';
 
 const identifier = value => typeof value === 'string' && /^[\w:-]{1,160}$/.test(value);
 
@@ -50,6 +50,10 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
     due_at INTEGER NOT NULL DEFAULT 0, first_attempt_at INTEGER, error TEXT
   );
+  CREATE TABLE IF NOT EXISTS feishu_workflow_drafts (
+    id TEXT PRIMARY KEY, origin TEXT NOT NULL UNIQUE, chat_id TEXT NOT NULL, sender_id TEXT NOT NULL,
+    role TEXT NOT NULL, received_at TEXT NOT NULL, fields TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS feishu_workflow_event_status ON feishu_workflow_events(status,seq);
   CREATE INDEX IF NOT EXISTS feishu_workflow_messages_status ON feishu_workflow_messages(status,due_at,seq);`);
   transaction(() => {
@@ -86,6 +90,14 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`);
   const proposalById = db.prepare('SELECT * FROM feishu_workflow_proposals WHERE id=?');
   const proposalBySummary = db.prepare('SELECT * FROM feishu_workflow_proposals WHERE chat_id=? AND summary_id=?');
+  const clarification = db.prepare(`SELECT m.proposal_id,d.* FROM feishu_workflow_messages m
+    LEFT JOIN feishu_workflow_drafts d ON d.id=m.proposal_id
+    WHERE m.chat_id=? AND m.message_id=? AND m.kind='clarification'`);
+  const pendingClarification = db.prepare(`SELECT 1 FROM feishu_workflow_drafts d
+    JOIN feishu_workflow_messages m ON m.proposal_id=d.id AND m.kind='clarification' AND m.status='pending'
+    WHERE d.chat_id=? AND d.sender_id=? LIMIT 1`);
+  const saveDraft = db.prepare(`INSERT INTO feishu_workflow_drafts(id,origin,chat_id,sender_id,role,received_at,fields)
+    VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET fields=excluded.fields`);
 
   function receive(event) {
     if (!event || ![event.eventId,event.messageId,event.chatId,event.senderId].every(identifier) ||
@@ -96,17 +108,88 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     if (/^\/?(?:绑定|联调)$/.test(content) && (!current.chatId || current.chatId === event.chatId)) {
       kind = 'pair';
     } else if (current.chatId === event.chatId) {
-      if (proposalCommand.test(content) && roleFor(current, event.senderId)) kind = 'proposal';
-      if (content === '同意' && identifier(event.parentId) && isApprover(current, event.senderId)) kind = 'approval';
+      const role = roleFor(current,event.senderId);
+      const hasParent = identifier(event.parentId);
+      if (content === '同意') {
+        if (hasParent && isApprover(current,event.senderId)) kind = 'approval';
+      } else if (role) {
+        const prompt = hasParent && clarification.get(event.chatId,event.parentId);
+        if (prompt) {
+          if (prompt.sender_id === event.senderId && prompt.role === role) kind = 'supplement';
+        } else if (hasParent && pendingClarification.get(event.chatId,event.senderId)) {
+          // The user can reply before Feishu returns the outgoing prompt's message ID.
+          kind = 'supplement';
+        } else if (proposalIntent(content,event.directedToBot === true)) kind = 'proposal';
+      }
     }
     if (!kind) return {accepted:false};
     const result = saveEvent.run(event.eventId,event.messageId,event.chatId,event.senderId,
-      kind === 'approval' ? event.parentId : null,kind,content,eventTime(event));
+      ['approval','supplement'].includes(kind) ? event.parentId : null,kind,content,eventTime(event));
     return {accepted:true, duplicate:result.changes === 0};
   }
 
   function notice(event, kind, text, proposalId = null) {
     queueMessage.run(stableId('feishu-reply',event.message_id,kind),event.chat_id,event.message_id,text,kind,proposalId);
+  }
+
+  function requestDetails(event, id, message) {
+    notice(event,'clarification',message + '\n请直接回复这条消息，@机器人 后补充。',id);
+  }
+
+  function handleProposal(event, current) {
+    const role = roleFor(current,event.sender_id);
+    if (!role) return 'ignored';
+    const draft = event.kind === 'supplement' ? clarification.get(event.chat_id,event.parent_id) : null;
+    if (draft && (draft.sender_id !== event.sender_id || draft.role !== role)) return 'ignored';
+    // An unrelated thread reply might have arrived while the send receipt was in flight.
+    // It can only start a new proposal if it independently expresses a proposal.
+    if (event.kind === 'supplement' && !draft && !proposalIntent(event.text)) return 'ignored';
+
+    const origin = draft?.origin ?? event.message_id;
+    const receivedAt = draft?.received_at ?? event.received_at;
+    const id = draft?.id ?? stableId('feishu-proposal',event.chat_id,origin);
+    const names = current.analystNamesByRole ?? {};
+    const name = Object.hasOwn(names,role) ? names[role] : ['A','B'].includes(role) ? '分析师 ' + role : null;
+    const aliases = current.analystAliasesByRole ?? {};
+    let parsed;
+    try {
+      parsed = evaluateProposal(role,name,event.text,receivedAt,Object.hasOwn(aliases,role) ? aliases[role] : [],
+        draft ? JSON.parse(draft.fields) : undefined);
+    } catch (error) {
+      if (error.status !== 400 && error.status !== 403) throw error;
+      if (draft) {
+        requestDetails(event,id,error.message);
+      } else {
+        // Ambiguous first messages have no reliable set of fields to carry forward.
+        saveDraft.run(id,origin,event.chat_id,event.sender_id,role,receivedAt,'{}');
+        requestDetails(event,id,error.message + ' 请重新描述一条完整建议。');
+      }
+      return 'rejected';
+    }
+    const {fields, missing, body, warnings = []} = parsed;
+    if (!body) {
+      saveDraft.run(id,origin,event.chat_id,event.sender_id,role,receivedAt,JSON.stringify(fields));
+      const lines = [`${name ?? role}，这条建议还需要补充${missing.join('、')}。`,...warnings];
+      if (missing.includes('交易市场或标的代码')) lines.push('请说明「' + fields.securityName + '」的市场，或提供完整股票代码。');
+      if (missing.includes('标的代码')) lines.push('可填写带市场的股票代码，例如 00700.HK 或 600519.SH。');
+      if (missing.includes('建议动作')) lines.push('可选买入、加仓、减仓、卖出、持有或观望。');
+      if (missing.includes('模拟成交价') || missing.includes('模拟成交股数')) {
+        lines.push('只需登记分析建议时，可回复「仅登记建议」。');
+      }
+      requestDetails(event,id,lines.join('\n'));
+      return 'awaiting_details';
+    }
+    const accountId = confirmedAccount(current);
+    db.prepare(`INSERT INTO feishu_workflow_proposals
+      (id,origin,chat_id,sender_id,role,body,simulation_status,simulation_account) VALUES (?,?,?,?,?,?,?,?)`)
+      .run(id,origin,event.chat_id,event.sender_id,role,JSON.stringify(body),
+        body.simulation ? 'awaiting_approval' : 'not_requested',accountId);
+    if (draft) {
+      db.prepare('DELETE FROM feishu_workflow_drafts WHERE id=?').run(id);
+      db.prepare("UPDATE feishu_workflow_messages SET status='superseded' WHERE proposal_id=? AND kind='clarification' AND status='pending'").run(id);
+    }
+    notice(event,'summary',[summary(body,id,name ?? role,accountId),...warnings].join('\n'),id);
+    return 'processed';
   }
 
   function handleEvent(event) {
@@ -117,28 +200,7 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       return 'paired';
     }
     if (current.chatId !== event.chat_id) return 'ignored';
-    if (event.kind === 'proposal') {
-      const role = roleFor(current, event.sender_id);
-      if (!role) return 'ignored';
-      let body;
-      const names = current.analystNamesByRole;
-      const name = names && Object.hasOwn(names,role) ? names[role] : ['A','B'].includes(role) ? '分析师 ' + role : null;
-      const aliases = current.analystAliasesByRole ?? {};
-      try { body = readProposal(role,name,event.text,event.received_at,Object.hasOwn(aliases,role) ? aliases[role] : []); }
-      catch (error) {
-        if (error.status !== 400 && error.status !== 403) throw error;
-        notice(event, 'validation', error.message);
-        return 'rejected';
-      }
-      const id = stableId('feishu-proposal',event.chat_id,event.message_id);
-      const accountId = confirmedAccount(current);
-      db.prepare(`INSERT INTO feishu_workflow_proposals
-        (id,origin,chat_id,sender_id,role,body,simulation_status,simulation_account) VALUES (?,?,?,?,?,?,?,?)`)
-        .run(id,event.message_id,event.chat_id,event.sender_id,role,JSON.stringify(body),
-          body.simulation ? 'awaiting_approval' : 'not_requested',accountId);
-      notice(event, 'summary', summary(body,id,name ?? role,accountId), id);
-      return 'processed';
-    }
+    if (event.kind === 'proposal' || event.kind === 'supplement') return handleProposal(event,current);
     if (!isApprover(current, event.sender_id)) return 'ignored';
     const proposal = proposalBySummary.get(event.chat_id,event.parent_id);
     if (!proposal || proposal.sender_id === event.sender_id || roleFor(current, proposal.sender_id) !== proposal.role) return 'ignored';
@@ -289,6 +351,8 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       const event = nextEvent.get();
       if (event) {
         transaction(() => {
+          if (event.kind === 'supplement' && !clarification.get(event.chat_id,event.parent_id) &&
+              pendingClarification.get(event.chat_id,event.sender_id)) return;
           if (event.kind !== 'approval' || proposalBySummary.get(event.chat_id,event.parent_id)) {
             finishEvent.run(handleEvent(event),event.seq);
           } else {

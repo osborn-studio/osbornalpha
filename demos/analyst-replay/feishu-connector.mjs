@@ -5,36 +5,73 @@ const ignore = () => {};
 // SDK diagnostics can include complete event bodies, endpoint URLs and request headers.
 const sdkLogger = { trace: ignore, debug: ignore, info: ignore, warn: ignore, error: ignore };
 const isId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value);
+const isOpenId = value => typeof value === 'string' && /^ou_[A-Za-z0-9_-]{1,156}$/.test(value);
 const hasCredentials = (id, secret) => /^cli_[0-9a-fA-F]{16}$/.test(id || '') && Boolean(secret?.trim());
 
-export function normalizeGroupMessage(data, appId) {
+function postText(content, mentionKeys) {
+  // Received posts normally have title/content at the top level. Some clients wrap the Chinese version.
+  const post = content?.content !== undefined ? content : content?.zh_cn;
+  if (!Array.isArray(post?.content) || (post.title !== undefined && typeof post.title !== 'string')) return null;
+  const paragraphs = post.title ? [post.title] : [];
+  for (const paragraph of post.content) {
+    if (!Array.isArray(paragraph)) return null;
+    const fragments = [];
+    for (const node of paragraph) {
+      // Trade terms in an image, attachment or crossed-out passage cannot be transcribed reliably.
+      if (!node || (node.style !== undefined && (!Array.isArray(node.style) || node.style.includes('lineThrough')))) return null;
+      if (node.tag === 'text' || node.tag === 'a') {
+        if (typeof node.text !== 'string') return null;
+        fragments.push(node.text);
+      } else if (node.tag === 'at' && /^@_user_\d+$/.test(node.user_id) && mentionKeys.has(node.user_id)) {
+        fragments.push(' ' + node.user_id + ' ');
+      } else {
+        return null;
+      }
+    }
+    paragraphs.push(fragments.join(''));
+  }
+  return paragraphs.join('\n');
+}
+
+export function normalizeGroupMessage(data, appId, botOpenId) {
   const { message, sender } = data || {};
   if (data?.app_id !== appId || sender?.sender_type !== 'user' ||
-      message?.chat_type !== 'group' || message.message_type !== 'text') return null;
+      message?.chat_type !== 'group' || !['text','post'].includes(message.message_type)) return null;
   const senderId = sender.sender_id?.open_id;
   if (![data.event_id, senderId, message.chat_id, message.message_id].every(isId)) return null;
   if (typeof message.create_time !== 'string' || !/^\d{13}$/.test(message.create_time)) return null;
   if (typeof message.content !== 'string') return null;
+  const entries = Array.isArray(message.mentions) ? message.mentions : [];
+  const mentions = new Set(entries.map(item => item?.key));
   let text;
   try {
-    text = JSON.parse(message.content)?.text;
+    const content = JSON.parse(message.content);
+    text = message.message_type === 'post' ? postText(content, mentions) : content?.text;
   } catch {
     return null;
   }
   if (typeof text !== 'string') return null;
   text = text.trim();
-  // A genuine mention in Feishu text is an @_user_N placeholder plus a corresponding
-  // mentions entry. Remove leading mentions, preserving names, amounts and line breaks.
-  const mentions = new Set((Array.isArray(message.mentions) ? message.mentions : []).map(item => item?.key));
-  while (true) {
-    const key = text.match(/^@_user_\d+(?!\d)/)?.[0];
-    if (!key || !mentions.has(key)) break;
-    text = text.slice(key.length).trimStart();
+  let directedToBot = false;
+  if (isOpenId(botOpenId)) {
+    const addressed = new Set(entries.filter(item => item?.id?.open_id === botOpenId).map(item => item.key));
+    text = text.replace(/@_user_\d+/g, key => {
+      if (!addressed.has(key)) return key;
+      directedToBot = true;
+      return ' ';
+    }).trim();
+  } else {
+    // Until the identity lookup succeeds retain compatibility with existing prefixed commands.
+    while (true) {
+      const key = text.match(/^@_user_\d+(?!\d)/)?.[0];
+      if (!key || !mentions.has(key)) break;
+      text = text.slice(key.length).trimStart();
+    }
   }
   if (!text) return null;
   return {
     eventId: data.event_id, messageId: message.message_id, chatId: message.chat_id,
-    senderId, text, createdAt: new Date(Number(message.create_time)).toISOString(),
+    senderId, text, ...(directedToBot ? {directedToBot:true} : {}), createdAt: new Date(Number(message.create_time)).toISOString(),
     parentId: isId(message.parent_id) ? message.parent_id : null,
     rootId: isId(message.root_id) ? message.root_id : null,
   };
@@ -76,21 +113,32 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
   const client = new sdk.Client(options);
   const workflow = createWorkflow({ sendMessage: makeFeishuSender(client) });
   let timer, activeDrain, stopping, lastState;
+  let botOpenId, botLookup, nextBotLookupAt = 0;
   let finish;
   const done = new Promise(resolve => { finish = resolve; });
   function report(state) {
     if (state !== lastState) log(state);
     lastState = state;
   }
+  function resolveBotIdentity() {
+    if (botOpenId || botLookup || typeof client.request !== 'function' || Date.now() < nextBotLookupAt) return;
+    nextBotLookupAt = Date.now() + 60_000;
+    // The SDK attaches the tenant token. Discovery runs alongside the websocket and never blocks event ACKs.
+    botLookup = Promise.resolve().then(() => client.request({method:'GET',url:'/open-apis/bot/v3/info',timeout:6000}))
+      .then(result => {
+        if (result?.code === 0 && isOpenId(result.bot?.open_id)) botOpenId = result.bot.open_id;
+      }).catch(ignore).finally(() => { botLookup = undefined; });
+  }
   function pump() {
     if (stopping || activeDrain) return;
+    resolveBotIdentity();
     activeDrain = Promise.resolve().then(() => workflow.drain())
       .catch(() => log('飞书工作队列本轮处理失败，将继续轮询。'))
       .finally(() => { activeDrain = undefined; });
   }
   const dispatcher = new sdk.EventDispatcher({ logger: sdkLogger }).register({
     'im.message.receive_v1': data => {
-      const event = normalizeGroupMessage(data, appId);
+      const event = normalizeGroupMessage(data, appId, botOpenId);
       if (!event) return;
       if (stopping) throw new Error('接收器正在停止');
       // Returning successfully ACKs this event. A failed durable write must reach
@@ -129,6 +177,7 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
   async function start() {
     if (timer || stopping) return;
     report('正在建立飞书长连接。');
+    resolveBotIdentity();
     timer = setInterval(pump, intervalMs);
     try {
       await ws.start({ eventDispatcher: dispatcher });

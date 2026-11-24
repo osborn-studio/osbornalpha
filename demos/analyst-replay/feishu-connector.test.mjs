@@ -18,7 +18,7 @@ const event = () => ({
 });
 const flattened = data => ({ ...data.header, ...data.event });
 
-function fixture(workflow) {
+function fixture(workflow, Client = class {}) {
   const logs = [];
   let socket;
   class MockSocket {
@@ -29,7 +29,7 @@ function fixture(workflow) {
   }
   const connector = makeFeishuConnector({
     appId, appSecret, createWorkflow: () => workflow, log: text => logs.push(text), intervalMs: 60_000,
-    sdk: { ...sdk, WSClient: MockSocket, Client: class {} },
+    sdk: { ...sdk, WSClient: MockSocket, Client },
   });
   return { connector, socket, logs };
 }
@@ -51,6 +51,101 @@ test('only normalized group text from humans reaches the local workflow', () => 
   for (const sample of skips) assert.equal(normalizeGroupMessage(sample, appId), null);
   data.message.mentions = [];
   assert.match(normalizeGroupMessage(data, appId).text, /^@_user_1/);
+});
+
+test('reads the visible text of a Feishu post and retains inline formatting boundaries, paragraphs and reply IDs', () => {
+  const data = flattened(event());
+  const post = {title:'',content:[
+    [{tag:'at',user_id:'@_user_1'}, {tag:'text',text:'我建议买入'}, {tag:'text',text:'00700.HK',style:['bold']}],
+    [{tag:'text',text:'参考447.4，目标480，止损420。'}],
+    [{tag:'text',text:'关联研究：'}, {tag:'a',text:'季度复盘',href:'https://example.invalid/?target=999'}],
+  ]};
+  data.message.message_type = 'post';
+  for (const content of [post,{zh_cn:post}]) {
+    data.message.content = JSON.stringify(content);
+    const normalized = normalizeGroupMessage(data, appId);
+    assert.equal(normalized.text,'我建议买入00700.HK\n参考447.4，目标480，止损420。\n关联研究：季度复盘');
+    assert.equal(normalized.parentId,'om_summary');
+    assert.equal(normalized.rootId,'om_root');
+    assert.equal(normalized.senderId,'ou_pm');
+  }
+  data.message.content = JSON.stringify({title:'腾讯控股建议',content:[[{tag:'text',text:'目标480，止损420'}]]});
+  assert.equal(normalizeGroupMessage(data, appId).text,'腾讯控股建议\n目标480，止损420');
+});
+
+test('a partial transcription or a malformed post cannot become an approval or proposal', () => {
+  const data = flattened(event());
+  const text = {tag:'text',text:'同意'};
+  for (const post of [
+    {content:[[text],[{tag:'img',image_key:'example'}]]},
+    {content:[[text,{tag:'media',file_key:'example'}]]},
+    {content:[[{...text,style:['lineThrough']}]]},
+    {content:[[{tag:'a',href:'https://example.invalid/同意'}]]},
+    {content:[[{tag:'at',user_id:'@_user_9'},text]]},
+    {content:[[text],null]}, {content:[[null]]}, {content:'同意'}, {text:'同意'},
+  ]) {
+    const message = {...data.message,message_type:'post',content:JSON.stringify(post)};
+    assert.equal(normalizeGroupMessage({...data,message},appId),null);
+  }
+  const message = {...data.message,message_type:'post',content:JSON.stringify({content:[[text]]})};
+  assert.equal(normalizeGroupMessage({...data,message:{...message,chat_type:'p2p'}},appId),null);
+  assert.equal(normalizeGroupMessage({...data,message,sender:{sender_type:'app'}},appId),null);
+});
+
+test('directedToBot requires a mention of its own verified open ID present in the actual text or post', () => {
+  const data = flattened(event());
+  data.message.mentions = [
+    {key:'@_user_1',id:{open_id:'ou_colleague'}},
+    {key:'@_user_10',id:{open_id:'ou_bot'}},
+  ];
+  for (const message_type of ['text','post']) {
+    const normalized = key => {
+      const content = message_type === 'text' ? {text:key + ' 腾讯'} :
+        {content:[[{tag:'at',user_id:key},{tag:'text',text:'腾讯'}]]};
+      const message = {...data.message,message_type,content:JSON.stringify(content)};
+      return normalizeGroupMessage({...data,message},appId,'ou_bot');
+    };
+    assert.equal(normalized('@_user_10').directedToBot,true);
+    assert.equal(normalized('@_user_10').text,'腾讯');
+    assert.equal(normalized('@_user_1').directedToBot,undefined);
+    assert.match(normalized('@_user_1').text,/^@_user_1\s+腾讯$/);
+  }
+  data.message.content = JSON.stringify({text:'同意 @_user_10'});
+  assert.equal(normalizeGroupMessage(data,appId,'ou_bot').text,'同意');
+  assert.equal(normalizeGroupMessage(data,appId).directedToBot,undefined);
+});
+
+test('bot info discovery runs concurrently with the websocket and a failed lookup preserves the legacy path', async () => {
+  for (const succeeds of [true,false]) {
+    const seen = [], requests = [];
+    let finish;
+    class Client {
+      request(options) {
+        requests.push(options);
+        return new Promise((resolve,reject) => {
+          finish = () => succeeds ? resolve({code:0,bot:{open_id:'ou_bot'}}) : reject(new Error('sensitive lookup detail'));
+        });
+      }
+    }
+    const {connector,socket,logs} = fixture({
+      receive: msg => { seen.push(msg); return {accepted:false}; }, drain() {}, close() {},
+    },Client);
+    await connector.start();
+    const sample = event();
+    sample.event.message.mentions = [{key:'@_user_1',id:{open_id:'ou_bot'}}];
+    await socket.dispatch(sample);
+    assert.equal(seen[0].directedToBot,undefined);
+    assert.equal(requests.length,1);
+    assert.equal(requests[0].method,'GET');
+    assert.equal(requests[0].url,'/open-apis/bot/v3/info');
+    finish();
+    await nextTurn();
+    await socket.dispatch(sample);
+    assert.equal(seen[1].directedToBot,succeeds ? true : undefined);
+    assert.equal(seen[1].text,'通过\n原价 330.50');
+    assert.ok(logs.every(line => !line.includes('sensitive lookup detail')));
+    await connector.stop();
+  }
 });
 
 test('SDK dispatcher only ACKs after the durable write, drains separately, and waits for work on stop', async () => {
@@ -117,7 +212,7 @@ test('the pinned SDK terminates on rejected discovery without claiming a connect
   }
   const connector = makeFeishuConnector({
     appId, appSecret, createWorkflow: () => ({ receive() {}, drain() {}, close() {} }),
-    sdk: { ...sdk, WSClient: OfflineWS }, log: text => logs.push(text),
+    sdk: { ...sdk, WSClient: OfflineWS, Client: class {} }, log: text => logs.push(text),
   });
   await connector.start();
   assert.equal(await connector.done, 1);

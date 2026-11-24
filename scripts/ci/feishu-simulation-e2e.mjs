@@ -206,10 +206,16 @@ async function main() {
       return response.json();
     }
     await postDemo('/api/webhook','PM',{mode:'app'});
-    const proposal = '建议｜分析师：测试分析师｜00700.HK｜加仓｜100股｜模拟成交价：400港元｜手续费：20港元｜期限：10日｜理由：隔离联调';
+    const proposal = '我想加仓100股，模拟成交价400港元，手续费20港元，期限10日';
     await connector.send('om_proposal',proposal,author,suggestedAt);
     assert.equal(snapshots.length,0);
     assert.equal(sql('select count(*) from public.recommendations;'),'0');
+    const prompt = messages.find(item => item.replyTo === 'om_proposal');
+    assert.ok(prompt?.text.includes('标的'));
+    assert.doesNotMatch(prompt.text,/参考价|目标价|止损|理由|关联研究/);
+    await connector.send('om_premature','同意',approver,suggestedAt,prompt.id);
+    assert.equal(connector.view().proposals.length,0);
+    await connector.send('om_fill','腾讯控股，参考价447.4，目标480，止损420',author,suggestedAt,prompt.id);
     const summary = connector.view().proposals[0].summaryId;
     assert.ok(summary);
     await connector.send('om_wrong_approval','同意',author,approvedAt,summary);
@@ -245,6 +251,11 @@ async function main() {
     assert.equal(state.registrations.entries[0].id,recorded.demoId);
     assert.notEqual(recorded.demoId,recorded.formalId);
     assert.equal(state.registrations.entries[0].status,'final');
+    const rec = state.registrations.entries[0].recommendation;
+    assert.equal(rec.reference_price,447.4);
+    assert.equal(rec.target_price,480);
+    assert.equal(rec.stop_loss,420);
+    assert.equal(rec.rationale,null);
     assert.equal(state.registrations.entries[0].evidence.mode,'snapshot');
     assert.deepEqual(state.portfolio.trades,[]);
     assert.ok(messages.some(row => /5 日.*评分/.test(row.text) && /10 日.*评分/.test(row.text) && /累计命中率/.test(row.text)));
@@ -266,11 +277,13 @@ async function main() {
     assert.match(broadcast[1].text,/验收通过/);
     const row = JSON.parse(sql(`select json_build_object('owner',r.user_id,'analyst',r.analyst_id,'recommendation',r.id,'ticker',r.ticker,
       'decision',d.id,'trade',t.id,'trade_owner',t.user_id,'direction',t.direction,'currency',t.currency,'fee',t.fee,
-      'holding',p.shares,'cost',round(p.avg_cost,2),'horizon',r.source_ref->>'requested_horizon')
+      'holding',p.shares,'cost',round(p.avg_cost,2),'horizon',r.source_ref->>'requested_horizon',
+      'reference',r.reference_price,'target',r.target_price,'stop',r.stop_loss,'rationale',r.rationale)
       from public.recommendations r join public.decisions d on d.recommendation_id=r.id
       join public.trades t on t.decision_id=d.id join public.positions p on p.user_id=t.user_id and p.ticker=t.ticker;`));
     assert.deepEqual(row,{owner,analyst,recommendation:recorded.formalId,ticker:'00700.HK',decision:recorded.decisionId,
-      trade:recorded.tradeId,trade_owner:owner,direction:'buy',currency:'HKD',fee:20,holding:100,cost:400.2,horizon:'10d'});
+      trade:recorded.tradeId,trade_owner:owner,direction:'buy',currency:'HKD',fee:20,holding:100,cost:400.2,horizon:'10d',
+      reference:447.4,target:480,stop:420,rationale:null});
     const badOwner = await fetch(formalOrigin + ingestPath,{method:'POST',headers:{authorization:'Bearer '+bridgeToken,'content-type':'application/json'},
       body:JSON.stringify({...snapshots[0].payload,expectedOwnerId:outsider})});
     assert.equal(badOwner.status,403);

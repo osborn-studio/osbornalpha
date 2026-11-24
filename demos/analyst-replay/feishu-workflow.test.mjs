@@ -62,6 +62,136 @@ function approval(n, parentId = 'om_sent_1', extra = {}) {
   return event(n,{senderId:approver,createdAt:approvedAt,text:'同意',parentId,...extra});
 }
 
+test('an analyst can mention the bot with just a ticker and reply with the action alone', async t => {
+  const h = harness(t);
+  const workflow = h.open();
+  assert.equal(workflow.receive(event(1,{text:'00700.HK'})).accepted,false);
+  assert.equal(workflow.receive(event(2,{text:'00700.HK',directedToBot:true})).accepted,true);
+  await workflow.drain();
+  assert.match(h.messages[0].text,/补充建议动作/);
+  workflow.receive(event(3,{parentId:'om_sent_1',text:'先观望'}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/00700.HK · HK · 观望/);
+  assert.equal(h.registrations.length,0);
+  workflow.receive(approval(4,'om_sent_2'));
+  await workflow.drain();
+  assert.equal(h.registrations.length,1);
+});
+
+test('asks for missing fields by thread and remembers the original recommendation time after reopening', async t => {
+  const h = harness(t);
+  let workflow = h.open();
+  workflow.receive(event(1,{text:'我建议加仓，参考价 40 港元'}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/标的/);
+  assert.doesNotMatch(h.messages[0].text,/目标价|止损价|理由|研究/);
+  assert.match(h.messages[0].text,/回复这条消息/);
+  assert.doesNotMatch(h.messages[0].text,/待确认提案/);
+  assert.equal(workflow.view().proposals.length,0);
+
+  workflow = h.open();
+  const supplement = {parentId:'om_sent_1',createdAt:approvedAt,text:'标的是 01810.HK，目标价 46，止损价 38'};
+  assert.equal(workflow.receive(event(2,{...supplement,senderId:'ou_second'})).accepted,false);
+  assert.equal(workflow.receive(event(3,{...supplement,chatId:'oc_wrong'})).accepted,false);
+  workflow.receive(approval(4,'om_sent_1'));
+  await workflow.drain();
+  assert.equal(h.registrations.length,0);
+  assert.equal(h.messages.length,1);
+  const answer = event(5,supplement);
+  assert.deepEqual(workflow.receive(answer),{accepted:true,duplicate:false});
+  assert.deepEqual(workflow.receive(answer),{accepted:true,duplicate:true});
+  await workflow.drain();
+  assert.equal(h.messages[1].replyTo,'om_5');
+  assert.match(h.messages[1].text,/待确认提案/);
+  assert.match(h.messages[1].text,/参考价 40/);
+  assert.match(h.messages[1].text,/目标价 46/);
+  assert.match(h.messages[1].text,/止损价 38/);
+  assert.equal(workflow.receive(event(6,{...supplement,text:command})).accepted,false);
+  workflow.receive(approval(7,'om_sent_2'));
+  await workflow.drain();
+  assert.equal(h.registrations.length,1);
+  const fields = h.registrations[0].fields;
+  assert.equal(fields.recommended_at,proposedAt);
+  assert.equal(fields.reference_price,40);
+  assert.equal(fields.target_price,46);
+  assert.equal(fields.stop_loss,38);
+  assert.equal(h.db.prepare('SELECT COUNT(*) AS n FROM feishu_workflow_drafts').get().n,0);
+});
+
+test('two incomplete messages by the same analyst remain separate across repeated follow-ups', async t => {
+  const h = harness(t);
+  const workflow = h.open();
+  workflow.receive(event(1,{text:'建议｜加仓｜参考价：40'}));
+  workflow.receive(event(2,{text:'建议｜00700.HK｜100股｜参考价：447'}));
+  await workflow.drain();
+  assert.equal(h.messages.length,2);
+  workflow.receive(event(3,{text:'买入',parentId:'om_sent_2'}));
+  await workflow.drain();
+  assert.match(h.messages[2].text,/模拟成交价/);
+  assert.doesNotMatch(h.messages[2].text,/动作|目标价/);
+  workflow.receive(event(4,{text:'模拟成交价 446',parentId:'om_sent_3'}));
+  workflow.receive(event(5,{text:'标的 01810.HK',parentId:'om_sent_1'}));
+  await workflow.drain();
+  assert.equal(workflow.view().proposals.length,2);
+  assert.match(h.messages[3].text,/00700.HK/);
+  assert.match(h.messages[3].text,/100 股 × 446/);
+  assert.match(h.messages[4].text,/01810.HK/);
+  assert.match(h.messages[4].text,/参考价 40/);
+  assert.match(h.messages[4].text,/仅登记建议/);
+});
+
+test('a rejected correction can be repaired by replying directly to its error without losing the draft', async t => {
+  const h = harness(t);
+  const workflow = h.open();
+  workflow.receive(event(1,{text:'建议｜01810.HK｜参考价：40'}));
+  await workflow.drain();
+  workflow.receive(event(2,{text:'建议｜动作：加仓｜分析师：李四',parentId:'om_sent_1'}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/署名/);
+  assert.match(h.messages[1].text,/回复这条消息/);
+  assert.equal(workflow.view().proposals.length,0);
+  workflow.receive(event(3,{text:'加仓',parentId:'om_sent_2'}));
+  await workflow.drain();
+  assert.equal(workflow.view().proposals.length,1);
+  assert.match(h.messages[2].text,/参考价 40/);
+  assert.match(h.messages[2].text,/仅登记建议/);
+});
+
+test('an analyst may drop an incomplete simulated fill and submit a plain suggestion', async t => {
+  const h = harness(t);
+  const workflow = h.open();
+  workflow.receive(event(1,{text:'建议｜01810.HK｜加仓｜100股'}));
+  await workflow.drain();
+  assert.match(h.messages[0].text,/模拟成交价/);
+  assert.match(h.messages[0].text,/回复「仅登记建议」/);
+  workflow.receive(event(2,{parentId:'om_sent_1',text:'仅登记建议'}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/待确认提案/);
+  assert.match(h.messages[1].text,/仅登记建议/);
+  assert.doesNotMatch(h.messages[1].text,/成交申请/);
+  workflow.receive(approval(3,'om_sent_2'));
+  await workflow.drain();
+  assert.equal(h.registrations.length,1);
+  assert.equal(workflow.view().proposals[0].simulationStatus,'not_requested');
+});
+
+test('a reply arriving before the prompt send receipt resolves is durably associated with the correct thread', async t => {
+  const h = harness(t);
+  let workflow;
+  workflow = h.open({sendMessage:async m => {
+    h.messages.push(m);
+    if (h.messages.length === 1) {
+      const receipt = workflow.receive(event(2,{parentId:'om_sent_1',text:'标的 01810.HK'}));
+      assert.equal(receipt.accepted,true);
+    }
+    return {messageId:'om_sent_'+h.messages.length};
+  }});
+  workflow.receive(event(1,{text:'建议｜加仓｜参考价：40'}));
+  await workflow.drain();
+  assert.equal(workflow.view().proposals.length,1);
+  assert.match(h.messages[1].text,/待确认提案/);
+});
+
 test('unmapped chats support explicit pairing and send no proposal or trading callbacks', async t => {
   const h = harness(t,{chatId:null});
   let workflow = h.open();
@@ -132,7 +262,7 @@ test('rejects analysts advertising another name, ambiguous or incomplete simulat
   assert.deepEqual(workflow.view().proposals,[]);
   assert.deepEqual(h.registrations,[]);
   assert.match(h.messages[0].text,/署名/);
-  assert.match(h.messages[1].text,/按此格式/);
+  assert.match(h.messages[1].text,/格式|股数|数量/);
   assert.match(h.messages[2].text,/币种/);
   assert.match(h.messages[3].text,/重复/);
 });
@@ -264,7 +394,7 @@ test('an accepted recommendation without explicit size and price never sends a f
     assert.equal(Object.hasOwn(input,'execution'),false);
     return {recommendationId};
   }});
-  workflow.receive(event(1,{text:'建议｜01810.HK｜加仓｜理由：等待财报'}));
+  workflow.receive(event(1,{text:'建议｜01810.HK｜加仓'}));
   await workflow.drain();
   workflow.receive(approval(2));
   await workflow.drain();
