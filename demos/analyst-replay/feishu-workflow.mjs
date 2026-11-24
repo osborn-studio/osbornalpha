@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isUuid } from '../../src/lib/portfolio/validate.ts';
 import { pairingReference, validateAnalystAliases } from './feishu-pairing.mjs';
 import { proposalIntent, evaluateProposal, summary } from './feishu-workflow-command.mjs';
+import { beijingDateTime, marketCalendarLabel } from './public/beijing-time.mjs';
 
 const identifier = value => typeof value === 'string' && /^[\w:-]{1,160}$/.test(value);
 
@@ -25,7 +26,11 @@ function demoResult(entry) {
   const rate = Number.isSafeInteger(n) && n > 0 && Number.isSafeInteger(hits) && hits >= 0 && hits <= n &&
     Number.isFinite(hitRate) && hitRate >= 0 && hitRate <= 100
     ? `该分析师累计命中率 ${hitRate.toFixed(2)}%（${hits}/${n}）` : null;
-  return ['Demo 建议已登记 ' + entry.id, status, ...scores, rate, entry.evidence?.disclosure].filter(Boolean).join('\n');
+  const rec = entry.recommendation;
+  const suggested = rec?.recommended_at && '建议时间（北京时间）' + beijingDateTime(rec.recommended_at);
+  const evidence = entry.evidence?.disclosure;
+  const marketNote = evidence && rec?.market ? marketCalendarLabel(rec.market) + ' · ' + evidence : evidence;
+  return ['Demo 建议已登记 ' + entry.id, suggested, status, ...scores, rate, marketNote].filter(Boolean).join('\n');
 }
 
 export function openFeishuWorkflow(db, transaction, {register, sendMessage, syncFormal, config, now = Date.now}) {

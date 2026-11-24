@@ -1,5 +1,5 @@
 // Registrations use the production parser, exchange calendar convention, forward scorer and paper book.
-import { beijingInputValue, beijingInputToISO } from './public/beijing-time.mjs';
+import { beijingDate, beijingDateTime, beijingInputValue, beijingInputToISO, marketCalendarLabel } from './public/beijing-time.mjs';
 import { parseRecommendationInput } from '../../src/lib/analyst/validate.ts';
 import { buildBook } from '../../src/lib/analyst/book.ts';
 import { exchangeDate, callDirection } from '../../src/lib/scoring/forward.ts';
@@ -119,7 +119,7 @@ function bookFor(entries, role, viewer) {
   const timeline = [...rows].sort((a, b) =>
     b.recommendation.recommended_at.localeCompare(a.recommendation.recommended_at) || b.pairNo - a.pairNo
   ).map(({ recommendation: rec, score, pairNo, status, evidence }) => ({
-    ...rec, round: pairNo, pairNo, status, finalDay: evidence.finalDay, date: exchangeDate(rec.recommended_at, rec.market),
+    ...rec, round: pairNo, pairNo, status, finalDay: evidence.finalDay, date: beijingDate(rec.recommended_at),
     band: callDirection(rec.action) && rec.confidence != null ? bandOf(rec.confidence / 100) : null,
     fill: rec.fill_price, return5: score?.forward_5d_pct ?? null, return10: score?.forward_10d_pct ?? null,
     return20: score?.forward_20d_pct ?? null, return60: score?.forward_60d_pct ?? null,
@@ -187,7 +187,8 @@ function publishedResult(entry, names) {
     ? day5 + '｜历史 T+20 评分 ' + (score?.score?.toFixed(1) ?? '—')
     : day5 + '｜' + day10;
   return names.get(role) + '｜' + rec.ticker + '｜' + actions[rec.action] + '｜' + results +
-    '\n' + e.disclosure + ' 数据来源：' + e.source + (e.mode === 'snapshot' ? '（历史快照）' : e.mode === 'provider' ? '（行情接口）' : '');
+    '\n建议时间（北京时间）' + beijingDateTime(rec.recommended_at) +
+    '\n' + marketCalendarLabel(rec.market) + ' · ' + e.disclosure + ' 数据来源：' + e.source + (e.mode === 'snapshot' ? '（历史快照）' : e.mode === 'provider' ? '（行情接口）' : '');
 }
 
 function publishedTotals(results, names) {
@@ -229,7 +230,7 @@ export function reviewEvent(pair, {pairNo, decision, note, at}, profiles = defau
     text:[
       '验收结论 ' + outcome,
       'PM 意见 ' + note,
-      '验收时间（北京时间） ' + beijingInputValue(at).replace('T', ' '),
+      '验收时间（北京时间） ' + beijingDateTime(at),
       provisional ? '以下包含 5 日暂评，评分更新后需重新核对。' : '本次核对的评分',
       ...pair.map(entry => publishedResult(entry, names)),
     ].join('\n'),

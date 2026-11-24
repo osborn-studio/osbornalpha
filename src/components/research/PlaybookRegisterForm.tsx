@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { fromBeijingDateTimeInput, toBeijingDateTimeInput } from '@/lib/analyst/recommendation-time';
 import { clampRationale, type RegistrationCandidate, RegistrationDefaults } from '@/lib/research/playbook-registration';
 import type { CoreMarket } from '@/lib/securities/model';
 import type { DecisionAction, DecisionHorizon } from '@/lib/supabase/database.types';
@@ -48,13 +49,6 @@ const CODE_ZH: Record<string, string> = {
   'ticker not valid for market': '标的与市场不匹配',
 };
 
-// datetime-local wants local wall-clock minutes; the API wants ISO with zone.
-function toLocalInput(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 export function PlaybookRegisterForm({ runId, onRegistered }: { runId: string; onRegistered: () => void }) {
   const [view, setView] = useState<RegistrationView | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
@@ -73,7 +67,7 @@ export function PlaybookRegisterForm({ runId, onRegistered }: { runId: string; o
       const v = data as RegistrationView;
       setView(v);
       setRationale(clampRationale(v.defaults.rationale));
-      setRecommendedAt(toLocalInput(v.defaults.recommended_at));
+      setRecommendedAt(toBeijingDateTimeInput(v.defaults.recommended_at));
       setRows(v.candidates.map((c) => ({
         key: c.entity_id, entity_id: c.entity_id, name: c.name, ticker: c.ticker ?? '', market: c.market ?? '',
         action: v.defaults.action, confidence: String(v.defaults.confidence), horizon: v.defaults.horizon ?? '',
@@ -119,7 +113,7 @@ export function PlaybookRegisterForm({ runId, onRegistered }: { runId: string; o
             horizon: r.horizon || undefined,
           })),
           rationale: rationaleChanged && rationale ? rationale : undefined,
-          recommended_at: recommendedAt ? new Date(recommendedAt).toISOString() : undefined,
+          recommended_at: recommendedAt ? fromBeijingDateTimeInput(recommendedAt) : undefined,
         }),
       });
       ok = res.ok; status = res.status;
@@ -157,8 +151,8 @@ export function PlaybookRegisterForm({ runId, onRegistered }: { runId: string; o
         {view.registered_count > 0 && <span className="text-gray-500">已登记 {view.registered_count} 条</span>}
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <label className="flex flex-col gap-0.5">建议时间（默认审批时间，不得晚于现在）
-          <input type="datetime-local" className={`${input} w-52`} max={toLocalInput(new Date().toISOString())} value={recommendedAt} onChange={(e) => setRecommendedAt(e.target.value)} />
+        <label className="flex flex-col gap-0.5">建议时间（北京时间，默认审批时间，不得晚于现在）
+          <input type="datetime-local" className={`${input} w-52`} max={toBeijingDateTimeInput(new Date().toISOString())} value={recommendedAt} onChange={(e) => setRecommendedAt(e.target.value)} />
         </label>
         <label className="flex min-w-[20rem] flex-1 flex-col gap-0.5">理由（整批共用）
           <input className={input} value={rationale} placeholder="留空则使用 run 理由" onChange={(e) => setRationale(e.target.value)} maxLength={4000} />

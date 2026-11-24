@@ -47,7 +47,7 @@
     "stopLoss": "Stop Loss",
     "horizon": "Horizon",
     "thesisRef": "Linked Research (optional)",
-    "recommendedAt": "Recommended At (defaults to now)",
+    "recommendedAt": "Recommendation Time (Beijing, defaults to now)",
     "submit": "Record",
     "submitting": "Recording…",
     "saved": "Recorded. The simulated fill price and score appear after the next “Refresh Scores”."
@@ -81,10 +81,10 @@
       "lastClose": "Last Close",
       "unrealized": "Unrealized %",
       "weight": "Unit Weight",
-      "openedAt": "Opened",
+      "openedAt": "Opened (Beijing)",
       "exitPrice": "Exit Price",
       "realized": "Realized %",
-      "closedAt": "Closed"
+      "closedAt": "Closed (Beijing)"
     },
     "rule": "Equal-weight rule: each buy/add opens 1 unit, trim removes 1, sell closes all; the simulated fill is the K-line close on the recommendation day. No cash, fees, FX, dividends or split adjustments. Score = direction-adjusted 20d return (5d when 20d is missing)."
   },
@@ -93,7 +93,7 @@
     "capped": "Showing the latest {count}",
     "empty": "No recommendations yet",
     "columns": {
-      "date": "Date",
+      "date": "Recommendation Time (Beijing)",
       "ticker": "Ticker",
       "action": "Action",
       "referencePrice": "Ref Price",
