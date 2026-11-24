@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>分析师评分 · Osborn Alpha</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/trades.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="mast">
+    <div class="wrap mast-inner">
+      <a class="brand" href="#overview" aria-label="Osborn Alpha 分析师总览"><span class="brand-name">osborn<strong>alpha</strong></span></a>
+      <nav id="mast-nav" class="mast-nav" aria-label="工作台导航" hidden>
+        <a href="#overview" data-nav="overview">分析师评分</a>
+        <a href="#trades" data-nav="trades">交易记录</a>
+        <a href="#replay" data-nav="replay">双人回放</a>
+        <a href="#activity" data-nav="activity">群播报</a>
+      </nav>
+      <div id="identity"></div>
+    </div>
+  </header>
+  <div id="notice" class="wrap" role="status" aria-live="polite"></div>
+  <main id="login" class="wrap">
+    <section class="role-picker" id="role-picker" aria-labelledby="role-picker-title" hidden>
+      <h1 id="role-picker-title" tabindex="-1">选择身份</h1>
+      <p class="sub">选择一个角色，直接进入本机演示。</p>
+      <div class="role-picker-grid" id="role-picker-cards"></div>
+      <p class="sub" id="role-picker-status" role="status" hidden></p>
+    </section>
+    <section class="login-box" id="role-key-entry" hidden>
+      <h1>进入分析工作台</h1>
+      <p>用本场分配给你的角色密钥进入，分析师登记建议并查看评分，PM 核对历史行情与结果。</p>
+      <form id="login-form">
+        <label for="access-key">角色密钥或邀请链接</label>
+        <input id="access-key" type="password" required autocomplete="off" spellcheck="false" placeholder="粘贴角色密钥或完整链接">
+        <button class="btn primary" type="submit">进入工作台</button>
+      </form>
+    </section>
+    <p class="entry-loading sub" id="entry-loading" role="status">正在加载演示入口…</p>
+  </main>
+  <main id="work" class="wrap" hidden>
+    <section id="overview-view" aria-label="分析师总览">
+      <div id="heading"></div>
+      <section class="panel" id="roster" aria-labelledby="roster-title">
+        <div class="panel-caption"><h2 id="roster-title">分析师 <span id="analyst-count"></span></h2></div>
+        <div id="registration-profiles" class="profile-grid"></div>
+      </section>
+      <section class="panel analyst-admin" id="analyst-admin" aria-labelledby="analyst-admin-title" hidden>
+        <div class="panel-caption">
+          <h2 id="analyst-admin-title">新建分析师</h2>
+          <button class="btn quiet" type="button" data-cmd="analyst-invites" aria-controls="analyst-invite-list">查看角色邀请</button>
+        </div>
+        <form id="analyst-profile-form">
+          <label class="rec-field analyst-name-field">显示名称
+            <input name="display_name" maxlength="60" required>
+          </label>
+          <label class="rec-field analyst-kind-field">类型
+            <select name="kind"><option value="human">真人</option><option value="agent">Agent</option></select>
+          </label>
+          <label class="rec-field analyst-note-field">备注（可选）
+            <input name="note" maxlength="4000">
+          </label>
+          <button class="btn primary" type="submit">创建分析师</button>
+        </form>
+        <p class="registration-note">各组成员在首位分析师提交时确定。新增分析师可参加随后开启的组。</p>
+        <p id="analyst-admin-feedback" role="status" aria-live="polite"></p>
+        <ul id="analyst-invite-list" aria-label="分析师邀请" hidden></ul>
+        <input id="analyst-invite-url" type="text" readonly aria-label="可手动复制的邀请链接" hidden>
+      </section>
+      <section class="panel registration" id="registration-panel" aria-labelledby="registration-title" hidden>
+        <div class="panel-caption"><h2 id="registration-title">登记建议</h2></div>
+        <p class="registration-note" id="registration-group-context" hidden></p>
+        <form id="registration-form" autocomplete="off">
+          <label class="rec-field rec-analyst">分析师
+            <select name="analyst" aria-label="分析师"><option></option></select>
+          </label>
+          <label class="rec-field rec-ticker">标的
+            <input name="ticker" required maxlength="20" autocapitalize="characters" spellcheck="false" placeholder="600519.SH / 00700.HK / NVDA" aria-describedby="rec-ticker-hint">
+          </label>
+          <label class="rec-field rec-market">市场
+            <select name="market"><option value="A">A股</option><option value="HK">港股</option><option value="US">美股</option></select>
+          </label>
+          <label class="rec-field rec-action">动作
+            <select name="action"><option value="buy">买入</option><option value="add">加仓</option><option value="trim">减仓</option><option value="sell">卖出</option><option value="hold">持有</option><option value="pass">观望</option></select>
+          </label>
+          <label class="rec-field rec-reference">参考价（分析师口述，不作模拟成交价）
+            <input name="reference_price" type="number" step="any" inputmode="decimal">
+          </label>
+          <label class="rec-field rec-confidence"><span>信心 <output id="rec-confidence-value" for="rec-confidence">70%</output></span>
+            <input id="rec-confidence" name="confidence" type="range" min="0" max="100" value="70">
+          </label>
+          <label class="rec-field rec-price">目标价
+            <input name="target_price" type="number" step="any" inputmode="decimal">
+          </label>
+          <label class="rec-field rec-price">止损
+            <input name="stop_loss" type="number" step="any" inputmode="decimal">
+          </label>
+          <label class="rec-field rec-horizon">建议期限
+            <select name="horizon" aria-describedby="rec-horizon-help"><option value="">未定</option><option value="5d">5 日</option><option value="10d">10 日</option><option value="short">短期</option><option value="mid">中期</option><option value="long">长期</option></select>
+          </label>
+          <label class="rec-field rec-thesis">关联研究（可选）
+            <input name="thesis_ref" maxlength="200">
+          </label>
+          <label class="rec-field rec-time">建议时间（北京时间）
+            <input name="recommended_at" type="datetime-local" aria-describedby="rec-window-help">
+          </label>
+          <label class="rec-field rec-rationale">理由
+            <input name="rationale" maxlength="4000">
+          </label>
+          <div id="rec-ticker-hint" class="rec-error" role="alert" hidden>仅支持 A 股 / 港股 / 美股代码</div>
+          <div class="rec-submit-row"><button type="submit" class="btn primary" aria-describedby="registration-broadcast-help">登记建议</button>
+            <span id="registration-feedback" role="status" aria-live="polite"></span></div>
+        </form>
+        <p class="registration-note" id="registration-broadcast-help">连接机器人后，首人登记即向群里发送该建议的标的、动作和评分结果。理由和关联研究可在工作台核对。</p>
+        <p class="registration-note" id="rec-horizon-help">建议期限可以留为「未定」。评分统一检查第 5 和第 10 个交易日。</p>
+        <p class="registration-note" id="rec-window-help">时间使用北京时间（UTC+8），留空按提交时刻登记。<button class="text-button" id="rec-use-now" type="button">使用当前北京时间</button> · <button class="text-button" type="button" data-cmd="example">填入历史回放示例</button></p>
+      </section>
+      <section class="panel registration-scores" aria-labelledby="scores-title">
+        <div class="panel-caption"><h2 id="scores-title">评分结果</h2><span id="score-count" class="caption"></span></div>
+        <p class="score-basis">历史回放使用已收盘日线，两个窗口分别显示方向命中与评分。汇总命中率按第 5 个交易日计算，最终评分取第 10 个交易日的方向调整收益。满 5 日可查看暂评。</p>
+        <div id="registration-results"></div>
+      </section>
+      <section class="panel registration-review" id="registration-review" hidden aria-labelledby="review-title">
+        <div class="panel-caption"><h2 id="review-title">PM 验收</h2></div>
+        <div id="pair-status" class="help"></div>
+        <ul class="review-progress" id="group-progress" aria-label="进行中的分析组" hidden></ul>
+        <form id="instant-review-form" hidden>
+          <label for="pair-number">核对批次</label><select id="pair-number" name="pairNo" aria-describedby="pair-window-status"></select>
+          <p class="registration-note" id="pair-window-status"></p>
+          <label for="pair-note">验收说明</label><textarea id="pair-note" name="note" rows="2" maxlength="500" required aria-describedby="pair-note-help" placeholder="例如，已核对基准收盘价及第 5 和第 10 日的命中与评分"></textarea>
+          <p class="registration-note" id="pair-note-help">连接机器人后，验收说明会随结论发到群里。</p>
+          <div class="buttons"><button class="btn primary" value="accept" type="submit">验收通过</button>
+            <button class="btn negative" value="return" type="submit">退回</button></div>
+        </form>
+        <div id="pair-review-log"></div>
+      </section>
+    </section>
+    <section id="trades-view" aria-label="交易记录" hidden></section>
+    <section id="replay-view" aria-label="双人回放" hidden>
+      <div id="replay-heading"></div>
+      <section class="panel replay-roster" aria-labelledby="replay-roster-title">
+        <div class="panel-caption"><h2 id="replay-roster-title">回放成绩 <span>· 2</span></h2></div>
+        <div id="results" class="profile-grid"></div>
+      </section>
+      <div id="round-header" class="section-title replay-title"></div>
+      <div id="session-progress" class="session-progress"></div>
+      <div class="desk-grid">
+        <section class="panel market-panel" id="market" aria-label="历史收盘价行情"></section>
+        <section class="panel operation" tabindex="-1" aria-label="本轮操作"><div id="controls"></div></section>
+      </div>
+      <details class="panel evidence" id="evidence-panel" open>
+        <summary>评分核对明细</summary><div id="history"></div>
+      </details>
+    </section>
+    <section id="ledger-view" hidden>
+      <a class="back-link" href="#overview">← 返回总览</a>
+      <div id="ledger-head"></div>
+      <div id="ledger-content"></div>
+    </section>
+    <section id="activity-view" hidden>
+      <div class="hero"><div><h1>群播报</h1><p class="sub">场次 <span id="activity-session" class="mono"></span> · 操作记录与投递回执</p></div><span id="channel" class="chip"></span></div>
+      <section class="panel log-panel" id="messages"></section>
+      <section class="panel feishu-bindings" id="feishu-bindings" aria-labelledby="feishu-bindings-title" hidden>
+        <div class="panel-caption">
+          <h2 id="feishu-bindings-title">飞书群配对</h2>
+          <button class="btn quiet" type="button" id="feishu-binding-refresh">刷新收件</button>
+        </div>
+        <p class="sub">请参与者在目标群发送「联调」或「绑定」，然后按机器人回复的配对编号选择成员。</p>
+        <p class="sub" id="feishu-binding-status"></p>
+        <form id="feishu-binding-form">
+          <label>目标群 <select name="chatId" required disabled></select></label>
+          <label>已收到的成员 <select name="senderId" required disabled></select></label>
+          <label>配对身份 <select name="assignment" required disabled></select></label>
+          <button class="btn primary" type="submit" disabled>保存配对</button>
+        </form>
+        <p class="sub" id="feishu-binding-feedback" role="status"></p>
+        <ul id="feishu-binding-members" aria-label="配对收件状态" hidden></ul>
+      </section>
+      <details class="panel settings" id="hook-panel" hidden>
+        <summary>飞书机器人设置</summary>
+        <div class="settings-body">
+          <p id="hook-status"></p>
+          <div class="buttons">
+            <button class="btn" type="button" id="paired-group-channel" data-cmd="app-channel" aria-describedby="paired-group-status" disabled>使用已配对的飞书群</button>
+            <button class="btn quiet" type="button" data-cmd="local-hook">切回本地接收</button>
+          </div>
+          <p class="sub" id="paired-group-status"></p>
+          <form id="hook-form">
+            <label for="hook-url">Webhook 地址</label>
+            <input type="password" id="hook-url" autocomplete="off" spellcheck="false" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…">
+            <label for="hook-secret">签名密钥（机器人开启签名时填写）</label>
+            <input type="password" id="hook-secret" autocomplete="off" spellcheck="false">
+            <div class="buttons"><button class="btn primary" type="submit">连接飞书</button>
+            <button class="btn" type="button" data-cmd="test-hook">发送测试消息</button></div>
+          </form>
+        </div>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

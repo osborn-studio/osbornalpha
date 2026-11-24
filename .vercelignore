@@ -1,4 +1,5 @@
 outputs/
+build/analyst-replay*/
 tmp/
 tasks/
 research-books/

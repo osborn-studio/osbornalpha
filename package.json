@@ -7,6 +7,8 @@
   },
   "scripts": {
     "dev": "next dev",
+    "demo:analyst": "node --env-file-if-exists=.env.local --import tsx demos/analyst-replay/server.mjs",
+    "demo:feishu": "node --env-file-if-exists=build/analyst-replay/feishu-app.env --import tsx demos/analyst-replay/feishu-connector.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
@@ -33,6 +35,7 @@
     "test:storage": "tsx scripts/broker-research/storage-check.ts"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.75.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.46.1",
     "ajv": "8.20.0",
