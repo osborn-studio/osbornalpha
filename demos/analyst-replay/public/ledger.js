@@ -1,3 +1,5 @@
+import { beijingDate, beijingDateTime } from './beijing-time.mjs';
+
 const actions = { buy: '买入', add: '加仓', hold: '持有', pass: '观望', trim: '减仓', sell: '卖出' };
 const markets = { HK: '港股', A: 'A股', US: '美股' };
 const bands = { low: '低', mid: '中', high: '高' };
@@ -82,10 +84,10 @@ function positionsPanel(positions) {
     numberCell(price(p.avg_fill, p.market)) +
     numberCell(price(p.last_close, p.market) + '<small>' + escapeHTML(p.last_close_date) + '</small>') +
     changeCell(p.unrealized_pct) + numberCell(pct(p.weight * 100)) +
-    '<td>' + escapeHTML(p.opened_at.slice(0, 10)) + '</td></tr>');
+    '<td>' + escapeHTML(beijingDate(p.opened_at)) + '</td></tr>');
   return panel('模拟持仓', positions.length + ' 个标的', rows.length
     ? table('模拟持仓', [['标的'], ['市场'], ['份数', true], ['均价', true], ['最新收盘', true],
-        ['浮盈亏', true], ['份数权重', true], ['建仓日']], rows)
+        ['浮盈亏', true], ['份数权重', true], ['建仓日（北京时间）']], rows)
     : '<p class="empty">暂无模拟持仓</p>');
 }
 
@@ -93,9 +95,9 @@ function closedPanel(closed) {
   if (!closed.length) return '';
   const rows = closed.map(p => '<tr>' + securityCells(p) + numberCell(p.units) +
     numberCell(price(p.avg_fill, p.market)) + numberCell(price(p.exit_price, p.market)) +
-    changeCell(p.realized_pct) + '<td>' + escapeHTML(p.closed_at.slice(0, 10)) + '</td></tr>');
+    changeCell(p.realized_pct) + '<td>' + escapeHTML(beijingDate(p.closed_at)) + '</td></tr>');
   return panel('已平仓', closed.length + ' 笔', table('已平仓', [['标的'], ['市场'], ['份数', true],
-    ['均价', true], ['平仓价', true], ['已实现盈亏', true], ['平仓日']], rows));
+    ['均价', true], ['平仓价', true], ['已实现盈亏', true], ['平仓日（北京时间）']], rows));
 }
 
 function legacyWindow(row) {
@@ -117,7 +119,7 @@ function timelineRow(row, showLegacy) {
   const metadata = registration ? '<p>目标价 ' + price(row.target_price, row.market) + ' · 止损 ' + price(row.stop_loss, row.market) + '</p>' +
     '<p>建议期限 ' + (horizons[row.horizon] || '未定') + '</p>' +
     (row.thesis_ref ? '<p>关联研究 ' + escapeHTML(row.thesis_ref) + '</p>' : '') : '';
-  return '<tr><td>' + escapeHTML(row.date) + '<small>第 ' + escapeHTML(row.round) + (registration ? ' 组' : ' 轮') + '</small></td>' +
+  return '<tr><td>' + escapeHTML(beijingDateTime(row.recommended_at ?? row.date)) + '<small>第 ' + escapeHTML(row.round) + (registration ? ' 组' : ' 轮') + '</small></td>' +
     '<td>' + escapeHTML(row.ticker) + '</td><td><span class="chip">' + escapeHTML(actions[row.action]) + '</span></td>' +
     numberCell(price(row.reference_price, row.market)) + numberCell(price(row.fill, row.market)) +
     checkpointCell(row.return5, row.score5 ?? (row.status === 'provisional' ? row.score : null), row.hit) +
@@ -130,7 +132,7 @@ function timelineRow(row, showLegacy) {
 
 function timelinePanel(timeline) {
   const showLegacy = timeline.some(legacyWindow);
-  const headers = [['建议日'], ['标的'], ['动作'], ['参考价', true], ['模拟成交价', true],
+  const headers = [['建议时间（北京时间）'], ['标的'], ['动作'], ['参考价', true], ['模拟成交价', true],
     ['5 日暂评与命中', true], ['10 日评分与命中', true]];
   if (showLegacy) headers.push(['20 日评分（旧口径）', true]);
   headers.push(['信心 / 理由']);

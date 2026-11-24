@@ -1,4 +1,4 @@
-import { beijingInputValue, beijingInputToISO } from './beijing-time.mjs';
+import { beijingDateTime, beijingInputValue, beijingInputToISO, marketCalendarLabel } from './beijing-time.mjs';
 
 const el = id => document.getElementById(id);
 const form = el('registration-form');
@@ -15,7 +15,6 @@ const signed = (n, digits = 2, suffix = '') => finite(n) ? (n > 0 ? '+' : '') + 
 const tone = n => !finite(n) || n === 0 ? '' : n > 0 ? 'positive' : 'negative';
 const hitLabel = value => value === true ? '命中' : value === false ? '未命中' : '—';
 const finalDayOf = evidence => evidence?.finalDay ?? (evidence?.d20Date ? 20 : 10);
-const beijingTime = iso => iso ? new Date(iso).toLocaleString('zh-CN', { timeZone:'Asia/Shanghai', hour12:false }) : '—';
 const visible = new Map();
 let currentScope = '';
 let marketTouched = false;
@@ -166,7 +165,7 @@ function renderCheckpoint(window, action) {
 
 function evidenceDetails(entry, windows) {
   const e = entry.evidence || {}, r = entry.recommendation;
-  const prices = [['建议基准', e.baseDate, e.baseClose], ...windows.map(w => ['第 ' + w.day + ' 个交易日', w.date, w.close])];
+  const prices = [['行情基准', e.baseDate, e.baseClose], ...windows.map(w => ['第 ' + w.day + ' 个交易日', w.date, w.close])];
   const rows = prices.map(([label,date,close]) => '<tr><th scope="row">' + label + '</th><td>' + escaped(date || '—') +
     '</td><td class="number">' + price(close, r.market) + '</td></tr>').join('');
   const details = [['参考价', price(r.reference_price, r.market)], ['目标价', price(r.target_price, r.market)],
@@ -174,10 +173,10 @@ function evidenceDetails(entry, windows) {
     ['登记信心', finite(r.confidence) ? r.confidence + '%' : '—'], ['关联研究', r.thesis_ref || '—']];
   const modeLabel = {provider:'行情接口', snapshot:'历史快照'}[e.mode];
   const source = [e.source, modeLabel, e.adjustment, e.currency].filter(Boolean).join(' · ');
-  return '<div class="table-wrap"><table class="data-table"><thead><tr><th>观察点</th><th>交易日</th><th class="number">收盘价</th></tr></thead><tbody>' +
+  return '<div class="table-wrap"><table class="data-table"><thead><tr><th>观察点</th><th>' + escaped(marketCalendarLabel(r.market)) + '</th><th class="number">收盘价</th></tr></thead><tbody>' +
     rows + '</tbody></table></div><div class="score-evidence"><p>行情来源 ' + escaped(source || '待取得行情') + '</p>' +
     (e.snapshotId ? '<p>快照 <span class="mono">' + escaped(e.snapshotId) + '</span></p>' : '') +
-    (e.disclosure ? '<p>' + escaped(e.disclosure) + '</p>' : '') + '<p>建议时间（北京时间）' + escaped(beijingTime(r.recommended_at)) + '</p><p>实际登记（北京时间）' + escaped(beijingTime(r.created_at)) + '</p>' +
+    (e.disclosure ? '<p>' + escaped(e.disclosure) + '</p>' : '') + '<p>实际登记（北京时间）' + escaped(beijingDateTime(r.created_at)) + '</p>' +
     '<div class="score-fields">' + details.map(([label,value]) => '<span>' + label + ' ' + escaped(value) + '</span>').join('') + '</div>' +
     (r.rationale ? '<p>理由 ' + escaped(r.rationale) + '</p>' : '') + '</div>';
 }
@@ -190,14 +189,15 @@ function scoreCard(entry, names, role) {
   const source = [e.source, modeLabel].filter(Boolean).map(label => ' · ' + escaped(label)).join('');
   const status = e.mode === 'unavailable' ? '行情暂缺' :
     (statuses[entry.status] ?? (final.day === 20 ? '旧 20 日口径' : '10 日已结算'));
-  const period = final.date || first.date;
+  const lastObserved = final.date ? final : first;
   return '<article class="registration-score" data-registration-id="' + escaped(entry.id) + '"><div class="score-heading">' +
     '<div class="score-identity"><strong>' + escaped(r.ticker) + '</strong><span>' + escaped(actions[r.action]) + '</span>' +
     '<span class="chip ' + (entry.status === 'final' ? '' : 'neutral') + '">' + escaped(status) + '</span></div>' +
     '<span class="score-identifiers">' + escaped(names[entry.role]) + ' · 第 ' + escaped(entry.pairNo) + ' 组</span></div>' +
+    '<p class="score-evidence">建议时间（北京时间）<span class="mono">' + escaped(beijingDateTime(r.recommended_at)) + '</span></p>' +
     '<div class="score-windows">' + windows.map(window => renderCheckpoint(window, r.action)).join('') + '</div>' +
-    '<p class="score-evidence">观察区间 <span class="mono">' + escaped(e.baseDate || '待取得基准日') +
-    (period ? ' → ' + escaped(period) : '') + '</span>' + source + '</p>' +
+    '<p class="score-evidence">观察区间 · ' + escaped(marketCalendarLabel(r.market)) + ' · 行情基准 <span class="mono">' + escaped(e.baseDate || '待取得') + '</span>' +
+    (lastObserved.date ? ' → 第 ' + lastObserved.day + ' 日 <span class="mono">' + escaped(lastObserved.date) + '</span>' : '') + source + '</p>' +
     (entry.status === 'pending' && e.disclosure ? '<p class="score-evidence">' + escaped(e.disclosure) + '</p>' : '') +
     '<details class="score-metadata"><summary>核对行情与登记详情</summary>' + evidenceDetails(entry, windows) + '</details>' +
     (entry.status !== 'final' && (role === entry.role || role === 'PM') ? '<button type="button" class="btn" data-refresh-entry="' +
@@ -253,11 +253,8 @@ function renderReviews(s, book) {
   if (!reviewForm.hidden) {
     const select = el('pair-number'), selected = select.value;
     update('pair-number', eligible.map(({pairNo, entries}) => {
-      const labels = entries.map(({recommendation, evidence}) => {
-        const date = evidence.baseDate || beijingInputValue(recommendation.recommended_at).slice(0, 10);
-        return recommendation.ticker + ' ' + date;
-      });
-      return '<option value="' + escaped(pairNo) + '">第 ' + escaped(pairNo) + ' 组 · ' + entries.length + ' 人 · ' +
+      const labels = entries.map(({recommendation}) => recommendation.ticker + ' ' + beijingDateTime(recommendation.recommended_at));
+      return '<option value="' + escaped(pairNo) + '">第 ' + escaped(pairNo) + ' 组 · ' + entries.length + ' 人 · 建议时间（北京时间）' +
         escaped([...new Set(labels)].join(' / ')) + '</option>';
     }).join(''));
     if (eligible.some(group => group.pairNo === Number(selected))) select.value = selected;
@@ -265,7 +262,7 @@ function renderReviews(s, book) {
     updateReviewDecision();
   }
   update('pair-review-log', [...reviews].reverse().map(review => '<p class="review-note">第 ' + escaped(review.pairNo) + ' 组 · ' +
-    (review.decision === 'accept' ? '验收通过' : '已退回') + ' · ' + escaped(review.note) + '<small>' + escaped(beijingTime(review.at)) + '</small></p>').join(''));
+    (review.decision === 'accept' ? '验收通过' : '已退回') + ' · ' + escaped(review.note) + '<small>北京时间 ' + escaped(beijingDateTime(review.at)) + '</small></p>').join(''));
 }
 
 function updateReviewDecision() {

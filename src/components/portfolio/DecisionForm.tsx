@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Button } from '@/components/ui';
 import { postDecision } from '@/lib/hooks/usePortfolio';
 import { fetchRecommendations, type RecommendationView } from '@/lib/hooks/useAnalyst';
 import { classifyMarket } from '@/lib/utils';
-import { exchangeDate } from '@/lib/scoring/forward';
+import { BEIJING_TIME_ZONE } from '@/lib/analyst/recommendation-time';
+import { formatDateTimeLocale } from '@/lib/i18n/locale';
 import type { DecisionAction } from '@/lib/supabase/database.types';
 
 export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () => void }) {
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
   const t = useTranslations('portfolio');
   const ACTIONS: Array<{ a: DecisionAction; label: string; variant: 'primary' | 'danger' | 'secondary' }> = [
     { a: 'buy', label: t('action.buy'), variant: 'primary' },
@@ -84,7 +86,7 @@ export function DecisionForm({ ticker, onDone }: { ticker: string; onDone: () =>
                 className="w-48 rounded border border-[var(--border)] bg-[var(--bg)] px-2 py-1">
                 <option value="">{t('decisionForm.adoptNone')}</option>
                 {recs.map((r) => (
-                  <option key={r.id} value={r.id}>{exchangeDate(r.recommended_at, r.market)} · {t(`action.${r.action}`)}{r.rationale ? ` · ${r.rationale.slice(0, 24)}` : ''}</option>
+                  <option key={r.id} value={r.id}>{formatDateTimeLocale(r.recommended_at, locale, BEIJING_TIME_ZONE)} · {t(`action.${r.action}`)}{r.rationale ? ` · ${r.rationale.slice(0, 24)}` : ''}</option>
                 ))}
               </select>
             </label>

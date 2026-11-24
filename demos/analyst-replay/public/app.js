@@ -2,6 +2,7 @@ import { createTradesView } from './trades.js';
 import { renderLedger } from './ledger.js';
 import { createAnalystAdmin } from './analysts.js';
 import { createFeishuBindings } from './feishu-bindings.js';
+import { beijingDateTime } from './beijing-time.mjs';
 import {
   clearRegistrations, fillExample, registrationBusy, registrationFeedback, registrationRequest,
   registrationSaved, renderRegistrations, syncDeskButtons,
@@ -334,8 +335,7 @@ function priceCell(value, date) {
 }
 
 function showTime(at) {
-  const d = new Date(at);
-  return Number.isNaN(d.valueOf()) ? '' : d.toLocaleString('zh-CN',{hour12:false});
+  return at == null ? '' : beijingDateTime(at) + ' 北京时间';
 }
 
 function registeredEvidence(row) {

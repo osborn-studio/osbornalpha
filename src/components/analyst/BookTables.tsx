@@ -1,10 +1,11 @@
 'use client';
 
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import Link from 'next/link';
 import { Metric, Panel, metricTrendClass } from '@/components/ui';
 import { formatPct, formatPrice } from '@/lib/utils';
-import { exchangeDate } from '@/lib/scoring/forward';
+import { BEIJING_TIME_ZONE } from '@/lib/analyst/recommendation-time';
+import { formatDateLocale } from '@/lib/i18n/locale';
 import type { Book } from '@/lib/analyst/book';
 import type { Market } from '@/lib/supabase/database.types';
 
@@ -36,6 +37,7 @@ export function BookSummaryPanel({ book }: { book: Book }) {
 }
 
 export function BookTables({ book }: { book: Book }) {
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
   const t = useTranslations('analyst');
   const th = 'pb-1 font-normal';
   return (
@@ -68,7 +70,7 @@ export function BookTables({ book }: { book: Book }) {
                     <td className="py-1" title={p.last_close_date ?? undefined}>{p.last_close === null ? '--' : formatFill(p.last_close, p.market)}</td>
                     <td className={`py-1 ${p.unrealized_pct === null ? '' : metricTrendClass(p.unrealized_pct)}`}>{pctOrDash(p.unrealized_pct)}</td>
                     <td className="py-1">{formatPct(p.weight * 100, false)}</td>
-                    <td className="py-1">{exchangeDate(p.opened_at, p.market)}</td>
+                    <td className="py-1">{formatDateLocale(p.opened_at, locale, BEIJING_TIME_ZONE)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -100,7 +102,7 @@ export function BookTables({ book }: { book: Book }) {
                     <td className="py-1">{formatFill(c.avg_fill, c.market)}</td>
                     <td className="py-1">{formatFill(c.exit_price, c.market)}</td>
                     <td className={`py-1 ${metricTrendClass(c.realized_pct)}`}>{formatPct(c.realized_pct)}</td>
-                    <td className="py-1">{exchangeDate(c.closed_at, c.market)}</td>
+                    <td className="py-1">{formatDateLocale(c.closed_at, locale, BEIJING_TIME_ZONE)}</td>
                   </tr>
                 ))}
               </tbody>

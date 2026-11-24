@@ -62,6 +62,20 @@ function approval(n, parentId = 'om_sent_1', extra = {}) {
   return event(n,{senderId:approver,createdAt:approvedAt,text:'同意',parentId,...extra});
 }
 
+test('the group receipt identifies the Beijing suggestion time and New York pricing date', async t => {
+  const h = harness(t);
+  const workflow = h.open({register:async ({fields}) => ({
+    id:recommendationId,status:'pending',recommendation:fields,
+    evidence:{disclosure:'基准交易日为 2025-11-24。'},
+  })});
+  workflow.receive(event(1,{text:'我想买入NVDA',createdAt:'2025-11-25T03:19:13.474Z'}));
+  await workflow.drain();
+  workflow.receive(approval(2,'om_sent_1',{createdAt:'2025-11-25T03:20:00.000Z'}));
+  await workflow.drain();
+  assert.match(h.messages[1].text,/建议时间（北京时间）2025-11-25 11:19:13/);
+  assert.match(h.messages[1].text,/纽约交易日.*2025-11-24/);
+});
+
 test('an analyst can mention the bot with just a ticker and reply with the action alone', async t => {
   const h = harness(t);
   const workflow = h.open();

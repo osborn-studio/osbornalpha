@@ -5,9 +5,10 @@ import { useParams, useRouter } from 'next/navigation';
 // F4: + Fragment (row expansion)
 import { Fragment, useCallback, useEffect, useState } from 'react';
 // /F4
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
 import { Button, Panel, Tag } from '@/components/ui';
-import { exchangeDate } from '@/lib/scoring/forward';
+import { BEIJING_TIME_ZONE } from '@/lib/analyst/recommendation-time';
+import { formatDateTimeLocale } from '@/lib/i18n/locale';
 import { fetchBook, fetchRecommendations, patchProfile, withdrawRecommendation, type Book, type RecommendationView } from '@/lib/hooks/useAnalyst';
 import type { AnalystProfile } from '@/lib/supabase/database.types';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
@@ -25,6 +26,7 @@ const RECS_CAP = 500;
 
 export default function AnalystDetailPage() {
   const t = useTranslations('analyst');
+  const locale = useLocale() === 'en' ? 'en' : 'zh';
   const { analystId } = useParams<{ analystId: string }>();
   const router = useRouter();
   const [profile, setProfile] = useState<AnalystProfile | null>(null);
@@ -145,7 +147,7 @@ export default function AnalystDetailPage() {
                       // F4: expandable recommendation rows
                       <Fragment key={r.id}>
                       <tr className={`border-t border-[var(--border)] ${r.withdrawn_at ? 'opacity-50' : ''}`}>
-                        <td className="py-1">{exchangeDate(r.recommended_at, r.market)}</td>
+                        <td className="whitespace-nowrap py-1"><time dateTime={r.recommended_at}>{formatDateTimeLocale(r.recommended_at, locale, BEIJING_TIME_ZONE)}</time></td>
                         <td className="py-1"><Link href={`/stock/${encodeURIComponent(r.ticker)}`} className="text-accent hover:underline">{r.ticker}</Link></td>
                         <td className="py-1">{t(`action.${r.action}`)}</td>
                         <td className="py-1">{r.reference_price === null ? '--' : formatFill(r.reference_price, r.market)}</td>

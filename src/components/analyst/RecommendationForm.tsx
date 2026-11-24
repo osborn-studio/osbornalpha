@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel } from '@/components/ui';
 import { createRecommendation } from '@/lib/hooks/useAnalyst';
+import { fromBeijingDateTimeInput } from '@/lib/analyst/recommendation-time';
 import { inferCoreMarket } from '@/lib/securities/ticker';
 import type { AnalystProfile, DecisionAction, DecisionHorizon, Market } from '@/lib/supabase/database.types';
 
@@ -51,8 +52,7 @@ export function RecommendationForm({ profiles, onCreated }: {
         reference_price: num(referencePrice), rationale: rationale || undefined, confidence,
         target_price: num(target), stop_loss: num(stop), horizon: horizon || undefined,
         thesis_ref: thesisRef || undefined, source_type: 'manual',
-        // datetime-local has no zone; Date() reads it as browser-local and toISOString() emits UTC.
-        recommended_at: recommendedAt ? new Date(recommendedAt).toISOString() : undefined,
+        recommended_at: recommendedAt ? fromBeijingDateTimeInput(recommendedAt) : undefined,
       });
       setTicker(''); setReferencePrice(''); setRationale(''); setTarget(''); setStop(''); setThesisRef(''); setRecommendedAt('');
       setMsg({ ok: true, text: t('recommendationForm.saved') });
