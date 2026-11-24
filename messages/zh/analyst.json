@@ -56,6 +56,9 @@
     "refresh": "刷新评分",
     "refreshing": "刷新中…",
     "result": "已评分 {scored} 条，跳过 {skipped} 条",
+    "skipDetail": "（{reasons}）",
+    "reasonSeparator": "，",
+    "skipReasons": { "price_unavailable": "行情缺失或不完整 {n} 条", "too_recent": "后续日线不足 5 根 {n} 条", "before_window": "早于行情窗口 {n} 条" },
     "pending": "评分待刷新"
   },
   "book": {

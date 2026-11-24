@@ -14,7 +14,7 @@ import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import { fetchSinaUsKline } from '@/lib/data/sources/sina';
 import { fetchSinaIntradayKline } from '@/lib/data/sources/sina-kline';
 import { fetchDatagatewayIntradayKline } from '@/lib/data/sources/datagateway-intraday';
-import { fetchTencentKline } from '@/lib/data/sources/tencent';
+import { fetchTencentKline, fetchTencentUsKline } from '@/lib/data/sources/tencent';
 import { fetchTwseKline } from '@/lib/data/sources/twse';
 import {
   DATAGATEWAY_DAILY_TIMEOUT_MS,
@@ -110,6 +110,7 @@ interface EngineOptions {
   circuitOpenMs?: number;
   globalConcurrency?: number;
   sourceConcurrency?: number;
+  requireVisibleBars?: boolean;
 }
 
 class Semaphore {
@@ -213,7 +214,7 @@ function providerFetchLimit(market: Market, range: KlineRange, nativeInterval: b
   return config.interval === 'week' ? WEEKLY_FALLBACK_DAILY_BARS : MONTHLY_FALLBACK_DAILY_BARS;
 }
 
-function providerDefinitions(request: KlineRequest): KlineProvider[] {
+function providerDefinitions(request: KlineRequest, purpose: 'chart' | 'scoring' = 'chart'): KlineProvider[] {
   const market = classifyMarket(request.ticker);
   const config = KLINE_RANGE_CONFIG[request.range];
   const adjustment = expectedAdjustment(market, request.range, request.adjustment);
@@ -274,6 +275,24 @@ function providerDefinitions(request: KlineRequest): KlineProvider[] {
       timeoutMs: 2_500,
     }),
   };
+  if (purpose === 'scoring') {
+    // Scoring reads completed daily closes. Tencent serves explicit A-share qfq and
+    // HK/US unadjusted bars. The gateway's close-only payload omits its adjustment.
+    const tencentTimeout = market === 'US' ? 8_000 : 6_000;
+    const tencent: KlineProvider = {
+      name: 'tencent', market, adjustment, returnsInterval: 'day', maxAttempts: 1, timeoutMs: tencentTimeout,
+      fetch: (signal) => market === 'US'
+        ? fetchTencentUsKline(request.ticker, dailyLimit, signal, tencentTimeout)
+        : fetchTencentKline(request.ticker, dailyLimit, market === 'A' ? 'qfq' : 'none', signal, tencentTimeout),
+    };
+    const eastmoney = { ...primary, maxAttempts: 1 };
+    if (market !== 'US') return [tencent, eastmoney];
+    const sina: KlineProvider = {
+      name: 'sina', market, adjustment, returnsInterval: 'day', maxAttempts: 1, timeoutMs: 12_000,
+      fetch: (signal) => fetchSinaUsKline(request.ticker, dailyLimit, signal, 12_000),
+    };
+    return [tencent, sina, eastmoney];
+  }
   if (config.interval === 'minute') return [...intradayGateway, primary, ...(market === 'A' ? [{
     name: 'sina' as const,
     market,
@@ -348,6 +367,7 @@ export class KlineReliabilityEngine {
   private readonly circuitOpenMs: number;
   private readonly globalSemaphore: Semaphore;
   private readonly sourceConcurrency: number;
+  private readonly requireVisibleBars: boolean;
   private readonly sourceSemaphores = new Map<KlineSourceName, Semaphore>();
   private readonly circuits = new Map<string, CircuitState>();
   private readonly lastKnownGood = new Map<string, LastKnownGood>();
@@ -364,6 +384,7 @@ export class KlineReliabilityEngine {
     this.circuitOpenMs = options.circuitOpenMs ?? 30_000;
     this.globalSemaphore = new Semaphore(options.globalConcurrency ?? 8);
     this.sourceConcurrency = options.sourceConcurrency ?? 2;
+    this.requireVisibleBars = options.requireVisibleBars ?? false;
   }
 
   resolve(request: KlineRequest): Promise<KlineResolution> {
@@ -518,6 +539,9 @@ export class KlineReliabilityEngine {
             }
           }
 
+          if (this.requireVisibleBars && visibleBars.length === 0) {
+            throw new KlineProviderError('empty', 'Provider has no bars in the requested window');
+          }
           // Complete means upstream history reached the depth this range
           // needs — a calendar window holding fewer trading days (holidays,
           // suspensions) is still complete, not partial. "All" is different:
@@ -610,6 +634,13 @@ export class KlineReliabilityEngine {
 }
 
 const productionEngine = new KlineReliabilityEngine();
+const scoringEngine = new KlineReliabilityEngine({
+  providersFor: (request) => providerDefinitions(request, 'scoring'),
+  // A slow primary must leave time for both the larger US payload and the final fallback.
+  totalBudgetMs: 23_000,
+  sourceConcurrency: 4,
+  requireVisibleBars: true,
+});
 
 class StaleKlineResolution extends Error {
   constructor(public readonly result: KlineResolution) {
@@ -660,6 +691,11 @@ export function decorateCachedResolution(
       ? Array.from(new Set([...result.warnings, 'stale_cache'])) as KlineWarning[]
       : result.warnings,
   };
+}
+
+/** Daily scoring reads bypass the chart cache and maintain their own provider health. */
+export function resolveScoringKline(request: { ticker: string; range: '1y' }): Promise<KlineResolution> {
+  return scoringEngine.resolve({ ...request, ticker: request.ticker.toUpperCase() });
 }
 
 export async function resolveKline(request: KlineRequest): Promise<KlineResolution> {

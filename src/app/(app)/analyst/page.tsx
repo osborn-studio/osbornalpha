@@ -34,7 +34,12 @@ export default function AnalystOverviewPage() {
     setRefreshing(true); setRefreshMsg(null);
     try {
       const r = await refreshScores();
-      setRefreshMsg({ ok: true, text: t('scores.result', r) });
+      // Name each non-zero skip reason, e.g. "Scored 0, skipped 6 (price data unavailable: 6)".
+      const reasons = (['price_unavailable', 'too_recent', 'before_window'] as const)
+        .filter((k) => (r.reasons?.[k] ?? 0) > 0)
+        .map((k) => t(`scores.skipReasons.${k}`, { n: r.reasons[k] }));
+      const detail = reasons.length ? t('scores.skipDetail', { reasons: reasons.join(t('scores.reasonSeparator')) }) : '';
+      setRefreshMsg({ ok: true, text: t('scores.result', { scored: r.scored, skipped: r.skipped }) + detail });
       await load();
     } catch (e) {
       setRefreshMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });

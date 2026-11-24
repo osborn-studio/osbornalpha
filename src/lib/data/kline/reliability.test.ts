@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   decorateCachedResolution,
   klineProviderRoute,
+  resolveScoringKline,
   KlineReliabilityEngine,
   KlineResolutionError,
   type KlineResolution,
@@ -436,6 +437,61 @@ describe('shared cache metadata', () => {
     const decorated = decorateCachedResolution(result, Date.parse(result.fetchedAt) + 301_000, 300_000);
     expect(decorated).toMatchObject({ freshness: 'stale', cacheStatus: 'shared-swr', staleAgeSeconds: 301 });
     expect(decorated.warnings).toContain('stale_cache');
+  });
+});
+
+describe('scoring provider failover', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['600519.SH', 'sh600519', 'qfqday', 'qfq'],
+    ['00700.HK', 'hk00700', 'day', 'none'],
+  ])('requests Tencent first and preserves the price basis for %s', async (ticker, symbol, key, adjustment) => {
+    const fetch = vi.fn(async () => Response.json({
+      code: 0, data: { [symbol]: { [key]: [[dayString(-1), '10', '11', '12', '9', '100']] } },
+    }));
+    vi.stubGlobal('fetch', fetch);
+    const result = await resolveScoringKline({ ticker, range: '1y' });
+    expect(result).toMatchObject({ source: 'tencent', adjustment, fallbackUsed: false });
+    expect(result.bars[0].close).toBe(11);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads Sina unadjusted US closes when Tencent is unavailable', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (!url.includes('sina.com.cn')) return new Response('', { status: 503 });
+      const payload = [{ d: dayString(-1), o: 10, h: 12, l: 9, c: 11, v: 100 }];
+      return new Response('var _data=(' + JSON.stringify(payload) + ');');
+    });
+    vi.stubGlobal('fetch', fetch);
+    const result = await resolveScoringKline({ ticker: 'AAPL', range: '1y' });
+    expect(result).toMatchObject({ source: 'sina', adjustment: 'none', fallbackUsed: true });
+    expect(result.bars[0].close).toBe(11);
+    expect(fetch.mock.calls[0][0]).toContain('gtimg.cn');
+    expect(fetch.mock.calls.some(([url]) => url.includes('eastmoney'))).toBe(false);
+  });
+
+  it.each(['outage', 'out-of-window history'])('uses front-adjusted Eastmoney bars after a Tencent %s', async (issue) => {
+    const fetch = vi.fn(async (url: string) => {
+      if (!url.includes('eastmoney.com')) {
+        if (issue === 'outage') return new Response('', { status: 503 });
+        return Response.json({ code: 0, data: { sz000333: { qfqday: [[dayString(-500), '10', '11', '12', '9', '100']] } } });
+      }
+      expect(url).toContain('fqt=1');
+      return Response.json({ data: { klines: [dayString(-1) + ',10,11,12,9,100,1000'] } });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const result = await resolveScoringKline({ ticker: '000333.SZ', range: '1y' });
+    expect(result).toMatchObject({ source: 'eastmoney', adjustment: 'qfq', fallbackUsed: true });
+    expect(result.bars[0].close).toBe(11);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
 

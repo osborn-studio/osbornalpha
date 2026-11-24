@@ -10,60 +10,86 @@
 // one basis. Known limit: last_close freezes once a ticker's calls stop being re-scored.
 
 import type { Recommendation, RecommendationScore } from '@/lib/supabase/database.types';
-import { fetchEastmoneyKline } from '@/lib/data/sources/eastmoney';
 import type { KlineBar } from '@/lib/data/sources/eastmoney';
+import { fetchScoringBars } from '@/lib/scoring/daily-bars';
 import { exchangeDate, scoreForward } from '@/lib/scoring/forward';
 import { readAllRecommendations, readAllScores, requireUser } from './store';
 
-// 60 trading days ≈ 86-91 calendar days (more across CNY/Golden Week); 130 days leaves room to
-// resolve the 60d window on a manual refresh while the base bar stays inside the 120-bar fetch.
-const MAX_SCORING_AGE_MS = 130 * 24 * 60 * 60 * 1000;
-
-// ≈ 120 trading days: older calls have no base bar in the fetch window
-const MAX_FIRST_SCORE_AGE_MS = 170 * 24 * 60 * 60 * 1000;
-
+// The original offline recorder imports this constant for its historical 120-bar fixture.
 export const KLINE_BARS = 120;
 
-// Outer guard per ticker (US tickers try up to three Eastmoney prefixes at 5 s each). Passing a
-// signal also makes fetchJsonp use cache: 'no-store' instead of next.revalidate: inside a POST
-// route handler on Vercel the revalidate variant stalled until its timeout and every call was
-// skipped (observed on production 2026-10-18); the GET routes that pass a signal were fine.
-export const KLINE_FETCH_TIMEOUT_MS = 20_000;
-
 export function needsScoring(rec: Recommendation, score: RecommendationScore | undefined): boolean {
-  if (rec.withdrawn_at !== null) return false;
-  const age = Date.now() - new Date(rec.recommended_at).getTime();
-  // Never scored, or the one-shot fill is missing: retry while a base bar can still be fetched.
-  if (!score || rec.fill_price === null) return age < MAX_FIRST_SCORE_AGE_MS;
-  if (score.forward_60d_pct !== null) return false;
-  return age < MAX_SCORING_AGE_MS;
+  return rec.withdrawn_at === null && (!score || rec.fill_price === null || score.forward_60d_pct === null);
+}
+
+/** Why a candidate was not scored on this refresh. */
+export interface SkipReasons {
+  /** Missing prices, or an incomplete history that would regress a saved score. */
+  price_unavailable: number;
+  /** Available history cannot establish the original base session. */
+  before_window: number;
+  /** Fewer than 5 trading days since the call (or no usable base close yet). */
+  too_recent: number;
 }
 
 export interface ScoreWrites {
-  scoreUpserts: Array<Record<string, unknown>>;
+  scoreUpserts: RecommendationScore[];
   fills: Array<{ id: string; fill_price: number; fill_date: string }>;
   skipped: number;
+  reasons: SkipReasons;
 }
 
-// Pure: turns candidates + fetched bars into DB writes. A call whose exchange-local date is older than
-// the first fetched bar of a FULL window is skipped — the kernel would otherwise take the window's
-// first bar as base and freeze a wrong fill. A short window (< KLINE_BARS) means the whole listing
-// history is in hand (new IPO), so falling forward to the first bar is legitimate.
+export interface RefreshResult {
+  scored: number;
+  skipped: number;
+  reasons: SkipReasons;
+  nextTicker?: string;
+}
+
+const noSkips = (): SkipReasons => ({ price_unavailable: 0, before_window: 0, too_recent: 0 });
+
+// At the left edge of a truncated history, a weekend before a Monday bar is provable.
+// Other holidays and suspensions are handled naturally when bars bracket the call.
+function firstWeekdayOnOrAfter(day: string): string {
+  const date = new Date(`${day}T00:00:00Z`);
+  const weekday = date.getUTCDay();
+  if (weekday === 0 || weekday === 6) date.setUTCDate(date.getUTCDate() + (weekday === 6 ? 2 : 1));
+  return date.toISOString().slice(0, 10);
+}
+
 export function buildScoreWrites(
   candidates: Recommendation[],
   barsByTicker: Map<string, KlineBar[] | null>,
   userId: string,
   now: string,
+  priorScores: ReadonlyMap<string, RecommendationScore> = new Map(),
+  listingDates: ReadonlyMap<string, string> = new Map(),
 ): ScoreWrites {
   const scoreUpserts: ScoreWrites['scoreUpserts'] = [];
   const fills: ScoreWrites['fills'] = [];
-  let skipped = 0;
+  const reasons = noSkips();
   for (const r of candidates) {
     const bars = barsByTicker.get(r.ticker);
+    if (!bars) { reasons.price_unavailable += 1; continue; }
+    if (bars.length === 0) { reasons.too_recent += 1; continue; }
+    const previous = priorScores.get(r.id);
+    const knownBase = r.fill_date ?? previous?.base_date;
     const callDate = exchangeDate(r.recommended_at, r.market);
-    const beforeWindow = !!bars && bars.length >= KLINE_BARS && bars[0].time > callDate;
-    const s = bars && !beforeWindow ? scoreForward({ market: r.market, action: r.action, at: r.recommended_at, confidence: r.confidence }, bars) : null;
-    if (!s) { skipped += 1; continue; }
+    const firstDate = bars[0].time;
+    if (firstDate > callDate && firstDate !== knownBase && firstDate !== listingDates.get(r.ticker)
+        && firstDate !== firstWeekdayOnOrAfter(callDate)) {
+      reasons.before_window += 1;
+      continue;
+    }
+    const s = scoreForward({ market: r.market, action: r.action, at: r.recommended_at, confidence: r.confidence }, bars);
+    if (!s) { reasons.too_recent += 1; continue; }
+    if ((knownBase && s.base_date !== knownBase)
+        || (previous?.last_close_date && s.last_close_date < previous.last_close_date)
+        || (previous?.forward_20d_pct != null && s.forward_20d_pct === null)
+        || (previous?.forward_60d_pct != null && s.forward_60d_pct === null)) {
+      reasons.price_unavailable += 1;
+      continue;
+    }
     scoreUpserts.push({
       recommendation_id: r.id, user_id: userId, scored_at: now,
       forward_5d_pct: s.forward_5d_pct, forward_20d_pct: s.forward_20d_pct, forward_60d_pct: s.forward_60d_pct,
@@ -74,45 +100,83 @@ export function buildScoreWrites(
     // Fill = close of the call's exchange-local day (an intraday look-ahead of a few hours, accepted by design).
     if (r.fill_price === null) fills.push({ id: r.id, fill_price: s.base_close, fill_date: s.base_date });
   }
-  return { scoreUpserts, fills, skipped };
+  const skipped = reasons.price_unavailable + reasons.before_window + reasons.too_recent;
+  return { scoreUpserts, fills, skipped, reasons };
 }
 
-export async function refreshRecommendationScores(): Promise<{ scored: number; skipped: number }> {
+// Each page scores every pending recommendation on the selected tickers. A ticker cursor
+// remains valid when another page finishes scoring and drops records from the candidate set.
+const TICKERS_PER_PAGE = 4;
+
+export async function refreshRecommendationScores(afterTicker?: string): Promise<RefreshResult> {
   const { supabase, userId } = await requireUser();
   const [recs, scoreRows] = await Promise.all([readAllRecommendations(supabase, userId), readAllScores(supabase, userId)]);
   const scores = new Map(scoreRows.map((s) => [s.recommendation_id, s]));
-  const candidates = recs.filter((r) => needsScoring(r, scores.get(r.id)));
-  if (candidates.length === 0) return { scored: 0, skipped: 0 };
+  let candidates = recs.filter((r) => needsScoring(r, scores.get(r.id)));
+  let nextTicker: string | undefined;
+  if (afterTicker !== undefined) {
+    const remaining = [...new Set(candidates.map((r) => r.ticker))].filter((ticker) => ticker > afterTicker).sort();
+    const page = remaining.slice(0, TICKERS_PER_PAGE);
+    if (remaining.length > page.length) nextTicker = page[page.length - 1];
+    const selected = new Set(page);
+    candidates = candidates.filter((r) => selected.has(r.ticker));
+  }
+  if (candidates.length === 0) return { scored: 0, skipped: 0, reasons: noSkips() };
 
-  // 120 daily bars ≈ 6 months; a recommendation older than that has no base bar
-  // in range and is skipped by buildScoreWrites. (portfolio/review-store.ts has no
-  // such guard yet and would take the window's first bar as base — follow-up.)
-  const tickers = [...new Set(candidates.map((r) => r.ticker))];
-  const barsByTicker = new Map<string, KlineBar[] | null>();
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(4, tickers.length) }, async () => {
-    while (next < tickers.length) {
-      const ticker = tickers[next++];
-      try {
-        barsByTicker.set(ticker, (await fetchEastmoneyKline(ticker, 'D', KLINE_BARS, { signal: AbortSignal.timeout(KLINE_FETCH_TIMEOUT_MS) }))?.bars ?? null);
-      }
-      catch { barsByTicker.set(ticker, null); } // skip this ticker, keep going
+  const barsByTicker = await fetchScoringBars(candidates.map((r) => r.ticker));
+  // Only a verified listing date can distinguish a new IPO from a provider's truncated history.
+  const possibleIpos = candidates.filter((r) => {
+    const first = barsByTicker.get(r.ticker)?.[0]?.time;
+    return first && first > exchangeDate(r.recommended_at, r.market) && !r.fill_date && !scores.get(r.id)?.base_date;
+  });
+  const tickers = [...new Set(possibleIpos.map((r) => r.ticker))];
+  const listingDates = new Map<string, string>();
+  if (tickers.length) {
+    const { data } = await supabase.from('stocks_universe').select('ticker,list_date').in('ticker', tickers)
+      .returns<Array<{ ticker: string; list_date: string | null }>>();
+    for (const row of data ?? []) if (row.list_date) listingDates.set(row.ticker, row.list_date);
+  }
+  const { scoreUpserts, fills, skipped, reasons } = buildScoreWrites(candidates, barsByTicker, userId, new Date().toISOString(), scores, listingDates);
+
+  // An older refresh must not replace a row committed by a concurrent refresh. Insert new
+  // scores only if absent and compare the observed version before updating an existing score.
+  const scoreTable = () => (supabase as any).from('recommendation_scores');
+  const persisted = new Set<string>();
+  const inserts = scoreUpserts.filter((row) => !scores.has(row.recommendation_id));
+  if (inserts.length) {
+    const { data, error } = await scoreTable().upsert(inserts, {
+      onConflict: 'recommendation_id', ignoreDuplicates: true,
+    }).select('recommendation_id');
+    if (error) throw new Error(error.message);
+    for (const row of data) persisted.add(row.recommendation_id);
+  }
+  const updates = scoreUpserts.filter((row) => scores.has(row.recommendation_id));
+  for (let i = 0; i < updates.length; i += 8) {
+    await Promise.all(updates.slice(i, i + 8).map(async (row) => {
+      const previous = scores.get(row.recommendation_id)!;
+      const { data, error } = await scoreTable().update(row).eq('user_id', userId)
+        .eq('recommendation_id', row.recommendation_id).eq('scored_at', previous.scored_at).select('recommendation_id');
+      if (error) throw new Error(error.message);
+      if (data.length) persisted.add(row.recommendation_id);
+    }));
+  }
+  // A previous request can finish its score write and fail before setting the one-shot fill.
+  // Repair from that stored base even if today's feed is down or has re-adjusted its prices.
+  const pendingFills = new Map(fills.filter((f) => persisted.has(f.id)).map((f) => [f.id, f]));
+  for (const r of candidates) {
+    const previous = scores.get(r.id);
+    if (r.fill_price === null && previous?.base_date && previous.base_close != null) {
+      pendingFills.set(r.id, { id: r.id, fill_price: previous.base_close, fill_date: previous.base_date });
     }
-  }));
-
-  const { scoreUpserts, fills, skipped } = buildScoreWrites(candidates, barsByTicker, userId, new Date().toISOString());
-
-  if (scoreUpserts.length) {
-    const { error } = await (supabase as any).from('recommendation_scores').upsert(scoreUpserts, { onConflict: 'recommendation_id' });
-    if (error) throw new Error(error.message);
   }
-  // One-shot: the `is('fill_price', null)` guard means a fill, once written, never moves.
-  // fill_price and fill_date are written together (schema check pairs them).
-  for (const f of fills) {
-    const { error } = await (supabase as any).from('recommendations')
-      .update({ fill_price: f.fill_price, fill_date: f.fill_date })
-      .eq('id', f.id).eq('user_id', userId).is('fill_price', null);
-    if (error) throw new Error(error.message);
+  const fillRows = [...pendingFills.values()];
+  for (let i = 0; i < fillRows.length; i += 8) {
+    await Promise.all(fillRows.slice(i, i + 8).map(async (f) => {
+      const { error } = await (supabase as any).from('recommendations')
+        .update({ fill_price: f.fill_price, fill_date: f.fill_date })
+        .eq('id', f.id).eq('user_id', userId).is('fill_price', null);
+      if (error) throw new Error(error.message);
+    }));
   }
-  return { scored: scoreUpserts.length, skipped };
+  return { scored: persisted.size, skipped, reasons, ...(nextTicker ? { nextTicker } : {}) };
 }

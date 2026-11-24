@@ -1,5 +1,5 @@
 // Middleware gate: public /api/companies/* never touches the Supabase session (shared-cache safety, plan Task 9 review).
-import {beforeEach,describe,expect,it,vi} from 'vitest';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {NextRequest} from 'next/server';
 
 const mocks=vi.hoisted(()=>({getUser:vi.fn(),create:vi.fn()}));
@@ -10,6 +10,7 @@ import {middleware} from './middleware';
 const req=(path:string)=>new NextRequest(`https://alpha.example${path}`,{headers:{cookie:'sb-x-auth-token=abc'}});
 describe('middleware auth gate',()=>{
  beforeEach(()=>{vi.clearAllMocks();vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL','https://proj.supabase.co');vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY','anon');mocks.getUser.mockResolvedValue({data:{user:null}});});
+ afterEach(()=>vi.unstubAllEnvs());
  it.each(['/manifest.json','/manifest.json?v=1'])('%s is public without a session lookup',async path=>{
   const res=await middleware(new NextRequest(`https://alpha.example${path}`));
   expect(res.status).toBe(200);
@@ -49,6 +50,19 @@ describe('middleware auth gate',()=>{
  it.each(['/api/admin/companies/AAPL/statements','/api/tracking/inbox','/api/companiesx'])('%s still runs the session refresh',async path=>{
   await middleware(req(path));
   expect(mocks.getUser).toHaveBeenCalledTimes(1);
+ });
+ it('skips the cookie lookup only for the enabled simulation import POST', async () => {
+  const path = '/api/integrations/feishu/simulation';
+  const post = (suffix = '') => new NextRequest(`https://alpha.example${path}${suffix}`, {method:'POST'});
+  vi.stubEnv('FEISHU_SIMULATION_INGEST_ENABLED', 'true');
+  const response = await middleware(post());
+  expect(response.headers.get('x-middleware-next')).toBe('1');
+  expect(mocks.getUser).not.toHaveBeenCalled();
+  await middleware(req(path));
+  await middleware(post('/other'));
+  vi.stubEnv('FEISHU_SIMULATION_INGEST_ENABLED', 'false');
+  await middleware(post());
+  expect(mocks.getUser).toHaveBeenCalledTimes(3);
  });
  it('sends an authenticated login visitor to macro',async()=>{
   mocks.getUser.mockResolvedValue({data:{user:{id:'user-1'}}});

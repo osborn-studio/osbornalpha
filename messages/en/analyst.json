@@ -56,6 +56,9 @@
     "refresh": "Refresh Scores",
     "refreshing": "Refreshing…",
     "result": "Scored {scored}, skipped {skipped}",
+    "skipDetail": " ({reasons})",
+    "reasonSeparator": "; ",
+    "skipReasons": { "price_unavailable": "missing or incomplete prices: {n}", "too_recent": "fewer than 5 subsequent daily closes: {n}", "before_window": "before the price window: {n}" },
     "pending": "Score awaiting refresh"
   },
   "book": {
