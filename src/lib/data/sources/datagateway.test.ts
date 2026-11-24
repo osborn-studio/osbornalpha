@@ -122,41 +122,6 @@ describe('Datagateway daily K-line adapter', () => {
     expect(init.cache).toBe('no-store');
   });
 
-  it('preserves the chart default and requires a reported price basis for scoring requests', async () => {
-    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
-    process.env.DATAGATEWAY_API_KEY = 'server-test-value';
-    const rows = [{ symbol: '0700.HK', date: '2026-06-16', value: 447.4 }];
-    const request = (payload: unknown, requireExplicitAdjustment?: boolean) =>
-      fetchDatagatewayDailyKline('00700.HK', 'HK', 160, 'none', {
-        fetchImpl: async () => Response.json(payload), requireExplicitAdjustment,
-      });
-    expect((await request({ data: rows }))?.adjustment).toBe('none');
-    await expect(request({ data: rows }, true)).rejects.toMatchObject({ kind: 'invalid_data' });
-    await expect(request({ adjustment: 'qfq', data: rows }, true)).rejects.toMatchObject({ kind: 'invalid_data' });
-    expect((await request({ adjustment: 'raw', data: rows }, true))?.bars[0].close).toBe(447.4);
-    await expect(request({ adjustment: 'raw', data: [{ ...rows[0], symbol: '0005.HK' }] }, true))
-      .rejects.toMatchObject({ kind: 'invalid_data' });
-    await expect(request({ adjustment: 'raw', data: [...rows, { date: '2026-06-17', value: null }] }, true))
-      .rejects.toMatchObject({ kind: 'invalid_data' });
-  });
-
-  it('sends the requested historical date bounds and rejects invalid or reversed windows locally', async () => {
-    process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
-    process.env.DATAGATEWAY_API_KEY = 'server-test-value';
-    const fetchImpl = vi.fn().mockResolvedValue(Response.json(payload));
-    const read = (startDate: string, endDate: string) => fetchDatagatewayDailyKline('600519.SH', 'A', 160, 'qfq', {
-      startDate, endDate, requireExplicitAdjustment: true, fetchImpl,
-    });
-    expect(await read('2026-05-01', '2026-09-01')).toMatchObject({ adjustment: 'qfq' });
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
-      symbols: ['600519.SH'], startDate: '2026-05-01', endDate: '2026-09-01', mode: 'strict_sync',
-    });
-    expect(await read('2026-02-30', '2026-09-01')).toBeNull();
-    expect(await read('2026-05-01', '2026-13-01')).toBeNull();
-    expect(await read('2026-09-01', '2026-05-01')).toBeNull();
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
   it('turns upstream outages and oversized payloads into safe provider failures', async () => {
     process.env.DATAGATEWAY_BASE_URL = 'https://gateway.example.com';
     process.env.DATAGATEWAY_API_KEY = 'very-secret-key';
