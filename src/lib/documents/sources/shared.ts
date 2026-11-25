@@ -1,7 +1,7 @@
 // src/lib/documents/sources/shared.ts
 // Source adapter plumbing (spec §6.2, §6.1 step 5). One PoliteHttp per source run: declared
 // User-Agent (EDGAR_USER_AGENT ?? DEFAULT_USER_AGENT of the research collectors), a minimum gap
-// between requests (edgar 120 ms, cninfo 500 ms, hkexnews 1000 ms), a per-request timeout of
+// between requests (edgar 150 ms, cninfo 500 ms, hkexnews 1000 ms), a per-request timeout of
 // min(60 s, remaining budget − 20 s) instead of the collectors' fixed 30 s, and 429/503 back-off
 // 1→2→4→8 s that stops when the budget cannot cover the wait. fetchBytes reads at most maxBytes:
 // a Content-Length above the cap is answered 'too_large' without reading the body, otherwise the
@@ -9,6 +9,8 @@
 // 'not_found'; any other non-2xx throws HttpError. Segments: backfill = calendar years from
 // sinceYear (ids y<year>, stable across runs); poll = one window [last_success_at − 1 day, today]
 // whose id `poll:<from>` keeps an unfinished window's start, so a resumed poll continues the same list.
+import {createPacer,type Pacer} from '../../sources/pacer';
+import {admitSec,isSecUrl,SEC_HOSTS,secGet,secPacer} from '../../sources/sec-transport';
 import {DEFAULT_USER_AGENT,localDate} from '../../research/ingest/collectors/shared';
 import type {AssetRole,DocClass,DocMime,DocScopeCursor,DocScopeRow,ListedSource} from '../types';
 
@@ -48,7 +50,7 @@ export class HttpError extends Error{
 }
 /** Per-source network policy (SSRF guard): only these hosts, https only except the listed http hosts. */
 export interface HostPolicy{allowedHosts:readonly string[];httpHosts?:readonly string[]}
-export const SEC_HOSTS:readonly string[]=['www.sec.gov','data.sec.gov'];
+export {SEC_HOSTS};
 export const HOST_POLICY:Record<ListedSource,HostPolicy>={
  edgar:{allowedHosts:SEC_HOSTS},
  // the 巨潮 query API is plain http in the collectors (CNINFO_HISTORY); document links are https
@@ -74,7 +76,7 @@ export const MAX_REDIRECTS=3;
 /** Cap for list/JSON/HTML bodies read through getText/postForm (documents use fetchBytes with their own cap). */
 export const LIST_MAX_BYTES=20*1024*1024;
 export const RETRY_AFTER_MAX_MS=60_000;
-export interface HttpOptions extends HostPolicy{fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number;sleep?:(ms:number)=>Promise<void>;clock?:()=>number}
+export interface HttpOptions extends HostPolicy{pacer?:Pacer;fetch?:typeof fetch;userAgent?:string;minIntervalMs?:number;sleep?:(ms:number)=>Promise<void>;clock?:()=>number}
 export interface PoliteHttp{
  /** The User-Agent sent to this URL's host: the contact UA for SEC hosts only. */
  userAgentFor(url:string):string;
@@ -122,14 +124,19 @@ async function readCapped(res:Response,maxBytes:number):Promise<Uint8Array|'too_
 
 export function politeHttp(opts:HttpOptions):PoliteHttp{
  const doFetch=opts.fetch??fetch;
+ const pacer=opts.pacer??(opts.minIntervalMs===undefined?secPacer:createPacer(opts.minIntervalMs));
  const contactUa=opts.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT;
  const policy:HostPolicy={allowedHosts:opts.allowedHosts,httpHosts:opts.httpHosts};
  const gap=opts.minIntervalMs??0;const sleep=opts.sleep??realSleep;const clock=opts.clock??Date.now;
  let last=Number.NEGATIVE_INFINITY;
  // Request-start reservations are serialized (retries and redirect hops included): concurrent callers queue behind each other.
  let queue:Promise<unknown>=Promise.resolve();
- const pace=():Promise<void>=>{
-  const turn=queue.then(async()=>{const wait=last+gap-clock();if(wait>0)await sleep(wait);last=clock();});
+ const pace=(isSec:boolean):Promise<void>=>{
+  const turn=queue.then(async()=>{
+   if(isSec)await admitSec(pacer,{now:clock,sleep,minIntervalMs:opts.minIntervalMs,notBeforeMs:last+gap});
+   else{const wait=last+gap-clock();if(wait>0)await sleep(wait);}
+   last=clock();
+  });
   queue=turn.catch(()=>undefined);
   return turn;
  };
@@ -140,9 +147,11 @@ export function politeHttp(opts:HttpOptions):PoliteHttp{
    const bad=urlRejection(url,policy);
    if(bad!==null)throw new Error(`url_rejected: ${bad}`);
    const timeout=requestTimeoutMs(budget);
-   await pace();
+   const isSec=isSecUrl(url);
+   await pace(isSec);
    const headers:Record<string,string>={'User-Agent':userAgentFor(url),...(method==='POST'?{'Content-Type':'application/x-www-form-urlencoded'}:{}),...init.headers};
-   const res=await doFetch(url,{method,headers,body,signal:AbortSignal.timeout(timeout),redirect:'manual'});
+   const requestInit={method,headers,body,signal:AbortSignal.timeout(timeout),redirect:'manual' as const};
+   const res=await (isSec?secGet(url,{...requestInit,userAgent:contactUa,fetch:doFetch}):doFetch(url,requestInit));
    if(res.ok)return res;
    if(res.status>=300&&res.status<400){
     const loc=res.headers.get('location');

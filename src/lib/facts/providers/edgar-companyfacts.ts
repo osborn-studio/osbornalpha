@@ -1,6 +1,6 @@
 // src/lib/facts/providers/edgar-companyfacts.ts
 // EDGAR companyfacts adapter (spec §6.2; §3 selection rule; §4.7 raw_hash). fetchCompanyFacts: one paced
-// GET (≥120 ms between SEC requests per process), timeout min(60 s, remaining − 20 s), 429/503 backoff
+// GET (≥150 ms between SEC requests per process), timeout min(60 s, remaining − 20 s), 429/503 backoff
 // 1→2→4→8 s stopped by the budget, 404 → no_companyfacts, >50 MB → snapshot_too_large. parseCompanyFacts:
 // numbers decoded by field schema (cik/fy control, val decimal), per (accn,start,end,unit) the first tag
 // in catalogue order with an entry wins and lower tags only fill missing periods, same-tag disagreement
@@ -14,6 +14,7 @@
 // (3) odd durations: disagreement → ambiguous, otherwise every entry is parked. (4) SEC pacing reserves request
 // slots synchronously (concurrency-safe). (5) The body download sits inside the retry boundary. (6) Filings
 // of other forms (8-K, DEF 14A, …) become formType 'other' filings and are kept as disclosures, by design.
+import {secGet} from '../../sources/sec-transport';
 import type {Budget,ConceptDef,Duration,FactCandidate,FilingCandidate,FormType,ParseResult,RawSnapshot} from '../types';
 import {FACT_CONCEPTS} from '../concepts';
 import {EDGAR_NUMBER_SCHEMA,canonicalDecimal,decodeWithSchema,scanJsonNumbers} from '../json-numbers';
@@ -47,7 +48,7 @@ export async function fetchCompanyFacts(cik10:string,budget:Budget,opts:FetchOpt
   if(timeoutMs<=0)throw new ProviderError('sec_unavailable','budget_exhausted');
   let detail:string;
   try{
-   const res=await doFetch(url,{headers:{'User-Agent':ua,'Accept-Encoding':'gzip, deflate',Accept:'application/json'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});
+   const res=await secGet(url,{fetch:doFetch,userAgent:ua,headers:{'Accept-Encoding':'gzip, deflate'},accept:'application/json',signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});
    if(res.status===404)throw new ProviderError('no_companyfacts',`404 ${url}`);
    if(res.status===429||res.status===503)detail=`http_${res.status}_retries_exhausted`;
    else{

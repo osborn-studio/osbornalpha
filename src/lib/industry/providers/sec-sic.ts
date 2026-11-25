@@ -8,6 +8,8 @@
 // Both requests declare the User-Agent (env EDGAR_USER_AGENT, else the landed DEFAULT_USER_AGENT of
 // collectors/shared.ts). Fair access (≤ 10 req/s) is the caller's pacing (sic.ts). Outcomes are values, not
 // throws: 404 → not_found (no_submissions); 429 / 5xx / network → unavailable (sec_unavailable).
+import type {Pacer} from '../../sources/pacer';
+import {admitSec,secGet} from '../../sources/sec-transport';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
@@ -44,10 +46,12 @@ export function parseSubmissionsSic(bytes:Uint8Array):SubmissionsSic{
 }
 
 export type SubmissionsFetch={kind:'ok';url:string;fetchedAt:string;rawHash:string;parsed:SubmissionsSic}|{kind:'not_found';url:string;status:number}|{kind:'unavailable';url:string;status:number|null};
-export async function fetchSubmissionsSic(cik:string,opts:{fetch?:typeof fetch;userAgent?:string;now?:()=>Date}={}):Promise<SubmissionsFetch>{
+type SicOptions={fetch?:typeof fetch;userAgent?:string;now?:()=>Date;pacer?:Pacer};
+export async function fetchSubmissionsSic(cik:string,opts:SicOptions={}):Promise<SubmissionsFetch>{
  const url=submissionsUrl(cik);
+ await admitSec(opts.pacer);
  let res:Response;
- try{res=await (opts.fetch??fetch)(url,{headers:{'User-Agent':opts.userAgent??secUserAgent(),Accept:'application/json'},signal:AbortSignal.timeout(30_000)});}
+ try{res=await secGet(url,{fetch:opts.fetch,userAgent:opts.userAgent??secUserAgent(),accept:'application/json',signal:AbortSignal.timeout(30_000)});}
  catch{return {kind:'unavailable',url,status:null};}
  if(res.status===404)return {kind:'not_found',url,status:404};
  if(!res.ok)return {kind:'unavailable',url,status:res.status};
@@ -79,10 +83,11 @@ export function parseSicCodeTable(html:string):{rows:SicCodeRow[];rejected:strin
 }
 
 export type SicTableFetch={kind:'ok';url:string;fetchedAt:string;rawHash:string;rows:SicCodeRow[];rejected:string[]}|{kind:'unavailable';url:string;status:number|null};
-export async function fetchSicCodeTable(opts:{fetch?:typeof fetch;userAgent?:string;now?:()=>Date}={}):Promise<SicTableFetch>{
+export async function fetchSicCodeTable(opts:SicOptions={}):Promise<SicTableFetch>{
  const url=SIC_CODE_LIST_URL;
+ await admitSec(opts.pacer);
  let res:Response;
- try{res=await (opts.fetch??fetch)(url,{headers:{'User-Agent':opts.userAgent??secUserAgent(),Accept:'text/html'},signal:AbortSignal.timeout(30_000)});}
+ try{res=await secGet(url,{fetch:opts.fetch,userAgent:opts.userAgent??secUserAgent(),accept:'text/html',signal:AbortSignal.timeout(30_000)});}
  catch{return {kind:'unavailable',url,status:null};}
  if(!res.ok)return {kind:'unavailable',url,status:res.status};
  let bytes:Uint8Array;

@@ -1,4 +1,6 @@
 /** Shared collector plumbing: polite fetch, receipts, and versioned writes. */
+import { createPacer } from '../../../sources/pacer';
+import {admitSec,isSecUrl,secGet,secPacer} from '../../../sources/sec-transport';
 import { ingestVersioned } from './write';
 import type { IngestSourceInput } from '../../sources';
 import type { CollectFailure, CollectOptions, CollectReceipt, CollectorCompany, CollectorSource } from './types';
@@ -15,11 +17,18 @@ export function createClient(opts: CollectOptions, defaultIntervalMs: number): C
   const doFetch = opts.fetch ?? fetch;
   const ua = opts.userAgent ?? process.env.EDGAR_USER_AGENT ?? DEFAULT_USER_AGENT;
   const gap = opts.minIntervalMs ?? defaultIntervalMs;
+  const pacer = opts.pacer ?? (opts.minIntervalMs === undefined ? secPacer : createPacer(gap));
   let last = 0;
   const pace = async () => { const wait = last + gap - Date.now(); if (wait > 0) await new Promise(r => setTimeout(r, wait)); last = Date.now(); };
   const call = async (url: string, init: RequestInit) => {
-    await pace();
-    return doFetch(url, { ...init, headers: { 'User-Agent': ua, ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(30_000) });
+    const isSec = isSecUrl(url);
+    if (isSec) {
+      await admitSec(pacer, { minIntervalMs: opts.minIntervalMs, notBeforeMs: last + gap });
+      last = Date.now();
+    }
+    else await pace();
+    const requestInit = { ...init, headers: { 'User-Agent': ua, ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(30_000) };
+    return isSec ? secGet(url, { ...requestInit, userAgent: ua, fetch: doFetch }) : doFetch(url, requestInit);
   };
   return {
     get: (url, headers) => call(url, { method: 'GET', headers }),

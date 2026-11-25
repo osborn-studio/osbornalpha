@@ -19,12 +19,12 @@
  * whole-market page into a scratch directory first, and only move into fixtures/tushare what tests should see.
  * Exit 1 on an upstream error (Tushare code ≠ 0, HTTP ≠ 200), 2 on bad arguments or a missing token.
  */
+import {admitSec,secGet as getSecResponse} from '../../src/lib/sources/sec-transport';
 import {createHash} from 'node:crypto';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tushareCallRaw} from '../../src/lib/data/sources/tushare';
-import {DEFAULT_USER_AGENT} from '../../src/lib/research/ingest/collectors/shared';
 
 const ROOT=fileURLToPath(new URL('../../src/lib/industry/fixtures/',import.meta.url));
 const USAGE='usage: record-fixture.ts --sw-classify | --sw-members <l1_code> | --stock-basic <L|D|P> | --sw-daily <index_code> | --daily-basic <YYYYMMDD> | --trade-cal | --sec-submissions <cik> | --sic-codes';
@@ -52,7 +52,8 @@ async function tusharePages(api:string,params:Record<string,unknown>,fields:stri
  }
 }
 async function secGet(url:string):Promise<Uint8Array>{
- const res=await fetch(url,{headers:{'User-Agent':process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,'Accept-Encoding':'gzip, deflate'}});
+ await admitSec();
+ const res=await getSecResponse(url,{headers:{'Accept-Encoding':'gzip, deflate'}});
  if(res.status!==200){console.error(`GET ${url} → HTTP ${res.status}`);process.exit(1);}
  return new Uint8Array(await res.arrayBuffer());
 }

@@ -21,9 +21,9 @@
  * User-Agent = EDGAR_USER_AGENT or DEFAULT_USER_AGENT; paced by the process-wide secPacer. The fixture files are
  * written only after both downloads, their retention and the trim succeeded. Exit 1 on failure, 2 on bad arguments.
  */
+import {secGet} from '../../src/lib/sources/sec-transport';
 import {createHash} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
-import {DEFAULT_USER_AGENT} from '../../src/lib/research/ingest/collectors/shared';
 import {rawStoreFor} from '../../src/lib/dq/raw-dir-store';
 import {budgetFor,secPacer} from '../../src/lib/facts/providers/shared';
 import {IXBRL_PARSER_VERSION,MAX_IXBRL_BYTES} from '../../src/lib/dq/reconcile/ixbrl';
@@ -34,7 +34,7 @@ const sha=(b:Uint8Array|string)=>createHash('sha256').update(b).digest('hex');
 
 async function get(url:string):Promise<Uint8Array>{
  await secPacer.admit({budget:budgetFor(120_000),reserveMs:0});   // the one process-wide SEC pacer
- const res=await fetch(url,{headers:{'User-Agent':process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,Accept:'*/*'},signal:AbortSignal.timeout(60_000)});
+ const res=await secGet(url,{accept:'*/*',signal:AbortSignal.timeout(60_000)});
  if(!res.ok)throw new Error(`http_${res.status} ${url}`);
  const declared=Number(res.headers.get('content-length'));
  if(Number.isFinite(declared)&&declared>MAX_IXBRL_BYTES){await res.body?.cancel();throw new Error(`too_large ${url}`);}

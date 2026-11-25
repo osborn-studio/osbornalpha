@@ -3,6 +3,7 @@
  * forms → primary document text. available_at is the SEC acceptance instant.
  * Fair-access rules: declared User-Agent, ≤10 requests/second.
  */
+import {SEC_MIN_INTERVAL_MS} from '../../../sources/sec-transport';
 import { companyName, createClient, errorMessage, inWindow, isoDate, Receipt, writeDocument } from './shared';
 import type { CollectOptions, CollectReceipt, CollectorCompany } from './types';
 
@@ -26,7 +27,7 @@ interface Recent { accessionNumber: string[]; filingDate: string[]; acceptanceDa
 export async function collectEdgar(opts: CollectOptions & { forms?: string[] }): Promise<CollectReceipt> {
   const clock = opts.now ?? (() => new Date());
   const receipt = new Receipt('edgar', opts.companies.length, clock);
-  const client = createClient(opts, 120);
+  const client = createClient(opts, SEC_MIN_INTERVAL_MS);
   const forms = new Set(opts.forms ?? EDGAR_DEFAULT_FORMS);
   const cap = opts.maxPerCompany ?? 50;
   for (const company of opts.companies) {

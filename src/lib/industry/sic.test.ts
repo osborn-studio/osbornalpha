@@ -1,5 +1,7 @@
 // src/lib/industry/sic.test.ts
-import {describe,it,expect} from 'vitest';
+import {createPacer,type Pacer} from '../sources/pacer';
+import {admitSec} from '../sources/sec-transport';
+import {describe,it,expect,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from '../facts/memory-facts-db';
 import {memoryIndustryDb} from './memory-industry-db';
@@ -214,6 +216,37 @@ describe('runMembershipsSic',()=>{
   expect(await db.membershipsOfIssuer(AAPL,{scheme:'sic'})).toEqual([]);
   expect((tables.rows('issuers').find(i=>i.issuer_id===AAPL)!.provenance as Record<string,unknown>).sec_submissions).toBeUndefined();
   expect(r.errors.some(e=>e.code==='cik_mismatch'&&e.key===AAPL)).toBe(true);
+ });
+ it('keeps the row delay for a missing CIK without admitting a request',async()=>{
+  const {deps,tables}=await setup();
+  await runClassificationsSic(deps);
+  await tables.update('issuers',{issuer_id:MSFT},{cik:null});
+  const pacer=createPacer(0);
+  const admit=vi.spyOn(pacer,'admit');
+  const sleep=vi.fn(noSleep);
+  const r=await runMembershipsSic(deps,{limit:2,pacer,sleep});
+  expect(r.processed).toBe(2);
+  expect(admit).toHaveBeenCalledTimes(1);
+  expect(sleep.mock.calls).toEqual([[150]]);
+ });
+ it('waits only the remaining shared interval after the issuer lookup',async()=>{
+  const {deps,tables}=await setup();
+  await runClassificationsSic(deps);
+  let time=0;
+  const waits:number[]=[];
+  const shared=createPacer(150);
+  const pacer:Pacer={...shared,admit:o=>shared.admit({...o,now:()=>time,sleep:async ms=>{waits.push(ms);time+=ms;}})};
+  await admitSec(pacer);   // another requester dispatched at t=0
+  const select=tables.select.bind(tables);
+  vi.spyOn(tables,'select').mockImplementation((table,where,opts)=>{
+   if(table==='issuers')time+=40;
+   return select(table,where,opts);
+  });
+  const starts:number[]=[];
+  const fetch:typeof globalThis.fetch=async(url,init)=>{starts.push(time);return deps.fetch!(url,init);};
+  await runMembershipsSic({...deps,fetch},{limit:1,pacer,sleep:noSleep});
+  expect(waits).toEqual([110]);
+  expect(starts).toEqual([150]);
  });
  it('honours the limit and paces requests',async()=>{
   const {deps}=await setup();

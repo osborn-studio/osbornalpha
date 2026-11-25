@@ -3,7 +3,7 @@
 // manifest (US_SAMPLE_PATH). Per accession, in this order:
 //  1. no local filing (edgar, accn) → every key left_unlinked (the document is not fetched);
 //  2. right document: is_inline_xbrl=false → unsupported(not_inline_xbrl); else GET doc_url with the shared process-wide SEC pacer
-//     (secPacer, 120 ms, User-Agent EDGAR_USER_AGENT/default, 5xx retried twice then THROWN, 429 THROWN at once as sec_rate_limited = execution failure),
+//     (secPacer, 150 ms, User-Agent EDGAR_USER_AGENT/default, 5xx retried twice then THROWN, 429 THROWN at once as sec_rate_limited = execution failure),
 //     404 → unsupported(document_not_found), > 50 MB → unsupported(document_too_large); accepted bytes go to
 //     reconcile-raw (content-addressed, sha256 = right_sha256) and are parsed; IxbrlParseError →
 //     unsupported(parse_error:<code>); no ix element → unsupported(not_inline_xbrl);
@@ -23,6 +23,7 @@
 // document fetched NOW and hashed; unobtainable (sample gone, not inline, 404, too large, SEC down) → null.
 // sec.filer_category is NOT recorded here: its single producer is scripts/dq/filer-categories.ts (Task 17b,
 // spec §6.1; plan 3 接口对齐记录). filerClass stays exported for select-us-sample.ts.
+import {secGet} from '../../sources/sec-transport';
 import {conceptById} from '../../facts/concepts';
 import {tagsOf} from '../../facts/providers/edgar-companyfacts';
 import {secPacer,sleep} from '../../facts/providers/shared';
@@ -78,7 +79,7 @@ export async function fetchSecDocument(url:string,ctx:PairContext):Promise<DocFe
   await secPacer.admit({budget:ctx.budget,reserveMs:RESERVE_MS});
   const timeout=Math.min(60_000,ctx.budget.remainingMs()-RESERVE_MS);
   if(!(timeout>0))throw new Error('sec_unavailable:budget_exhausted');
-  const res=await ctx.fetch(url,{headers:{'User-Agent':ua,Accept:'text/html,application/xhtml+xml'},signal:AbortSignal.any([ctx.budget.signal,AbortSignal.timeout(timeout)])});
+  const res=await secGet(url,{fetch:ctx.fetch,userAgent:ua,accept:'text/html,application/xhtml+xml',signal:AbortSignal.any([ctx.budget.signal,AbortSignal.timeout(timeout)])});
   if(res.status===404){await storeFailure(ctx,res,url);return {status:'not_found'};}
   if(res.status===429){await storeFailure(ctx,res,url);throw new Error('sec_rate_limited');}   // a run failure at once: no retry against a throttling SEC
   if(res.status>=500){

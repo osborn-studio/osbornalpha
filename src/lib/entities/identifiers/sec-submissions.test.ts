@@ -1,9 +1,9 @@
 // src/lib/entities/identifiers/sec-submissions.test.ts
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {describe,it,expect} from 'vitest';
+import {beforeEach,describe,it,expect} from 'vitest';
 import {memoryRawStore} from '../../dq/raw-store';
-import {budgetFor,createPacer} from '../../facts/providers/shared';
+import {budgetFor,createPacer,secPacer} from '../../facts/providers/shared';
 import {fetchCompanyFacts} from '../../facts/providers/edgar-companyfacts';
 import {sanitizeProvenance} from '../provenance';
 import {
@@ -11,6 +11,7 @@ import {
  conflictingAccessions,submissionsCategory,submissionsClient,submissionsEvidenceClaims,submissionsUrl,
 } from './sec-submissions';
 
+beforeEach(()=>secPacer.reset());
 const read=(rel:string)=>readFileSync(new URL(rel,import.meta.url),'utf8');
 const PLTR=read('../../research/ingest/__fixtures__/collectors/edgar-submissions-1321655.json');
 const MAIN=read('../fixtures/sec-submissions/zz-main.json');
@@ -88,7 +89,7 @@ describe('submissionsClient',()=>{
   expect(s.parsed.filings).toHaveLength(3);
   expect(h.raw.objects.size).toBe(2);   // the document + its .meta.json sidecar
  });
- it('fetches the pages a coverFrom date needs, 120 ms apart, merging filings by accession',async()=>{
+ it('fetches the pages a coverFrom date needs, 150 ms apart, merging filings by accession',async()=>{
   const h=harness({[MAIN_URL]:json(MAIN),[PAGE_URL]:json(PAGE)});
   const s=await submissionsClient(h.deps).fetch('999001',{coverFrom:'2001-01-01'});
   expect(h.calls.map(c=>c.url)).toEqual([MAIN_URL,PAGE_URL]);
@@ -132,7 +133,7 @@ describe('submissionsClient',()=>{
   expect(stamps).toHaveLength(4);
   for(let i=1;i<stamps.length;i++)expect(stamps[i]-stamps[i-1]).toBeGreaterThanOrEqual(SEC_MIN_INTERVAL_MS-5);
  });
- it('shares one SEC pacer with companyfacts: a companyfacts call and a submissions call are >= 120 ms apart',async()=>{
+ it('shares one SEC pacer with companyfacts: a companyfacts call and a submissions call are >= 150 ms apart',async()=>{
   const stamps:number[]=[];
   const f=(async()=>{stamps.push(Date.now());return new Response(MAIN,{status:200});}) as typeof globalThis.fetch;
   await fetchCompanyFacts('0000999001',budgetFor(60_000),{fetch:f});

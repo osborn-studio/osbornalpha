@@ -8,12 +8,13 @@
 // `recent` segment only and the adapter reports coverageGap, so the sync core never sets
 // backfill_done and emits coverage_summary. source_ref = '<accession>/<primaryDocument>'; asset =
 // the filing index (required); the XBRL instance is added from the index (optional).
+import {SEC_MIN_INTERVAL_MS} from '../../sources/sec-transport';
 import {primaryDocumentUrl} from '../../research/ingest/collectors/edgar';
 import {DAY_MS,HOST_POLICY,orderListed,pollSegment,urlRejection} from './shared';
 import type {Budget,Listed,ListedAsset,PoliteHttp,Rejection,Segment,SourceAdapter} from './shared';
 import type {DocScopeRow} from '../types';
 
-export const EDGAR_INTERVAL_MS=120;
+export {SEC_MIN_INTERVAL_MS as EDGAR_INTERVAL_MS};
 /** Spec §6.2 default form set; --forms adds to it. */
 export const EDGAR_DOC_FORMS=['10-K','10-Q','20-F','40-F','10-K/A','10-Q/A','20-F/A','8-K','8-K/A','6-K'] as const;
 /** Flipped by the commander after recording real files[] / index.json fixtures (spec §15 q1). */

@@ -31,7 +31,7 @@ describe('productionDocumentsDeps',()=>{
  it('wires the adapter of each source with that source\'s request gap on one shared PoliteHttp',()=>{
   expect(SOURCE_INTERVAL_MS).toEqual({edgar:EDGAR_INTERVAL_MS,cninfo:CNINFO_INTERVAL_MS,hkexnews:HKEX_INTERVAL_MS});
   const e=productionDocumentsDeps('edgar',base());
-  expect(mocks.http.mock.calls[0][0].minIntervalMs).toBe(120);expect(mocks.edgar).toHaveBeenCalledOnce();expect(e.adapter).toEqual({source:'edgar'});
+  expect(mocks.http.mock.calls[0][0].minIntervalMs).toBe(150);expect(mocks.edgar).toHaveBeenCalledOnce();expect(e.adapter).toEqual({source:'edgar'});
   expect(e.userAgent).toBe('ua');expect(e.codeVersion).toBe(SHA);expect(e.deadline).toBeNull();
   productionDocumentsDeps('cninfo',base());
   expect(mocks.http.mock.calls[1][0].minIntervalMs).toBe(500);expect(mocks.cninfo).toHaveBeenCalledOnce();

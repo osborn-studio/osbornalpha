@@ -20,6 +20,7 @@
  * written for review; the FINAL manifest is re-checked for issuer count, mandatory tickers, quotas, 10-K+10-Q / 20-F coverage).
  * The manifest is validated before it is written. Exit 0 ok, 1 on failure or unmet quota, 2 on bad arguments.
  */
+import {secGet} from '../../src/lib/sources/sec-transport';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {fetchCompanyFacts} from '../../src/lib/facts/providers/edgar-companyfacts';
 import {budgetFor,secPacer,snapshotOf} from '../../src/lib/facts/providers/shared';
@@ -54,7 +55,7 @@ function fixtureSample(generatedAt:string):UsSample{
 const UA=process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT;
 async function get(url:string):Promise<Uint8Array>{
  await secPacer.admit({budget:budgetFor(120_000),reserveMs:0});
- const res=await fetch(url,{headers:{'User-Agent':UA},signal:AbortSignal.timeout(60_000)});
+ const res=await secGet(url,{userAgent:UA,signal:AbortSignal.timeout(60_000)});
  if(!res.ok)throw new Error(`http_${res.status} ${url}`);
  const declared=Number(res.headers.get('content-length'));
  if(Number.isFinite(declared)&&declared>MAX_IXBRL_BYTES){await res.body?.cancel();throw new Error(`too_large ${url}`);}
