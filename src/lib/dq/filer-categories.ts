@@ -7,6 +7,7 @@
 // compared with submissions `category` as pair sec.filer_category (record.ts, kind text, record only).
 // fiscal_year = calendar year of the month end nearest the 10-K's period end (calendar.ts
 // fiscalYearOfPeriodEnd), the same label the calendar uses for its N−1 lookup.
+import {secGet} from '../sources/sec-transport';
 import {PacerError,secPacer,sleep} from '../facts/providers/shared';
 import type {Budget,FactsDb} from '../facts/types';
 import type {TableClient} from '../db/table-client';
@@ -21,7 +22,6 @@ import {IXBRL_PARSER_VERSION,parseInlineXbrl} from './reconcile/ixbrl';
 import {filerClass,readLimited} from './reconcile/pair-us-ixbrl';
 import {recordReconciliation} from './reconcile/record';
 import {primaryDocumentUrl} from '../research/ingest/collectors/edgar';
-import {DEFAULT_USER_AGENT} from '../research/ingest/collectors/shared';
 import type {SubmissionsSnapshot} from '../entities/identifiers/sec-submissions';
 
 /** The submissions fields the calendar and this module read. Built only by submissionsView (one adaptation point to Task 6's snapshot). */
@@ -69,13 +69,13 @@ const pacer=secPacer;
 export const resetDocumentPacing=()=>pacer.reset();
 export class FilerCategoryError extends Error{constructor(public readonly code:'document_unavailable'|'document_too_large',message?:string){super(message??code);this.name='FilerCategoryError';}}
 export interface DocumentFetchOptions{fetch?:typeof fetch;userAgent?:string;sleep?:typeof sleep;now?:()=>number}
-/** One SEC archive document (UA, 120 ms pacing, 60 s timeout, 50 MB cap). Thrown messages carry status codes only. */
+/** One SEC archive document (UA, 150 ms pacing, 60 s timeout, 50 MB cap). Thrown messages carry status codes only. */
 export async function fetchSecDocument(url:string,budget:Budget,opts:DocumentFetchOptions={}):Promise<Uint8Array>{
  try{await pacer.admit({budget,reserveMs:RESERVE_MS,now:opts.now,sleep:opts.sleep});}catch(e){throw new FilerCategoryError('document_unavailable',e instanceof PacerError?e.code:'budget_aborted');}
  const timeoutMs=Math.min(60_000,budget.remainingMs()-RESERVE_MS);
  if(timeoutMs<=0)throw new FilerCategoryError('document_unavailable','budget_exhausted');
  let res:Response;
- try{res=await (opts.fetch??fetch)(url,{headers:{'User-Agent':opts.userAgent??process.env.EDGAR_USER_AGENT??DEFAULT_USER_AGENT,Accept:'text/html'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});}
+ try{res=await secGet(url,{fetch:opts.fetch,userAgent:opts.userAgent,accept:'text/html',signal:AbortSignal.any([budget.signal,AbortSignal.timeout(timeoutMs)])});}
  catch{throw new FilerCategoryError('document_unavailable','network');}
  if(!res.ok)throw new FilerCategoryError('document_unavailable',`http_${res.status}`);
  const cl=res.headers.get('content-length');

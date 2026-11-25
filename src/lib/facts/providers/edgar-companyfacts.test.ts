@@ -21,7 +21,7 @@ describe('fetchCompanyFacts',()=>{
  beforeEach(()=>{resetSecPacing();});
  afterEach(()=>{vi.useRealTimers();});
  const ok=()=>new Response('{"cik":320193,"facts":{}}',{status:200,headers:{'content-length':'25'}});
- it('backs off 1/2/4/8 s on 429/503 and keeps the 120 ms pace, then returns a sha256-stamped snapshot',async()=>{
+ it('backs off 1/2/4/8 s on 429/503 and keeps the 150 ms pace, then returns a sha256-stamped snapshot',async()=>{
   let t=1_000_000;const now=()=>t;
   const waits:number[]=[];const sleep=vi.fn(async(ms:number)=>{waits.push(ms);t+=ms;});
   let attempts=0;   // own counter: an initializer that reads `fetch.mock.calls` refers to the variable being declared (TS7022/TS7024, round-2 #5)
@@ -31,7 +31,7 @@ describe('fetchCompanyFacts',()=>{
   expect(fetch.mock.calls[0][0]).toBe(companyFactsUrl('0000320193'));
   expect(fetch.mock.calls[0][1]?.headers).toMatchObject({'User-Agent':'ua','Accept-Encoding':'gzip, deflate'});
   expect(waits.filter(w=>w>=1000)).toEqual([1000,2000]);
-  expect(waits.filter(w=>w<1000).every(w=>w<=120)).toBe(true);
+  expect(waits.filter(w=>w<1000).every(w=>w<=150)).toBe(true);
   expect(s.sha256).toMatch(/^[0-9a-f]{64}$/);expect(s.meta).toMatchObject({source:'edgar',http_status:200,url:companyFactsUrl('0000320193')});
  });
  it('maps 404 → no_companyfacts, exhausted retries → sec_unavailable, >50 MB → snapshot_too_large, no budget → sec_unavailable without a request',async()=>{
@@ -233,7 +233,7 @@ describe('fetchCompanyFacts: pacing and body failures',()=>{
   await expect(fetchCompanyFacts('0000000001',budget(20_100),{fetch,sleep,now:()=>t,userAgent:'ua'})).rejects.toMatchObject({code:'sec_unavailable',message:'sec_unavailable: budget_exhausted'});
   expect(sleep).not.toHaveBeenCalled();expect(fetch).toHaveBeenCalledTimes(1);
  });
- it('12 concurrent calls start at least 120 ms apart',async()=>{
+ it('12 concurrent calls start at least 150 ms apart',async()=>{
   vi.useFakeTimers();
   const starts:number[]=[];
   const fetch=vi.fn<FetchFn>(async()=>{starts.push(Date.now());return new Response('{"cik":1,"facts":{}}',{status:200});});
@@ -241,7 +241,7 @@ describe('fetchCompanyFacts: pacing and body failures',()=>{
   await vi.advanceTimersByTimeAsync(5000);
   await Promise.all(calls);
   expect(starts).toHaveLength(12);
-  for(let i=1;i<starts.length;i++)expect(starts[i]-starts[i-1]).toBeGreaterThanOrEqual(120);
+  for(let i=1;i<starts.length;i++)expect(starts[i]-starts[i-1]).toBeGreaterThanOrEqual(150);
  });
  it('a body failure is retried like a network error and ends as sec_unavailable; too-large stays non-retryable',async()=>{
   const sleep=async()=>{};

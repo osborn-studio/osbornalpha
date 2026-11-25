@@ -1,11 +1,12 @@
 // src/lib/documents/deps.ts
 // Production wiring of the document pipeline (spec §6.1, §6.3). productionDocumentsDeps builds one
-// PoliteHttp per run with the source's request gap (edgar 120 ms, cninfo 500 ms, hkexnews 1000 ms)
+// PoliteHttp per run with the source's request gap (edgar 150 ms, cninfo 500 ms, hkexnews 1000 ms)
 // shared by the list adapter and the document downloads, plus the Supabase DocumentsDb / TableClient /
 // ObjectStore. documentsCodeVersion delegates to the facts rule (src/lib/facts/sync.ts::resolveCodeVersion):
 // cron routes accept only a full VERCEL_GIT_COMMIT_SHA (allowGit false); scripts may fall back to
 // `git rev-parse HEAD` (+ -dirty). null = refuse to apply. Sync wiring only: extraction wiring is
 // extract/deps.ts (Task 10), candidates wiring is candidates/run.ts::supabaseCandidatesDeps (Task 15).
+import {secPacer} from '../sources/sec-transport';
 import {createClient} from '@supabase/supabase-js';
 import {supabaseTableClient} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
@@ -106,7 +107,7 @@ export interface DocumentsDepsOptions{
 }
 export function productionDocumentsDeps(source:ListedSource,opts:DocumentsDepsOptions):SyncDeps{
  const sb=opts.admin??(opts.deadline?deadlineAdminSupabase(opts.deadline):getAdminSupabase());
- const http=politeHttp({...HOST_POLICY[source],minIntervalMs:SOURCE_INTERVAL_MS[source],fetch:opts.fetch,userAgent:opts.userAgent});
+ const http=politeHttp({...HOST_POLICY[source],...(source==='edgar'?{pacer:secPacer}:{}),minIntervalMs:SOURCE_INTERVAL_MS[source],fetch:opts.fetch,userAgent:opts.userAgent});
  const adapter:SourceAdapter=source==='edgar'?edgarAdapter({http,forms:[...new Set([...EDGAR_DOC_FORMS,...(opts.extraForms??[])])]})
   :source==='cninfo'?cninfoAdapter({http,allAnnouncements:opts.allAnnouncements}):hkexnewsAdapter({http,allAnnouncements:opts.allAnnouncements});
  return {db:supabaseDocumentsDb(sb),tables:supabaseTableClient(sb),store:supabaseObjectStore(sb),adapter,fetchBytes:http.fetchBytes,

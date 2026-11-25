@@ -8,6 +8,7 @@
 // leaves such an accession out, acceptance enrichment skips it). Parsers are pure and strict about the columnar `filings.recent` shape (every
 // column has one entry per accession). 8-A12B/8-A12G/25/25-NSE become evidence_only claims that
 // never prefill a security or an effective date (the reviewer reads the filing, spec §4.2.1).
+import {secGet} from '../../sources/sec-transport';
 import type {Budget} from '../../facts/types';
 import type {Pacer} from '../../facts/providers/shared';
 import {PacerError,SEC_MIN_INTERVAL_MS as SHARED_INTERVAL,secPacer} from '../../facts/providers/shared';
@@ -135,7 +136,7 @@ export function submissionsClient(deps:FetchSubmissionsDeps){
    throw e;
   }
   let res:Response;
-  try{res=await deps.fetch(url,{headers:{'User-Agent':ua,Accept:'application/json'},signal:AbortSignal.any([budget.signal,AbortSignal.timeout(FETCH_TIMEOUT_MS)])});}
+  try{res=await secGet(url,{fetch:deps.fetch,userAgent:ua,accept:'application/json',signal:AbortSignal.any([budget.signal,AbortSignal.timeout(FETCH_TIMEOUT_MS)])});}
   catch(e){throw new SecSubmissionsError('sec_unavailable',`${name}: ${e instanceof Error?e.message:String(e)}`);}
   let bytes:Uint8Array;
   try{bytes=new Uint8Array(await res.arrayBuffer());}

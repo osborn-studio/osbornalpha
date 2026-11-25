@@ -19,6 +19,8 @@
 //    Skips (informational): no_cik, no_submissions (404), no_sic; sec_unavailable (429/5xx/network) is an error entry
 //    (batch partial, retried next day); quarantined: unknown_sic_code (code not in the classification table), same_day_change. Batch dataset industry.sic.memberships,
 //    freshness cadence weekly (cron 0 2 * * *, daily, limit 200; the weekly figure is the staleness budget, spec §18 #69).
+import type {Pacer} from '../sources/pacer';
+import {SEC_MIN_INTERVAL_MS} from '../sources/sec-transport';
 import type {Row,TableClient} from '../db/table-client';
 import {TableError,selectAll} from '../db/table-client';
 import type {BatchError,TriggeredBy} from '../dq/batches';
@@ -37,7 +39,7 @@ export const SIC_VERSION='sec-current';
 export const SIC_CLASSIFY_DATASET='industry.sic.classifications';
 export const SIC_DATASET='industry.sic.memberships';
 export const SIC_SOURCE='sec:submissions';
-export const SEC_MIN_INTERVAL_MS=150;
+export {SEC_MIN_INTERVAL_MS};
 const DAY=86_400_000;
 const RETRY_UNAVAILABLE_MS=DAY,NEXT_RUN_MS=7*DAY,LEASE_MS=15*60_000,DUE_PAGE=500;
 const iso=(ms:number)=>new Date(ms).toISOString();
@@ -109,7 +111,7 @@ export async function syncSicScope(deps:Pick<IndustryDeps,'tables'|'facts'|'now'
 
 const provOf=(row:Row)=>(row.provenance&&typeof row.provenance==='object'?row.provenance:{}) as Record<string,unknown>;
 
-export interface RunMembershipsSicOptions{limit?:number;triggeredBy?:TriggeredBy;userAgent?:string;sleep?:(ms:number)=>Promise<void>}
+export interface RunMembershipsSicOptions{limit?:number;triggeredBy?:TriggeredBy;userAgent?:string;pacer?:Pacer;sleep?:(ms:number)=>Promise<void>}
 export interface RunMembershipsSicResult extends RunResult{processed:number;added:number;retired:number}
 
 export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSicOptions={}):Promise<RunMembershipsSicResult>{
@@ -149,7 +151,7 @@ export async function runMembershipsSic(deps:IndustryDeps,opts:RunMembershipsSic
    const cik=issuer&&typeof issuer.cik==='string'?issuer.cik:null;
    if(!issuer||!cik){skips.push('no_cik');ok=true;}   // informational skip: the row is finished successfully (next week), not 'failed'
    else{
-    const sub=await fetchSubmissionsSic(cik,{fetch:deps.fetch,userAgent:opts.userAgent,now:deps.now});
+    const sub=await fetchSubmissionsSic(cik,{pacer:opts.pacer,fetch:deps.fetch,userAgent:opts.userAgent,now:deps.now});
     if(sub.kind==='not_found'){skips.push('no_submissions');ok=true;}
     else if(sub.kind==='unavailable'){counts.fetched++;errors.push({code:'sec_unavailable',key:issuerId,message:`status_${sub.status??'network'}`});retryMs=RETRY_UNAVAILABLE_MS;}
     else{

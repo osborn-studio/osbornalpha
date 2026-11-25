@@ -1,3 +1,4 @@
+import type { Pacer } from '../../../sources/pacer';
 import type { ResearchCtx } from '../../store';
 
 export type CollectorSource = 'edgar' | 'cninfo' | 'hkexnews';
@@ -26,6 +27,7 @@ export interface CollectOptions {
   maxPerCompany?: number;
   /** Minimum gap between requests to one host, ms (source default when omitted). */
   minIntervalMs?: number;
+  pacer?: Pacer;
 }
 
 export interface CollectFailure { company: string | null; stage: 'lookup' | 'list' | 'document' | 'ingest'; message: string; url?: string }
