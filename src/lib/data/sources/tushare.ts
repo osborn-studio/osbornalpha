@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { scanJsonNumbers } from '@/lib/facts/json-numbers';
 import type { Budget } from '@/lib/facts/types';
+import { postTushare } from '@/lib/sources/tushare-transport';
 import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
 /**
  * Tushare Pro HTTP API client.
  *
- * Endpoint: https://api.tushare.pro
  * Auth:     POST body includes `token` (env var TUSHARE_TOKEN)
  *
  * Coverage: A-share deep data (income, balance sheet, shareholders, etc).
@@ -18,7 +18,7 @@ import { withQuoteSourceTimeout } from '@/lib/quotes/source-timeout';
  * unlocks daily, daily_basic, fina_indicator with high quota.
  */
 
-export const TUSHARE_ENDPOINT = 'https://api.tushare.pro';
+export { TUSHARE_ENDPOINT } from '@/lib/sources/tushare-transport';
 
 export function isTushareConfigured(): boolean {
   return Boolean(process.env.TUSHARE_TOKEN);
@@ -56,12 +56,7 @@ export async function tushareCall<T = Record<string, any>>(
   // abandoning its wait must not cancel another cache subscriber's request.
   try {
     return await withQuoteSourceTimeout(async (signal) => {
-      const resp = await fetch(TUSHARE_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_name, token, params, fields }),
-        signal,
-      });
+      const resp = await postTushare({ api_name, token, params, fields }, { signal });
       signal.throwIfAborted();
       if (!resp.ok) throw new TushareError(resp.status, `HTTP ${resp.status}`);
       const json: TushareResp = await resp.json();
@@ -634,8 +629,11 @@ export async function tushareCallRaw(api_name: string, params: Record<string, un
   if (timeoutMs <= 0) throw new TushareError(-2, 'budget exhausted');
   const signals = [AbortSignal.timeout(timeoutMs)];
   if (opts.budget) signals.push(opts.budget.signal);
-  const body = JSON.stringify({ api_name, token, params: { ...params, ...(opts.limit !== undefined ? { limit: opts.limit } : {}), ...(opts.offset !== undefined ? { offset: opts.offset } : {}) }, fields });
-  const resp = await (opts.fetch ?? fetch)(TUSHARE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: AbortSignal.any(signals) });
+  const resp = await postTushare({
+    api_name, token,
+    params: { ...params, ...(opts.limit !== undefined ? { limit: opts.limit } : {}), ...(opts.offset !== undefined ? { offset: opts.offset } : {}) },
+    fields,
+  }, { fetch: opts.fetch, signal: AbortSignal.any(signals) });
   if (!resp.ok) throw new TushareError(resp.status, `HTTP ${resp.status}`);
   if (Number(resp.headers.get('content-length') ?? '0') > MAX_TUSHARE_RESPONSE_BYTES) throw new TushareError(-4, 'response too large');
   const bytes = await readBounded(resp, MAX_TUSHARE_RESPONSE_BYTES);

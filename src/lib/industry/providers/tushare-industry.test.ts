@@ -2,6 +2,7 @@
 import {describe,it,expect,vi} from 'vitest';
 import {createHash} from 'node:crypto';
 import {decodeText,defaultTushareCall,fetchDailyBasic,fetchIndexClassify,fetchIndexMembers,fetchStockBasic,fixtureTushareCall,INDUSTRY_PAGING_DIR,industrySnapshotPath,IndustryProviderError,INDEX_MEMBER_FIELDS,locatorOf,ymdToIso} from './tushare-industry';
+import {resetTusharePacing} from '../../sources/tushare-transport';
 import {memorySnapshotStore,SNAPSHOT_BUCKET} from '../../facts/snapshot-store';
 import type {TushareCall} from './tushare-industry';
 
@@ -45,6 +46,7 @@ describe('fixtureTushareCall + fetchers (real recordings, 2026-11-06)',()=>{
   expect(l3.find(r=>r.index_code==='851251.SI')).toMatchObject({industry_name:'白酒Ⅲ',parent_code:'340500',industry_code:'340501'});
  });
  it('index_member_all: l1/is_new filters, limit/offset paging with one page record per response',async()=>{
+  resetTusharePacing(); // Measure only the three admissions in this paging test.
   const sleep=vi.fn(noSleep);
   const y=await fetchIndexMembers(fx,{l1Code:'801120.SI',isNew:'Y'},{sleep,pageSize:50});
   expect(y.map(p=>[p.page,p.offset,p.has_more,p.rows.length])).toEqual([[1,0,true,50],[2,50,true,50],[3,100,false,29]]);

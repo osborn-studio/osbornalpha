@@ -12,6 +12,7 @@
 import {createHash} from 'node:crypto';
 import {existsSync,readdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
+import {TUSHARE_MIN_INTERVAL_MS,tusharePacer} from '../../sources/tushare-transport';
 import {TushareError,tushareCallRaw} from '../../data/sources/tushare';
 import {isTushareQuotaMessage} from '../../facts/providers/tushare-statements';
 import type {NumberSchema} from '../../facts/json-numbers';
@@ -33,7 +34,7 @@ export const DAILY_BASIC_FIELDS=['ts_code','trade_date','close','total_share','f
 export const DAILY_BASIC_SCHEMA:NumberSchema={control:[],decimal:['close','total_share','free_share','total_mv']};
 /** Documented single-call row caps (spec §2): index_member_all 2000, daily_basic 6000; stock_basic/index_classify are small. */
 export const PAGE_SIZE:Record<string,number>={stock_basic:5000,index_classify:2000,index_member_all:2000,daily_basic:6000};
-export const TUSHARE_MIN_INTERVAL_MS=350;
+export {TUSHARE_MIN_INTERVAL_MS} from '../../sources/tushare-transport';
 const MAX_PAGES=200;
 
 /** Full request of one page (spec §4.4): params include limit/offset; fields are the requested column list. */
@@ -58,7 +59,6 @@ export function industrySnapshotPath(api:string,sha256:string):string{
  return `tushare/${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}/${sha256}.json`;
 }
 const sha256Hex=(b:Uint8Array)=>createHash('sha256').update(b).digest('hex');
-const defaultSleep=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms));
 
 /** Text decode: strings stay, null stays, a numeric token keeps its literal text. */
 export function decodeText(fields:string[],items:unknown[][]):Record<string,string|null>[]{
@@ -156,11 +156,14 @@ export function fixtureTushareCall(dirs:string|readonly string[]=INDUSTRY_FIXTUR
 
 /** limit/offset paging until has_more=false; one TusharePage per response. A page identical to the previous one stops with paging_not_advancing. */
 export async function fetchPaged<T>(call:TushareCall,api:string,params:Record<string,unknown>,fields:readonly string[],decode:(f:string[],items:unknown[][])=>T[],opts:FetchOptions):Promise<TusharePage<T>[]>{
- const size=opts.pageSize??PAGE_SIZE[api]??2000;const wait=opts.sleep??defaultSleep;const gap=opts.minIntervalMs??TUSHARE_MIN_INTERVAL_MS;const now=opts.now??(()=>new Date());
+ const size=opts.pageSize??PAGE_SIZE[api]??2000;const now=opts.now??(()=>new Date());
+ const wait=opts.sleep;
+ const admission={budget:UNBOUNDED,reserveMs:0,minIntervalMs:opts.minIntervalMs,sleep:wait?(ms:number)=>wait(ms):undefined,propagateSleepError:true};
  const out:TusharePage<T>[]=[];let prev:string|null=null;
  for(let page=1,offset=0;;page++){
   if(page>MAX_PAGES)throw new IndustryProviderError('too_many_pages',api);
-  if(page>1)await wait(gap);
+  // Preserve the local inter-page wait even when the shared pacer is cold.
+  if(page>1)await tusharePacer.admit({...admission,notBeforeMs:Date.now()+(opts.minIntervalMs??TUSHARE_MIN_INTERVAL_MS)});
   const res=await call(api,{...params,limit:size,offset},fields.join(','));
   // structure first: duplicate names or a row of another width would let projection turn an absent cell into null
   if(new Set(res.fields).size!==res.fields.length)throw new IndustryProviderError('parse_error','duplicate_field');

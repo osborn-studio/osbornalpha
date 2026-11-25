@@ -1,8 +1,8 @@
+import { postTushare } from '@/lib/sources/tushare-transport';
 import { NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
-const TUSHARE_ENDPOINT = 'https://api.tushare.pro';
 const ALLOWED_APIS = new Set([
   // Read-only data endpoints we already use or might want to probe.
   // We intentionally don't allow arbitrary endpoints to avoid making this
@@ -63,11 +63,7 @@ export async function GET(req: Request) {
 
   let resp: Response;
   try {
-    resp = await fetch(TUSHARE_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    resp = await postTushare(body);
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'network failed', api_name }, { status: 502 });
   }

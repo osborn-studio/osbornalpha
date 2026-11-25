@@ -1,4 +1,4 @@
-const TUSHARE_ENDPOINT = 'https://api.tushare.pro';
+import { postTushare } from '@/lib/sources/tushare-transport';
 
 export type SecuritySourceErrorCode =
   | 'source_auth'
@@ -54,17 +54,12 @@ export async function callTushare<T extends Record<string, unknown>>(
   let response: Response;
 
   try {
-    response = await (options.fetchImpl ?? fetch)(TUSHARE_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_name: options.apiName,
-        token,
-        params: options.params,
-        fields: options.fields.join(','),
-      }),
-      signal: controller.signal,
-    });
+    response = await postTushare({
+      api_name: options.apiName,
+      token,
+      params: options.params,
+      fields: options.fields.join(','),
+    }, { fetch: options.fetchImpl, signal: controller.signal });
   } catch (error) {
     throw new SecuritySourceError(isAbortError(error) ? 'source_timeout' : 'source_http', 'tushare');
   } finally {
