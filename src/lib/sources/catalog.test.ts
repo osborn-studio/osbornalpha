@@ -6,6 +6,7 @@ import { KLINE_RANGE_CONFIG } from '@/lib/chart/kline';
 import { klineProviderRoute, providerDefinitions } from '@/lib/data/kline/reliability';
 import { quoteSourcesFor } from '@/lib/data/sources/registry';
 import { DATASET_KEYS } from '@/lib/industry/licenses';
+import { VENDOR_DATASET_KEYS } from '@/lib/industry/vendor/types';
 import type { Market } from '@/lib/supabase/database.types';
 import { capabilityFor, checkRoute, SOURCE_CATALOG, sourceByName } from './catalog';
 
@@ -93,6 +94,17 @@ describe('source catalogue routes', () => {
   });
 });
 
+it('resolves the Gildata product to its SW2021 capabilities and licence rows', () => {
+  const source = sourceByName('datamap-mcp');
+  expect(source?.id).toBe('gildata');
+  expect(source?.licence).toEqual({
+    place: 'industry_dataset_licenses', keys: ['scheme:sw2021:2021', ...VENDOR_DATASET_KEYS],
+  });
+  for (const domain of ['industry_classification', 'industry_aggregates'] as const) {
+    expect(capabilityFor('gildata', domain, 'A')).toMatchObject({ dataClass: 'B' });
+  }
+});
+
 it('keeps catalogue names unique, credentials symbolic and licence references valid', () => {
   const methodologies = Object.keys(JSON.parse(readFileSync('docs/methodologies/licenses.json', 'utf8')));
   const names = SOURCE_CATALOG.flatMap(s => [s.id, ...s.aliases]);
@@ -102,7 +114,7 @@ it('keeps catalogue names unique, credentials symbolic and licence references va
     for (const credential of entry.credentials) expect(credential).toMatch(/^[A-Z][A-Z0-9_]+$/);
     expect(JSON.stringify(entry)).not.toMatch(/[A-Za-z0-9_\-]{32,}/);
     for (const key of entry.licence.keys) {
-      if (entry.licence.place === 'industry_dataset_licenses') expect(DATASET_KEYS).toContain(key);
+      if (entry.licence.place === 'industry_dataset_licenses') expect([...DATASET_KEYS, ...VENDOR_DATASET_KEYS]).toContain(key);
       if (entry.licence.place === 'methodologies_licenses_json') expect(methodologies).toContain(key);
     }
     for (const cap of entry.capabilities) {

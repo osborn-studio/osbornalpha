@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>中国行业 状态汇总</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/e7f107c10d4c61a3e863b6510f7fab5c">
+<link rel="stylesheet" href="/_blob/64aacd73a73d78af6311172313e6f989">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#0a0a0b}
+a{color:#a1a1aa}a:hover{color:#fafafa}
+</style>
+</helmet>
+<div class="oa" style="width:1920px;min-height:2215px;display:flex;flex-direction:column">
+<div style="padding:28px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;align-items:start"><div class="col" style="gap:12px;min-width:0">
+<span class="cap">中文</span>
+<div class="card"><span class="cap">受限 · 非管理员落到申万方案（整页）</span>
+<div class="ph"><h1 class="h1">行业研究</h1><span class="sp"></span><div class="seg"><a href="IndustrySic.dc.html">SIC · 美股（SEC）</a><a href="#sw" class="on" aria-current="true">申万 2021 · A 股 · 受限</a></div></div>
+<div class="note"><span class="row"><span class="st held">受限</span><b>中国行业数据授权待确认</b></span><span style="display:block;margin-top:4px">这部分数据来自商业数据服务，展示条款确认前不对外显示任何数字、名单或图表。美股行业（SIC，SEC 公开数据）可以正常查看。</span>
+<span class="row" style="margin-top:8px"><a href="IndustrySic.dc.html" class="btn pri">切换到 SIC</a><a href="#lic" class="btn">数据来源与授权说明</a></span></div>
+<span class="tiny">没有网格、没有骨架、没有行业名单。来源抽屉走“受限”变体。</span></div>
+
+<div class="card"><span class="cap">内部预览（管理员）</span><div class="adm" role="status"><span class="row"><span class="st recon">内部预览</span><b>仅管理员可见 · 供应商数据尚未获准对外展示</b></span>
+<span style="display:block;margin-top:4px">数据集“恒生聚源 · 行业财务（供应商口径）”的许可状态是“内部”。只有管理员看到这些数字；其他已登录用户看到“数据授权待确认”，并被引到 SIC 方案。公开前，须由 owner 在许可表登记合同条款。</span></div></div>
+
+<div class="card"><span class="cap">空态 · 尚无活跃运行</span>
+<div class="note"><b>尚无数据</b><br>中国行业数据还没有完成首次同步，所以没有可显示的数值。首次运行激活后这里出现网格。<span class="row" style="margin-top:8px"><a href="IndustrySic.dc.html" class="btn">先看 SIC 方案</a></span></div></div>
+
+<div class="card"><span class="cap">加载 · 静态骨架，无转圈、无文字</span>
+<div role="status" aria-busy="true" style="display:grid;grid-template-columns:120px repeat(8,minmax(0,1fr));gap:3px"><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div></div></div>
+
+<div class="card"><span class="cap">读取失败</span>
+<div class="note err" role="alert"><b>读取失败</b><br>显示上次成功响应（[时刻]）。永不以 0 替代缺失。<span class="row" style="margin-top:8px"><button type="button" class="btn">重试</button></span></div></div>
+
+<div class="card"><span class="cap">过期 · 整页 / 单个数据集</span>
+<div class="note warn"><span class="row"><span class="st stale">过期</span><b>数据过期，数值照常显示</b></span><span style="display:block;margin-top:4px">期望每周更新，已超出宽限。页面继续显示最近一次激活的运行（[时刻]）。</span></div>
+<div class="row"><span class="chip"><span class="dot"></span>财务 <span class="m">2026-11-20</span> · 正常</span><span class="chip warn"><span class="dot w"></span>成分 <span class="m">2026-11-10</span> · 过期</span><span class="tiny">只有一个数据集过期时，只变它的芯片，不出整页提示。</span></div>
+<div class="note warn"><span class="row"><span class="st stale">过期</span><b>数据服务已停止更新</b></span><span style="display:block;margin-top:4px">最后一次成功取数是 [日期]。页面保留最后一代数据并标为过期，直到管理员撤回。</span></div></div>
+
+<div class="card"><span class="cap">部分覆盖</span>
+<div class="row"><span class="hc na" style="width:120px">覆盖不足<small>0.62</small></span><span class="sub" style="flex:1;min-width:200px">聚合覆盖低于 0.8 时不显示聚合值，只写覆盖率；抽屉里给分子、分母。</span></div>
+<div class="note"><b>31 个行业中 27 个有值</b><br>其余 4 个为缺失或覆盖不足，照常列在网格里并写明原因。</div></div>
+
+<div class="card"><span class="cap">未服务的小节（保留小节，写明状态）</span>
+<div class="row"><h2 class="h2">估值与分位</h2><span class="tag fact">事实</span></div>
+<div class="note"><span class="st">未服务</span> <b>这个行业暂不提供估值</b><br>不显示任何估值，也不用其他来源的值顶替。</div>
+<div class="row"><span class="hc na" style="width:220px;flex-direction:row;gap:6px">未服务<small>不适用于该行业</small></span><span class="tiny">例：金融类行业的毛利率</span></div></div>
+
+<div class="card"><span class="cap">缺失格的原因（文案不含原始代码）</span>
+<table class="t"><tbody><tr><td><span class="st miss">缺失 · 供应商未提供</span></td><td class="dim">供应商的返回里没有这一项。</td></tr><tr><td><span class="st miss">缺失 · 解析失败</span></td><td class="dim">返回的格式和预期不一致，已隔离待查；不从文字里猜数字。</td></tr><tr><td><span class="st miss">缺失 · 历史不足</span></td><td class="dim">样本数不够算这个统计量。</td></tr><tr><td><span class="st miss">缺失 · 分母无效</span></td><td class="dim">分母为负或为零，比率没有意义（例如亏损时的市盈率）。</td></tr><tr><td><span class="st miss">缺失 · 无对比期</span></td><td class="dim">没有上年同期可比。</td></tr></tbody></table></div>
+
+<div class="card"><span class="cap">已撤回 · 运行被撤回</span>
+<div class="note err"><span class="row"><span class="st retr">已撤回</span><b>这次运行已被撤回</b></span><span style="display:block;margin-top:4px">数值不再显示。若有上一代运行，页面回到上一代并标明代次；否则为空态。</span></div></div>
+
+<div class="card"><span class="cap">阶段视图的三种不可用</span>
+<div class="note"><span class="st">无判断</span> <b>尚未发布阶段判断方法</b><br>只列事实，不分组。</div>
+<div class="note"><span class="st held">受限</span> <b>阶段分组暂不显示</b><br>分组所用的输入来自尚未获准展示的数据，所以这条判断不对外发布。</div>
+<div class="note"><b>该行业暂无判断</b><br>该范围下没有已登记的判断。事实照常显示。</div></div>
+</div><div class="col" style="gap:12px;min-width:0">
+<span class="cap">English</span>
+<div class="card"><span class="cap">Withheld · a non-admin lands on the SW scheme (whole page)</span>
+<div class="ph"><h1 class="h1">Industry research</h1><span class="sp"></span><div class="seg"><a href="IndustrySic.dc.html">SIC · US (SEC)</a><a href="#sw" class="on" aria-current="true">SW 2021 · A-shares · withheld</a></div></div>
+<div class="note"><span class="row"><span class="st held">Withheld</span><b>China industry data: licence pending</b></span><span style="display:block;margin-top:4px">This data comes from a commercial data service. Until its display terms are confirmed no number, list or chart is shown. US industries (SIC, public SEC data) are available.</span>
+<span class="row" style="margin-top:8px"><a href="IndustrySic.dc.html" class="btn pri">Switch to SIC</a><a href="#lic" class="btn">Sources and licensing</a></span></div>
+<span class="tiny">No grid, no skeleton, no industry list. The source drawer uses its withheld variant.</span></div>
+
+<div class="card"><span class="cap">Internal preview (admins)</span><div class="adm" role="status"><span class="row"><span class="st recon">Internal preview</span><b>Admins only · vendor data is not yet licensed for display</b></span>
+<span style="display:block;margin-top:4px">Dataset "Gildata · industry financials (vendor-reported)" has licence status "internal". Only admins see these numbers; other signed-in users see "data licence pending" and are pointed to the SIC scheme. Before it goes public the owner records the contract clause in the licence table.</span></div></div>
+
+<div class="card"><span class="cap">Empty · no active run yet</span>
+<div class="note"><b>No data yet</b><br>The first sync of China industry data has not completed, so there is nothing to show. The grid appears once the first run is activated.<span class="row" style="margin-top:8px"><a href="IndustrySic.dc.html" class="btn">See the SIC scheme</a></span></div></div>
+
+<div class="card"><span class="cap">Loading · static skeleton, no spinner, no text</span>
+<div role="status" aria-busy="true" style="display:grid;grid-template-columns:120px repeat(8,minmax(0,1fr));gap:3px"><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div><div class="sk" style="height:24px;border-radius:3px"></div></div></div>
+
+<div class="card"><span class="cap">Read error</span>
+<div class="note err" role="alert"><b>Could not load</b><br>Showing the last successful response ([time]). A missing value is never replaced by 0.<span class="row" style="margin-top:8px"><button type="button" class="btn">Retry</button></span></div></div>
+
+<div class="card"><span class="cap">Stale · page / single dataset</span>
+<div class="note warn"><span class="row"><span class="st stale">Stale</span><b>Data is stale; values stay visible</b></span><span style="display:block;margin-top:4px">A weekly update is expected and the grace period has passed. The page keeps showing the most recently activated run ([time]).</span></div>
+<div class="row"><span class="chip"><span class="dot"></span>Financials <span class="m">2026-11-20</span> · fresh</span><span class="chip warn"><span class="dot w"></span>Membership <span class="m">2026-11-10</span> · stale</span><span class="tiny">When only one dataset is stale only its chip changes; no page-level notice.</span></div>
+<div class="note warn"><span class="row"><span class="st stale">Stale</span><b>The data service has stopped updating</b></span><span style="display:block;margin-top:4px">The last successful fetch was on [date]. The page keeps the last generation, marked stale, until an admin withdraws it.</span></div></div>
+
+<div class="card"><span class="cap">Partial coverage</span>
+<div class="row"><span class="hc na" style="width:120px">Low coverage<small>0.62</small></span><span class="sub" style="flex:1;min-width:200px">Below 0.8 coverage no aggregate value is shown, only the ratio; the drawer gives numerator and denominator.</span></div>
+<div class="note"><b>27 of 31 industries have a value</b><br>The other 4 are missing or low coverage; they stay in the grid with their reason.</div></div>
+
+<div class="card"><span class="cap">A section that is not served (the section stays and says so)</span>
+<div class="row"><h2 class="h2">Valuation and percentiles</h2><span class="tag fact">Fact</span></div>
+<div class="note"><span class="st">Not served</span> <b>Valuation is not provided for this industry</b><br>No valuation is shown and no other source stands in for it.</div>
+<div class="row"><span class="hc na" style="width:220px;flex-direction:row;gap:6px">Not served<small>not applicable to this industry</small></span><span class="tiny">e.g. gross margin of a financial industry</span></div></div>
+
+<div class="card"><span class="cap">Reasons on a missing cell (copy holds no raw codes)</span>
+<table class="t"><tbody><tr><td><span class="st miss">Missing · not provided by vendor</span></td><td class="dim">The vendor’s response does not contain this item.</td></tr><tr><td><span class="st miss">Missing · could not be read</span></td><td class="dim">The response did not match the expected shape and is quarantined; no number is guessed from prose.</td></tr><tr><td><span class="st miss">Missing · not enough history</span></td><td class="dim">Too few samples to compute this statistic.</td></tr><tr><td><span class="st miss">Missing · invalid denominator</span></td><td class="dim">The denominator is negative or zero, so the ratio has no meaning (for example PE when earnings are negative).</td></tr><tr><td><span class="st miss">Missing · no prior period</span></td><td class="dim">There is no year-earlier period to compare with.</td></tr></tbody></table></div>
+
+<div class="card"><span class="cap">Retracted · the run was withdrawn</span>
+<div class="note err"><span class="row"><span class="st retr">Retracted</span><b>This run has been withdrawn</b></span><span style="display:block;margin-top:4px">Its values are no longer shown. If an earlier generation exists the page returns to it and names the generation; otherwise it is empty.</span></div></div>
+
+<div class="card"><span class="cap">Three ways the stages view is unavailable</span>
+<div class="note"><span class="st">No judgment</span> <b>No stage method published</b><br>Facts only, no grouping.</div>
+<div class="note"><span class="st held">Withheld</span> <b>Stage grouping is not shown</b><br>The grouping’s inputs come from data not yet licensed for display, so this judgment is not published.</div>
+<div class="note"><b>No judgment for this industry</b><br>No registered judgment exists for this scope. Facts are shown as usual.</div></div>
+</div></div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":2215}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
