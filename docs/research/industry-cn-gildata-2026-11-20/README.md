@@ -14,6 +14,7 @@ sources only". The other mandate rules stand.
 | [03-mapping.md](03-mapping.md) | Each element → vendor, our foundation, our computation, judgment, or not built; replay and source display |
 | [04-spec.md](04-spec.md) | First-release specification draft, phased PRs, owner decisions |
 | [05-design-brief.md](05-design-brief.md) | Brief for the Claude Design canvas |
+| [06-canvas.md](06-canvas.md) | The canvas: link, screens, components for the build, assumptions |
 
 ## Summary
 
