@@ -5,6 +5,7 @@
 // and the immutable judgment row, so a retried request is byte-identical and answers already_applied
 // (R06) instead of request_key_conflict. Each call records an ingest_batches receipt (dataset
 // judgments.settle, triggered_by manual); invalid transitions surface as settlement_sequence (409).
+import {DATASETS} from '../dq/datasets';
 import type {TableClient} from '../db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts} from '../dq/batches';
@@ -22,7 +23,7 @@ export const HTTP_OF:Record<AdminActionResult['outcome'],number>={applied:200,al
 export async function appendAdminSettlement(x:AdminActionInput):Promise<AdminActionResult>{
  const j=await x.db.getJudgment(x.judgmentId);
  if(!j)return {outcome:'unknown_judgment'};
- const {batchId}=await startBatch(x.tables,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:x.codeVersion,triggeredBy:'manual'});
+ const {batchId}=await startBatch(x.tables,{producer:'ts-judgments',dataset:DATASETS.judgments.settle,codeVersion:x.codeVersion,triggeredBy:'manual'});
  const row:SettlementInsert={kind:x.kind,outcome:null,realized:null,evidence:{admin_action:x.kind},resolver:j.condition?.resolver??'none',resolver_version:'admin',
   reason:x.reason,actor:`admin:${x.adminId}`,code_version:x.codeVersion,batch_id:batchId};
  const counts:BatchCounts={...emptyCounts(),fetched:1};

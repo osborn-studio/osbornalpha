@@ -6,6 +6,7 @@
 // and candidates are created through the DocumentsDb contract (migration one's functions), facts
 // through the port, quarantine items with plan-1 quarantine() on the harness TableClient. The
 // world helpers are exported for the pg-only cases of the integration test.
+import {DATASETS} from '../../dq/datasets';
 import {createHash,randomInt,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../../db/table-client';
@@ -244,7 +245,7 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
 
   it('mixed outcome: a quarantined fact keeps its link staged until resolveHkFactsQuarantine promotes it with the hook done; non-HK items are refused',async()=>{
    const w=await hkWorld(h);const r=await hkStagedRun(h,w);
-   const item=await quarantine(h.tables,{dataset:'facts.hk',table:'financial_facts',naturalKey:`${w.iss}:HK:revenue:2024-01-01:2024-12-31:consolidated:CNY:2026-03-20`,reasonCode:'identity_gp',batchId:r.batch,payload:{fact_ids:[],run_id:r.run}});
+   const item=await quarantine(h.tables,{dataset:DATASETS.hkFacts,table:'financial_facts',naturalKey:`${w.iss}:HK:revenue:2024-01-01:2024-12-31:consolidated:CNY:2026-03-20`,reasonCode:'identity_gp',batchId:r.batch,payload:{fact_ids:[],run_id:r.run}});
    expect(await h.port.quarantineFacts(r.run,[r.fact24.fact_id],item)).toBe(1);
    expect(await h.port.publishHkRun(w.iss,r.batch,r.run,[r.filingId],await stateRev(h,w.iss),[])).toBe(1);
    expect(await h.port.finishCandidatePublications(r.run)).toEqual({published:1,still_staged:1,abandoned:0});
@@ -252,7 +253,7 @@ export function hkFactsPortContract(label:string,setup:()=>Promise<HkPortHarness
    expect((await h.docs.candidateById(w.cand24))?.status).toBe('confirmed');
    expect(await dueIds(h,HK_PUB_GEN)).not.toContain(w.iss);                                      // (c) the staged link waits on the owner's decision: not due (P2-6)
    expect(await code(h.port.abandonCandidatePublications(r.run))).toBe('invalid_input');          // a published run is never abandoned
-   const stray=await quarantine(h.tables,{dataset:'facts.hk',table:'financial_facts',naturalKey:`${w.iss}:HK:stray`,reasonCode:'identity_bs',batchId:r.batch,payload:{fact_ids:[],run_id:randomUUID()}});
+   const stray=await quarantine(h.tables,{dataset:DATASETS.hkFacts,table:'financial_facts',naturalKey:`${w.iss}:HK:stray`,reasonCode:'identity_bs',batchId:r.batch,payload:{fact_ids:[],run_id:randomUUID()}});
    expect(await code(h.port.resolveHkFactsQuarantine(stray,[],w.user))).toBe('not_hk_item');
    expect((await itemRow(h,stray)).status).toBe('open');
    expect(await code(h.port.resolveHkFactsQuarantine(randomUUID(),[],w.user))).toBe('not_found');

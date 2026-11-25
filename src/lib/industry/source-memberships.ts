@@ -19,6 +19,7 @@
 // Batch lifecycle: every read/quarantine/write after startBatch sits under a handler (db_error / quarantine_error /
 // upsert_error / fetch_error) that records the error and continues; finishBatch and recordAttempt are always reached.
 // The resolver (resolve-memberships.ts) runs after this as its own step.
+import {DATASETS} from '../dq/datasets';
 import type {BatchError,TriggeredBy} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
@@ -34,7 +35,7 @@ import type {ClassifyInputRow} from './classifications';
 import {canonicalSwCode} from './sw2021';
 
 export const SW_MEMBER_SOURCE='tushare:index_member_all';
-export const SW_SOURCE_DATASET='industry.sw2021.source';
+export const SW_SOURCE_DATASET=DATASETS.industry.swSource;
 export const SW_SOURCE_PRODUCER='industry-sw-members';
 
 export interface FetchedMember extends IndexMemberRow{raw_hash:string;locator:RowLocator;fetched_at:string}

@@ -5,6 +5,7 @@
 // Drift → evidence_ok=false + quarantine span_drift; unreadable artifact → evidence_ok=false +
 // quarantine artifact_unreadable. The cron is the dataset's only recordAttempt caller; only the
 // admin single-document re-run (restore) may set evidence_ok back to true.
+import {DATASETS} from '../dq/datasets';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchError} from '../dq/batches';
 import {quarantine} from '../dq/quarantine';
@@ -75,7 +76,7 @@ export async function verifyDocument(deps:VerifyDeps,doc:DocumentRow,reportId:st
    const e=items.get(k)??{reason:'span_drift',fields:[]};e.fields.push({field:f.field,page:f.page});items.set(k,e);
   }
   for(const [naturalKey,e] of items){
-   await quarantine(deps.tables,{dataset:'broker_research',table:'broker_research_reports',naturalKey,reasonCode:e.reason,payload:{fields:e.fields},detail:{report_id:reportId,document_id:doc.document_id},batchId});
+   await quarantine(deps.tables,{dataset:DATASETS.brokerResearch,table:'broker_research_reports',naturalKey,reasonCode:e.reason,payload:{fields:e.fields},detail:{report_id:reportId,document_id:doc.document_id},batchId});
    quarantineItems++;
   }
  }else if(opts.restore){
@@ -87,7 +88,7 @@ export async function verifyDocument(deps:VerifyDeps,doc:DocumentRow,reportId:st
 }
 
 export async function runVerify(deps:VerifyDeps,opts:VerifyOptions):Promise<VerifyReceipt>{
- const {batchId}=await startBatch(deps.tables,{producer:VERIFY_PRODUCER,dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:opts.triggeredBy});
+ const {batchId}=await startBatch(deps.tables,{producer:VERIFY_PRODUCER,dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:opts.triggeredBy});
  const counts=emptyCounts(),errors:BatchError[]=[],results:VerifyDocResult[]=[];
  let all:{doc:DocumentRow;reportId:string}[];
  if(opts.documentId!==undefined){   // admin re-run: the one document, if it has a published report
@@ -142,6 +143,6 @@ export async function runVerify(deps:VerifyDeps,opts:VerifyOptions):Promise<Veri
   }
  }
  const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
- const freshness=opts.recordFreshness?await recordAttempt(deps.tables,'broker_research',{ok:status!=='failed',cadence:'daily',now:deps.now(),detail:{batch_id:batchId,checked:counts.fetched}}):null;
+ const freshness=opts.recordFreshness?await recordAttempt(deps.tables,DATASETS.brokerResearch,{ok:status!=='failed',cadence:'daily',now:deps.now(),detail:{batch_id:batchId,checked:counts.fetched}}):null;
  return {batchId,status,checked:counts.fetched,remaining:all.length-i,results,freshness,orphansRemoved,writesReconciled};
 }

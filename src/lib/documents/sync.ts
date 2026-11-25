@@ -26,6 +26,7 @@
 // comes from batchStatusFromCounts; freshness ok = idle or at least one issuer success. Dry run:
 // no batch, lease, cursor, object, quarantine or document write; fetches the bytes of the items it
 // would process and plans their outcome against documentVersions.
+import {DATASETS} from '../dq/datasets';
 import {createHash} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
@@ -185,7 +186,7 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
   dirty=false;
  };
  const park=async(reason:string,item:Pick<Listed,'source_ref'|'source_url'>,payload:Record<string,unknown>)=>{
-  if(!dry)await quarantine(deps.tables,{dataset:`documents.${source}`,table:'disclosure_documents',naturalKey:`${source}:${item.source_ref}`,reasonCode:reason,batchId:batchId!,payload:{issuer_id:issuer,source_ref:item.source_ref,url:item.source_url,...payload}});
+  if(!dry)await quarantine(deps.tables,{dataset:DATASETS.documents.sync(source),table:'disclosure_documents',naturalKey:`${source}:${item.source_ref}`,reasonCode:reason,batchId:batchId!,payload:{issuer_id:issuer,source_ref:item.source_ref,url:item.source_url,...payload}});
   out.counts.fetched++;out.counts.quarantined++;
  };
  /** Rows the adapter dropped for an off-allowlist URL: each is quarantined and reported, never silently dropped. */
@@ -199,7 +200,7 @@ async function syncIssuer(ctx:RunCtx,selected:DocScopeRow,track:(o:DocIssuerOutc
  };
  const nearDeadline=(e:unknown)=>/budget_exhausted/.test(errMsg(e))||budget.remainingMs()<MIN_ITEM_MS;
  const openQuarantine=async(ref:string)=>{
-  const rows=await deps.tables.select('dq_quarantine',{dataset:`documents.${source}`,table_name:'disclosure_documents',natural_key:`${source}:${ref}`,status:'open'},{limit:20});
+  const rows=await deps.tables.select('dq_quarantine',{dataset:DATASETS.documents.sync(source),table_name:'disclosure_documents',natural_key:`${source}:${ref}`,status:'open'},{limit:20});
   return rows.some(r=>SKIP_WHILE_OPEN.includes(String(r.reason_code)));
  };
  /** One item; advance:false means "do not advance". */
@@ -385,7 +386,7 @@ async function selectScopes(deps:SyncDeps,opts:SyncOptions):Promise<Selected[]>{
 const unresolvedOutcome=(issuerId:string):DocIssuerOutcome=>({issuerId,fetchKey:'',outcome:'failed',code:'scope_unresolved',counts:{...emptyCounts(),fetched:1,failed:1},errors:[{code:'scope_unresolved',key:issuerId}]});
 
 export async function runDocumentsSync(deps:SyncDeps,opts:SyncOptions):Promise<DocSyncReceipt>{
- const {source}=opts;const dataset=`documents.${source}`;
+ const {source}=opts;const dataset=DATASETS.documents.sync(source);
  if(deps.adapter.source!==source)throw new DocumentsSyncError('adapter_mismatch');
  if(!opts.dryRun&&(deps.codeVersion===null||deps.codeVersion===''))throw new DocumentsSyncError('code_version_unavailable');
  const budget=makeDocBudget(deps.deadline,deps.now);

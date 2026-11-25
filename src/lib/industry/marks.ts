@@ -25,6 +25,7 @@
 // recordAttempt('industry.marks', weekly) and finishBatch close the receipt. Counts: fetched = rows
 // received; inserted/versioned/duplicates from the apply results; quarantined = rule failures
 // parked (those rows are also observations); failed = rejected rows and failed dates.
+import {DATASETS} from '../dq/datasets';
 import type {TriggeredBy,BatchCounts,BatchError,BatchStatus} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
@@ -39,7 +40,7 @@ import {assertDay} from './method';
 import {IndustryDbError} from './types-us';
 import type {IndustryDeps,MarkInput,ObservationResult} from './types-us';
 
-export const MARKS_DATASET='industry.marks';
+export const MARKS_DATASET=DATASETS.industry.marks;
 export const MARKS_SOURCE='tushare:daily_basic';
 export const MARKS_JOB='marks';
 const APPLY_CHUNK=500;

@@ -1,4 +1,5 @@
 // Licensed parse action, private F3 artifact, durable write inventory, and batch receipt (spec §6.2).
+import {DATASETS} from '../dq/datasets';
 import {createHash} from 'node:crypto';
 import {finishBatch,startBatch,emptyCounts} from '../dq/batches';
 import type {BatchError} from '../dq/batches';
@@ -22,7 +23,7 @@ export async function claimForProcessing(deps:BrokerDeps,documentId:string):Prom
  return {doc,licence,token};
 }
 export async function failUnavailable(deps:BrokerDeps,producer:string,documentId:string,token:string,code:'f3_unavailable'|'llm_unavailable'):Promise<never>{
- const {batchId}=await startBatch(deps.tables,{producer,dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const {batchId}=await startBatch(deps.tables,{producer,dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:'manual'});
  await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors:[{code}]},deps.now());
  await deps.db.fencedUpdateDocument(documentId,token,{releaseLease:true});
  throw new BrokerError(code,503);
@@ -32,7 +33,7 @@ const f3Code=(e:unknown)=>e instanceof BrokerError?e.code:e instanceof F3Timeout
 export async function runParse(deps:BrokerDeps,documentId:string,by:string,opts:{deadline:Date}):Promise<ParseResult>{
  const {doc,licence,token}=await claimForProcessing(deps,documentId);
  if(!deps.f3.available())return failUnavailable(deps,'broker-research-parse',documentId,token,'f3_unavailable');
- const {batchId}=await startBatch(deps.tables,{producer:'broker-research-parse',dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const {batchId}=await startBatch(deps.tables,{producer:'broker-research-parse',dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:'manual'});
  const hadSuccess=doc.current_parse_run_id!==null,runId=deps.newId(),path=brokerPaths.artifact(doc.sha256,runId);
  await deps.db.fencedUpdateDocument(documentId,token,{status:'parsing'});
  await deps.db.insertRun({run_id:runId,document_id:documentId,kind:'parse',parse_run_id:null,extractor_version:null,artifact_path:null,artifact_hash:null,

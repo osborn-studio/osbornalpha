@@ -1,3 +1,4 @@
+import {DATASETS} from '@/lib/dq/datasets';
 import { NextResponse } from 'next/server';
 import {
   AdminForbidden,
@@ -154,7 +155,7 @@ export async function POST(request: Request, { params }: Ctx) {
         if (mapped.code !== undefined) extra = { error: mapped.code };
       }
     // FOREIGN ↓ broker_research resolution is atomic in broker_quarantine_resolve
-    } else if (item.dataset === 'broker_research') {
+    } else if (item.dataset === DATASETS.brokerResearch) {
       const payload = (body as { payload?: unknown } | null)?.payload ?? {};
       if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return NextResponse.json({ error: 'invalid_payload' }, { status: 400 });
       try {
@@ -171,7 +172,7 @@ export async function POST(request: Request, { params }: Ctx) {
     // FOREIGN ↑
     // F4 dataset 'judgments' (spec §7.6): src/lib/dq/judgments-resolver.ts. An accept is audited inside the
     // settlement RPC transaction (audited=true → no second audit row here); plain verdicts are audited below.
-    } else if (item.dataset === 'judgments') {
+    } else if (item.dataset === DATASETS.judgments.quarantine) {
       const r = await resolveJudgmentsItem(
         { db: adminJudgmentsDb(admin), tables: client, codeVersion: resolveCodeVersion({ allowGit: false }) },
         item,

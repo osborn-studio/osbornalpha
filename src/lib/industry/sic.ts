@@ -19,6 +19,7 @@
 //    Skips (informational): no_cik, no_submissions (404), no_sic; sec_unavailable (429/5xx/network) is an error entry
 //    (batch partial, retried next day); quarantined: unknown_sic_code (code not in the classification table), same_day_change. Batch dataset industry.sic.memberships,
 //    freshness cadence weekly (cron 0 2 * * *, daily, limit 200; the weekly figure is the staleness budget, spec §18 #69).
+import {DATASETS} from '../dq/datasets';
 import type {Pacer} from '../sources/pacer';
 import {SEC_MIN_INTERVAL_MS} from '../sources/sec-transport';
 import type {Row,TableClient} from '../db/table-client';
@@ -36,8 +37,8 @@ import {fetchSicCodeTable,fetchSubmissionsSic,normalizeCik10} from './providers/
 
 export const SIC_LEVEL=1;
 export const SIC_VERSION='sec-current';
-export const SIC_CLASSIFY_DATASET='industry.sic.classifications';
-export const SIC_DATASET='industry.sic.memberships';
+export const SIC_CLASSIFY_DATASET=DATASETS.industry.classifications('sic');
+export const SIC_DATASET=DATASETS.industry.memberships('sic');
 export const SIC_SOURCE='sec:submissions';
 export {SEC_MIN_INTERVAL_MS};
 const DAY=86_400_000;

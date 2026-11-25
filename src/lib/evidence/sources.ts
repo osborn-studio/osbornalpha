@@ -1,10 +1,11 @@
 // Evidence source ports (topic spec 2026-11-16 §4.1).
+import type {MacroDataset} from '../macro/freshness';
 import type {ObservationRow} from '@/lib/macro/types';
 import type {FactRow} from '@/lib/facts/types';
 import type {Envelope,MethodologyRow} from '@/lib/judgments/types';
 export type Bi={zh:string;en:string};
 export interface MacroSeriesInfo{id:string;name:Bi;unit:string;status:'active'|'missing'|'restricted';rights:'public_domain'|'official_open'|'third_party';
- publisher:Bi;relay:string|null;adapter:string;dataset:'macro.fred'|'macro.akshare'}
+ publisher:Bi;relay:string|null;adapter:string;dataset:MacroDataset}
 export interface MacroRetrieval{retrieval_id:string;fetch_url:string|null;fetched_at:string;sha256:string|null}
 export interface MacroSource{
  rows(ids:readonly string[]):Promise<ObservationRow[]>;                      // any status

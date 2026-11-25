@@ -1,5 +1,6 @@
 // TEST-ONLY PostgreSQL BrokerResearchDb (spec §4.14): drives the shared contract through
 // real tables, SQL functions and public views. Private content is never read from public views.
+import {DATASETS} from '../dq/datasets';
 import type {Pool} from 'pg';
 import {ident,typeParsers} from '../db/pg-table-client';
 import {DEFAULT_QUEUE_LIMIT,FIELD_COLUMNS,HISTORY_COLUMNS,PUBLIC_CITATION_COLUMNS,PUBLIC_TARGET_COLUMNS,PURGE_TEXT,TARGET_COLUMNS,accessFromRow,analystFromRow,analystsDistinct,bundles,documentFromRow,dropUndefined,evalFromRow,fencedArgs,fieldFromRow,institutionFromRow,intentFromRow,licenceFromRow,outboxFromRow,publicRow,publicationFromRow,purgeFromRow,receiptFrom,reportFromRow,runFromRow,scaleFromRow,settingsFromRow,snippetFromRow,sqlColumns,summaryFromRow,targetFromRow,toBrokerResearchDbError,writeFromRow} from './db';
@@ -122,7 +123,7 @@ export function pgBrokerResearchDb(pool:Pool):BrokerResearchDb{
   async markOutbox(id,o){await fn('public.broker_outbox_mark($1,$2,$3)',[id,o.delivered,o.delivered?null:o.error]);},
   async upsertPurgeStep(id,step,o){await fn('public.broker_purge_step_record($1,$2,$3,$4)',[id,step,o.ok,o.ok?null:o.error]);},
   async purgeSteps(id){return (await q(`select * from ${rel('broker_purge_steps')} where document_id=$1 order by step`,[id])).map(purgeFromRow);},
-  async purgeReportText(id,step){const r=await one(`select r.status,d.sha256 from ${rel('broker_research_reports')} r join ${rel('broker_report_documents')} d on d.document_id=r.document_id where r.report_id=$1`,[id]);if(!r)throw missing('report');if(r.status!=='withdrawn')throw new BrokerResearchDbError('report_not_withdrawn');if(step==='quarantine_payload')return (await q(`update public.dq_quarantine set payload='{}'::jsonb where dataset='broker_research' and natural_key like $1 returning 1`,[`${r.sha256}:%`])).length;const t=PURGE_TEXT[step];return (await update(t.table,t.patch,'report_id=$1',[id])).length;},
+  async purgeReportText(id,step){const r=await one(`select r.status,d.sha256 from ${rel('broker_research_reports')} r join ${rel('broker_report_documents')} d on d.document_id=r.document_id where r.report_id=$1`,[id]);if(!r)throw missing('report');if(r.status!=='withdrawn')throw new BrokerResearchDbError('report_not_withdrawn');if(step==='quarantine_payload')return (await q(`update public.dq_quarantine set payload='{}'::jsonb where dataset='${DATASETS.brokerResearch}' and natural_key like $1 returning 1`,[`${r.sha256}:%`])).length;const t=PURGE_TEXT[step];return (await update(t.table,t.patch,'report_id=$1',[id])).length;},
   quarantineResolve:(id,status,by,payload)=>fn('public.broker_quarantine_resolve($1,$2,$3,$4::jsonb)',[id,status,by,payload]),
   async verifyCandidates(n){return (await q(`select d.* from ${rel('broker_report_documents')} d where exists (select 1 from ${rel('broker_research_reports')} r where r.document_id=d.document_id and r.status='published') order by d.last_verified_at asc nulls first,d.document_id limit $1`,[n])).map(documentFromRow);},
   async registerWrite(r){return String((await insert('broker_storage_writes',r as unknown as R,'write_id')).write_id);},

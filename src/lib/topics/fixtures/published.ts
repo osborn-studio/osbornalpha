@@ -1,4 +1,5 @@
 // Topic public fixtures (spec §5.4, §6): real resolver payloads and storage transitions.
+import {DATASETS} from '../../dq/datasets';
 import {memoryResolver} from '@/lib/evidence';
 import {allFixtures} from '@/lib/evidence/fixtures';
 import {OBS} from '@/lib/evidence/fixtures/macro';
@@ -38,7 +39,7 @@ function snapshot(slug:string,items:Resolved[]):TopicSnapshot{
   sections:[{key:'s1',title:{zh:'证据',en:'Evidence'},note:null,items:[...evidence.map(e=>({ordinal:e.ordinal})),{expected_slot:'industry'}]}],evidence,
   expected_slots:[{key:'industry',kind:'industry_metric',label:{zh:'行业数据',en:'Industry data'},reason_code:'industry_not_published'}],
   entries:[{key:'note',entry_type:'owner_note',body:{zh:'记录公开证据的变化。',en:'Record changes in public evidence.'}}],summary:null,counts,
-  freshness_at_publication:{'macro.fred':'fresh','facts.us':'fresh','industry.agg.sic':'fresh'},contract_version:'evidence-ref/1',resolver_versions:resolver.versions()};
+  freshness_at_publication:{[DATASETS.macro.fred]:'fresh',[DATASETS.facts('US')]:'fresh',[DATASETS.industry.aggregate('sic')]:'fresh'},contract_version:'evidence-ref/1',resolver_versions:resolver.versions()};
 }
 export function maskingFixture(){
  const s=snapshot('rates-and-banks',resolved.resolved.slice(0,3));

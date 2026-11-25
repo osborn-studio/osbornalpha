@@ -3,6 +3,7 @@
 // fixtureMacroReadApi (synthetic macro results), syncs the methodology row into a
 // memory JudgmentsDb with a deterministic clock and an optional draft override for gate tests —
 // and builds the golden replay fixture (spec §14.4). Production code never imports this file.
+import {DATASETS} from '../../dq/datasets';
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import type {Input,JudgmentInputsDb,WorkItem} from '@/lib/judgments/types';
@@ -48,7 +49,7 @@ export function macroInputsDb(fx:MacroFixture):JudgmentInputsDb{
 }
 export async function macroDb(status:'active'|'draft'):Promise<MemoryJudgmentsDb>{
  const db=memoryJudgmentsDb();db.setNow(REPLAY_REGISTERED_AT);
- await db.tables.insert('ingest_batches',{batch_id:MACRO_BATCH_ID,status:'running',dataset:'judgments.produce.macro_regime'});
+ await db.tables.insert('ingest_batches',{batch_id:MACRO_BATCH_ID,status:'running',dataset:DATASETS.judgments.produce('macro_regime')});
  const row=methodologyRowOf(macroRegimeV2,formulaHashOf(macroRegimeV2),{publishable:false,code_version:MACRO_CODE_VERSION});
  await db.syncMethodology({...row,status},'script','Task 19 fixture status');
  return db;

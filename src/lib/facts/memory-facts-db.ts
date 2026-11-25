@@ -612,7 +612,7 @@ export function memoryFactsDb(tables:TableClient=memoryTableClient({dq_quarantin
       batch_id:fence.batch_id,status:'open',resolved_by:null,resolved_at:null,created_at:t0});
     }
    }
-   await tables.insert('dq_reconciliations',{id:rid,dataset:`reconcile.${fence.pair}`,left_source:r.left_source,right_source:r.right_source,natural_key:r.natural_key,left_value:r.left_value,right_value:r.right_value,
+   await tables.insert('dq_reconciliations',{id:rid,dataset:DATASETS.reconcile(fence.pair),left_source:r.left_source,right_source:r.right_source,natural_key:r.natural_key,left_value:r.left_value,right_value:r.right_value,
     abs_diff:r.abs_diff,rel_diff:r.rel_diff,tolerance:r.tolerance,passed:r.passed,batch_id:fence.batch_id,pair:fence.pair,kind:r.kind,outcome:r.outcome,detail:{...r.detail,item_id:itemId,inputs_hash:r.inputs_hash??null},
     cycle_id:fence.cycle_id,issuer_id:fence.issuer_id,market:fence.market,attempt:Number(c.attempts),created_at:t0});
    return {reused:false,reconciliationId:rid,itemId,quarantined,materialize:mat};

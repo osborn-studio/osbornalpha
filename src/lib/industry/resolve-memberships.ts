@@ -31,6 +31,7 @@
 // predecessor record was already resolved: the predecessor's ok rows are quarantined atomically through
 // IndustryDb.quarantineMembershipLineage (rpc quarantine_industry_membership_lineage), so they no longer count as members. Correction path (b) (asOf re-resolution →
 // membership_reassigned) waits for spec 3's asOf and is not implemented here.
+import {DATASETS} from '../dq/datasets';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
@@ -43,7 +44,7 @@ import type {DelistingRow,IndustryDeps,MembershipTarget,SourceMembershipRow} fro
 import {persistDelistings,scanDelistings} from './delistings';
 import {IndustryDbError} from './types-us';
 
-export const SW_MEMBERSHIPS_DATASET='industry.sw2021.memberships';
+export const SW_MEMBERSHIPS_DATASET=DATASETS.industry.memberships('sw2021');
 export const SW_RESOLVE_PRODUCER='industry-sw-resolve';
 
 const nextDay=(d:string)=>new Date(Date.parse(`${d}T00:00:00Z`)+86_400_000).toISOString().slice(0,10);

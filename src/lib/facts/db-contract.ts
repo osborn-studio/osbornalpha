@@ -4,6 +4,7 @@
 // unit tests rely on are exactly the SQL functions' rules. Not a test file: it registers
 // describe/it only when called. dq_quarantine items are created with plan-1 quarantine() on the
 // harness TableClient, the way sync.ts will.
+import {DATASETS} from '../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
@@ -43,7 +44,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await db.claimLease(iss,'US',b,600)).toBe(true);
    return {iss,b};
   };
-  const conflict=(iss:string,b:string,run:string,ids:string[],date='2024-02-01')=>quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:revenue:2023-10-01:2023-12-31:consolidated:USD:${date}`,reasonCode:'same_day_conflict',batchId:b,
+  const conflict=(iss:string,b:string,run:string,ids:string[],date='2024-02-01')=>quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:revenue:2023-10-01:2023-12-31:consolidated:USD:${date}`,reasonCode:'same_day_conflict',batchId:b,
    payload:{key:{issuer_id:iss,market:'US',concept:'revenue',period_start:'2023-10-01',period_end:'2023-12-31',consolidation:'consolidated',unit:'USD',available_date:date},fact_ids:ids,values:[],run_id:run}});
   const item=async(id:string)=>{const [r]=await h.tables.select('dq_quarantine',{id});return {status:r.status,fact_ids:(r.payload as {fact_ids:string[]}).fact_ids,chosen:(r.detail as {chosen_fact_ids?:string[]}).chosen_fact_ids??null};};
   const statusOf=async(id:string)=>(await db.factsByIds([id]))[0]?.status??null;
@@ -152,7 +153,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await current(iss,['revenue'],false)).rows.map(y=>y.fact_id)).toEqual([r]);
    expect((await current(iss)).stateRev).toBe(3);
    expect(await db.openConflicts(iss,'US')).toEqual([]);
-   const other=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{},fact_ids:[c2.fact_id],run_id:runC}});
+   const other=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{},fact_ids:[c2.fact_id],run_id:runC}});
    expect(await db.resolveFactsQuarantine(other,[],randomUUID())).toMatchObject({promoted:0,skipped:1});
    expect(await statusOf(c2.fact_id)).toBe('quarantined');
    expect(await code(db.resolveFactsQuarantine(other,[],randomUUID()))).toBe('item_not_open:item_not_open');
@@ -171,7 +172,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const [done]=await h.tables.select('dq_quarantine',{id:itemId});
    expect((done.detail as {chosen_fact_ids:string[]}).chosen_fact_ids).toEqual([c.fact_id]);
    expect((done.detail as {hook:{stage:string;state:string;at:string}}).hook).toMatchObject({stage:'materialize',state:'pending'});
-   const foreign=await quarantine(h.tables,{dataset:'facts.us',table:'other_table',naturalKey:`${iss}:US:${randomUUID()}`,reasonCode:'same_day_conflict',batchId:b,payload:{key:{},fact_ids:[],run_id:runB}});
+   const foreign=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'other_table',naturalKey:`${iss}:US:${randomUUID()}`,reasonCode:'same_day_conflict',batchId:b,payload:{key:{},fact_ids:[],run_id:runB}});
    expect(await code(db.resolveFactsQuarantine(foreign,[],randomUUID()))).toBe('item_not_open:item_not_open');
    expect((await item(foreign)).status).toBe('open');
   });
@@ -315,7 +316,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    // identity item only: it is NOT a member of the dispute.
    const runC=await db.beginRun(iss,'US',b,1);const fc=filingInsert(iss);await db.stageFilings(runC,[fc]);
    const c3=factInsert(iss,fc,{value:'100'});await db.stageFacts(runC,[c3]);
-   const identity=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[c3.fact_id],run_id:runC}});
+   const identity=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[c3.fact_id],run_id:runC}});
    await db.quarantineFacts(runC,[c3.fact_id],identity);
    expect(await db.publishRun(runC,[fc.filing_id])).toBe(0);
    expect(await db.resolveFactsQuarantine(identity,[],randomUUID())).toMatchObject({promoted:0,skipped:1});   // (K, 2024-02-01) is still disputed
@@ -329,7 +330,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
   it('an item without fact rows is run_pending while its anchor run is staged; acknowledged once that run is published or abandoned (round-1 #10)',async()=>{
    const {iss,b}=await published();
    const run=await db.beginRun(iss,'US',b,1);
-   const parked=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:cash::2023-09-30:consolidated:USD:acc-9:1`,reasonCode:'ambiguous_value',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run}});
+   const parked=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:cash::2023-09-30:consolidated:USD:acc-9:1`,reasonCode:'ambiguous_value',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run}});
    expect(await code(db.resolveFactsQuarantine(parked,[],randomUUID()))).toBe('run_pending:run_pending');
    expect((await item(parked)).status).toBe('open');
    expect(await db.publishRun(run,[])).toBe(0);
@@ -337,7 +338,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await item(parked)).status).toBe('resolved_accept');
    expect((await current(iss)).stateRev).toBe(3);                                         // publish + resolution
    const run2=await db.beginRun(iss,'US',b,1);
-   const parked2=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:cash::2023-06-30:consolidated:USD:acc-9:1`,reasonCode:'odd_duration',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run2}});
+   const parked2=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:cash::2023-06-30:consolidated:USD:acc-9:1`,reasonCode:'odd_duration',batchId:b,payload:{key:{issuer_id:iss,market:'US'},fact_ids:[],run_id:run2}});
    expect(await code(db.resolveFactsQuarantine(parked2,[],randomUUID()))).toBe('run_pending:run_pending');
    await db.abandonRun(run2);
    expect(await db.resolveFactsQuarantine(parked2,[],randomUUID())).toMatchObject({promoted:0,skipped:0});
@@ -452,7 +453,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
   it('plan 3 adoptCandidate: invalid_choice and stale_evaluation leave the item open; adoption writes an ok row from the camelCase candidate on the filing generation, resolves the item with the hook, bumps state_rev',async()=>{
    const {iss,b,run,f}=await published();
    const cand=(value:string)=>({concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value,unit:'USD',consolidation:'consolidated',filingRef:f.sourceRef,rawHash:`h-${value}`});
-   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
+   const item=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
     payload:{key:{issuer_id:iss,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD'},candidates:[cand('110'),cand('111')],run_id:run}});
    const by=await h.user();const ab=await h.batch();
    expect(await code(db.adoptCandidate(item,2,ab,1,by))).toBe('invalid_choice:invalid_choice');
@@ -482,7 +483,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect(await db.completeReconcileMember(fence)).toEqual({compared_passed:0,compared_failed:1,not_compared:1});
    expect(await code(db.applyReconcileResult(fence,res('k3')))).toBe('fence_failed:fence_failed');
    const [item]=await h.tables.select('dq_quarantine',{id:q1.itemId!});
-   expect(item).toMatchObject({status:'open',reason_code:'reconcile_mismatch',dataset:'facts.us',natural_key:`${pair}:k1:${r}`});
+   expect(item).toMatchObject({status:'open',reason_code:'reconcile_mismatch',dataset:DATASETS.facts('US'),natural_key:`${pair}:k1:${r}`});
    expect(item.detail).toMatchObject({pair,issuer_id:iss,market:'US',latest_result:{passed:false,inputs_hash:'h1'},hook:{stage:'materialize',state:'pending'}});
    expect(await code(db.restoreReconciled(q1.itemId!,w,'h1',by))).toBe('not_passing:not_passing');
    await closeCycle(pair,c1);
@@ -525,7 +526,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    await db.setMerge(s,t,by);
    const lin=await db.lineageOf(t);
    expect((await db.readFactsLineage(lin,'US',{concepts:['revenue'],asOf:'2030-01-01'})).conflicts.map(cf=>cf.fact_ids)).toEqual([[r,x].sort()]);
-   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:bs,payload:{fact_ids:[r,x],values:[]}});
+   const item=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:bs,payload:{fact_ids:[r,x],values:[]}});
    const ab=await h.batch();
    expect(await code(db.resolveLineageConflict(item,randomUUID(),ab,by))).toBe('invalid_choice:invalid_choice');
    expect(await db.resolveLineageConflict(item,r,ab,by)).toEqual({quarantined:1});
@@ -540,7 +541,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const {iss:t,b,run,f}=await published();const by=await h.user();
    const closed={status:'resolved_reject',resolved_by:by,resolved_at:new Date().toISOString()};
    const cand=(value:string)=>({concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value,unit:'USD',consolidation:'consolidated',filingRef:f.sourceRef,rawHash:`h-${value}`});
-   const mk=(value:string)=>quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
+   const mk=(value:string)=>quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
     payload:{key:{issuer_id:t,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD'},candidates:[cand(value)],run_id:run}});
    // a sibling in the lineage with an ok row on the same key and the filing's available_date, value 200
    const s=await sibling('200',{period_start:'2023-07-01',period_end:'2023-09-30'});await db.setMerge(s.iss,t,by);
@@ -551,7 +552,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    expect((await h.tables.select('dq_quarantine',{id:i1}))[0].status).toBe('open');
    expect(await statusOf(s.x)).toBe('ok');
    // an open lineage_conflict item for the key and date blocks even an equal value
-   const lc=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[],values:[]}});
+   const lc=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[],values:[]}});
    await h.tables.update('dq_quarantine',{id:i1},closed);   // same natural key: the open item would be reused
    const i2=await mk('200');
    expect(await code(db.adoptCandidate(i2,0,ab,await rev(),by))).toBe('conflict_exists:conflict_exists');
@@ -562,7 +563,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    // target dissolved: the lineage no longer has an active target
    const {iss:d,b:bd,run:rd,f:fd}=await published();await db.setDissolved(d,by);
    const cd={concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value:'5',unit:'USD',consolidation:'consolidated',filingRef:fd.sourceRef,rawHash:'h-5'};
-   const i3=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${d}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${fd.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:bd,payload:{key:{issuer_id:d},candidates:[cd],run_id:rd}});
+   const i3=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${d}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${fd.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:bd,payload:{key:{issuer_id:d},candidates:[cd],run_id:rd}});
    expect(await code(db.adoptCandidate(i3,0,ab,(await db.stateRevs([d],'US'))[0].state_rev,by))).toBe('lineage_changed:lineage_changed');
   });
 
@@ -573,28 +574,28 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const run2=await db.beginRun(t,'US',b,2);const a2=factInsert(t,f,{concept:'net_income',value:'5'});await db.stageFacts(run2,[a2]);await db.publishRun(run2,[f.filing_id]);
    const s=await sibling('200');await db.setMerge(s.iss,t,by);
    const nk=`${t}:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-02-01`;
-   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:nk,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[r,s.x],values:[]}});
+   const item=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:nk,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[r,s.x],values:[]}});
    expect(await code(db.resolveLineageConflict(item,r,ab,by))).toBe('unresolved:unresolved');
    expect(await statusOf(s.x)).toBe('ok');expect((await h.tables.select('dq_quarantine',{id:item}))[0].status).toBe('open');   // the quarantine of the others was rolled back
    // a finished (no longer running) batch of the right dataset: batch_mismatch
    const doneBatch=await h.batch();await h.tables.update('ingest_batches',{batch_id:doneBatch},{status:'success',finished_at:new Date(Date.now()+60000).toISOString()});
    expect(await code(db.resolveLineageConflict(item,s.x,doneBatch,by))).toBe('batch_mismatch:batch_mismatch');
    // malformed natural key
-   const bad=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:revenue:2023-10-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[r,s.x],values:[]}});
+   const bad=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:revenue:2023-10-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[r,s.x],values:[]}});
    expect(await code(db.resolveLineageConflict(bad,r,ab,by))).toBe('invalid_choice:invalid_choice');
    // keeping the live row works once; the item is then closed
    expect(await db.resolveLineageConflict(item,s.x,ab,by)).toEqual({quarantined:0});   // r is a superseded-generation row: nothing visible left to quarantine
    expect(await code(db.resolveLineageConflict(item,s.x,ab,by))).toBe('item_not_open:item_not_open');
    // a dissolved target
    const {iss:d,b:bd,r:rd}=await published();await db.setDissolved(d,by);
-   const di=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${d}:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:bd,payload:{fact_ids:[rd],values:[]}});
+   const di=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${d}:revenue:2023-10-01:2023-12-31:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:bd,payload:{fact_ids:[rd],values:[]}});
    expect(await code(db.resolveLineageConflict(di,rd,ab,by))).toBe('target_not_active:target_not_active');
   });
 
   it('plan 3 generic resolver: reconcile_mismatch and lineage_conflict items are use_dedicated_resolver and stay open',async()=>{
    const {iss,b,r}=await published();
    for(const reason of ['reconcile_mismatch','lineage_conflict']){
-    const id=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:${reason}:${randomUUID()}`,reasonCode:reason,batchId:b,payload:{key:{},fact_ids:[r],values:[]}});
+    const id=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:${reason}:${randomUUID()}`,reasonCode:reason,batchId:b,payload:{key:{},fact_ids:[r],values:[]}});
     expect(await code(db.resolveFactsQuarantine(id,[r],randomUUID()))).toBe('use_dedicated_resolver:use_dedicated_resolver');
     expect((await h.tables.select('dq_quarantine',{id}))[0].status).toBe('open');
    }
@@ -618,7 +619,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const {iss,b}=await ready();const run=await db.beginRun(iss,'US',b,1);const f=filingInsert(iss);await db.stageFilings(run,[f]);
    const ok=factInsert(iss,f),qd=factInsert(iss,f,{concept:'total_assets',statement:'BS',period_start:null,duration:'INSTANT'});
    await db.stageFacts(run,[ok,qd]);
-   const gen=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${iss}:US:BS:${randomUUID()}`,reasonCode:'identity_bs',batchId:b,payload:{key:{},fact_ids:[qd.fact_id],run_id:run}});
+   const gen=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${iss}:US:BS:${randomUUID()}`,reasonCode:'identity_bs',batchId:b,payload:{key:{},fact_ids:[qd.fact_id],run_id:run}});
    await db.quarantineFacts(run,[qd.fact_id],gen);await db.publishRun(run,[f.filing_id]);
    const rev0=(await db.stateRevs([iss],'US'))[0].state_rev;
    const pair=newPair();const w=await h.batch();
@@ -667,7 +668,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
    const {iss:t,b,r0,r}=await published();
    const run=await db.beginRun(t,'US',b,1);const fq=filingInsert(t,{availableDate:'2024-03-01'});await db.stageFilings(run,[fq]);
    const q=factInsert(t,fq,{value:'300'});await db.stageFacts(run,[q]);
-   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{},fact_ids:[q.fact_id],run_id:run}});
+   const item=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:US:IS:${randomUUID()}`,reasonCode:'identity_gp',batchId:b,payload:{key:{},fact_ids:[q.fact_id],run_id:run}});
    expect(await db.quarantineFacts(run,[q.fact_id],item)).toBe(1);expect(await db.publishRun(run,[fq.filing_id])).toBe(0);   // the only fact is quarantined
    const run2=await db.beginRun(t,'US',b,1);const fs=filingInsert(t,{availableDate:'2024-04-01'});await db.stageFilings(run2,[fs]);
    const st=factInsert(t,fs,{value:'400'});await db.stageFacts(run2,[st]);   // left staged
@@ -696,7 +697,7 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
   const adoptSetup=async()=>{
    const {iss:t,b,run,f}=await published();const by=await h.user();const ab=await h.batch();
    const cand={concept:'revenue',sourceConcept:'us-gaap:Revenues',statement:'IS',periodStart:'2023-07-01',periodEnd:'2023-09-30',duration:'3M',value:'110',unit:'USD',consolidation:'consolidated',filingRef:f.sourceRef,rawHash:'h-110'};
-   const item=await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
+   const item=await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:${f.sourceRef}:1`,reasonCode:'ambiguous_value',batchId:b,
     payload:{key:{issuer_id:t,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD'},candidates:[cand],run_id:run}});
    const rev=(await db.stateRevs([t],'US'))[0].state_rev;
    const expectRefused=async()=>{
@@ -710,14 +711,14 @@ export function factsDbContract(label:string,setup:()=>Promise<ContractHarness>)
 
   it('plan 3 adoptCandidate: an open same_day_conflict for the key and date refuses adoption although no ok competitor remains',async()=>{
    const {t,b,expectRefused}=await adoptSetup();
-   await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'same_day_conflict',batchId:b,
+   await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:US:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'same_day_conflict',batchId:b,
     payload:{key:{issuer_id:t,market:'US',concept:'revenue',period_start:'2023-07-01',period_end:'2023-09-30',consolidation:'consolidated',unit:'USD',available_date:'2024-02-01'},fact_ids:[],values:[]}});
    await expectRefused();
   });
 
   it('plan 3 adoptCandidate: an open lineage_conflict for the key and date refuses adoption although no ok competitor remains',async()=>{
    const {t,b,expectRefused}=await adoptSetup();
-   await quarantine(h.tables,{dataset:'facts.us',table:'financial_facts',naturalKey:`${t}:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[],values:[]}});
+   await quarantine(h.tables,{dataset:DATASETS.facts('US'),table:'financial_facts',naturalKey:`${t}:revenue:2023-07-01:2023-09-30:consolidated:USD:2024-02-01`,reasonCode:'lineage_conflict',batchId:b,payload:{fact_ids:[],values:[]}});
    await expectRefused();
   });
 

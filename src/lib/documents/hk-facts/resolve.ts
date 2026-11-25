@@ -9,12 +9,13 @@
 // spec-2 resolveFactsItem promotes but records hook 'no_target' failed for a market it does not
 // know): every resolved_accept facts.hk item whose hook is not done gets the done hook. The
 // candidates cron calls it at the start of its promote phase.
+import {DATASETS} from '../../dq/datasets';
 import type {Row,TableClient} from '../../db/table-client';
 import {resolveQuarantine} from '../../dq/quarantine';
 import {decimalEquals} from '../../facts/json-numbers';
 import type {HkFactsPort} from './facts-port';
 
-export const HK_FACTS_ITEM_DATASET='facts.hk';
+export const HK_FACTS_ITEM_DATASET=DATASETS.hkFacts;
 const FACT_ROW_REASONS:readonly string[]=['same_day_conflict','identity_bs','identity_gp'];
 export type HkResolveOutcome='resolved'|'not_found'|'already_resolved'|'not_hk_item'|'invalid_choice'|'run_pending';
 export interface HkResolveInput{status:'resolved_accept'|'resolved_reject';chosenFactIds?:string[];resolvedBy:string}

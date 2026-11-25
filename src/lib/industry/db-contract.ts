@@ -8,6 +8,7 @@
 // marks use harness tickers. The four real licence rows are only read, never changed.
 // Counting convention (apply_observations): a mark input with status 'quarantined' is stored as evidence and counted in
 // `inserted` (the result has no separate count); it never becomes current.
+import {DATASETS} from '../dq/datasets';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
@@ -374,7 +375,7 @@ export function industryDbContract(label:string,setup:()=>Promise<IndustryContra
    const [cur]=await db.currentMarksOn('2001-01-05',[t]);
    expect(cur).toMatchObject({ticker:t,trade_date:'2001-01-05',close:'10.50',total_share:'1000',market_cap:'10500.00',status:'ok',fetch_event_id:e4,upstream:'szse',batch_id:b});
    expect(cur.supersedes).not.toBeNull();
-   const items=await h.tables.select('dq_quarantine',{dataset:'industry.marks',natural_key:`${t}:2001-01-05`,reason_code:'mark_revised',status:'open'});
+   const items=await h.tables.select('dq_quarantine',{dataset:DATASETS.industry.marks,natural_key:`${t}:2001-01-05`,reason_code:'mark_revised',status:'open'});
    expect(items).toHaveLength(1);                                    // one open item per key
    const q=await db.beginFetchEvent('marks',{trade_date:'2001-01-08'},b);
    expect(await db.applyObservations('marks',q,[mark(t,'5',{trade_date:'2001-01-08',status:'quarantined'})])).toEqual({inserted:1,duplicates:0,superseded:0});

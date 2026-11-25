@@ -14,6 +14,7 @@
 // The RPC insert's unique violation (23505: a concurrent producer won) rereads and compares again.
 // The caller owns the batch (produce.ts). Resolvers are injected (resolverOf) so this file does not
 // depend on resolvers/index.ts (Task 11); Task 14's deps.ts wires the real table.
+import {DATASETS} from '../dq/datasets';
 import type {TableClient} from '@/lib/db/table-client';
 import {quarantine} from '@/lib/dq/quarantine';
 import type {Abstained,Active,CategoricalClaim,Claim,Condition,Horizon,Input,IntervalClaim,JudgmentInputsDb,JudgmentInsert,JudgmentRow,JudgmentsDb,Kind,LabelPolicy,Methodology,ProducerRef,PublicSubjectType,Resolver,ResolverName,Subject,Target} from './types';
@@ -137,7 +138,7 @@ export async function registerJudgment(actor:RegisterActor,input:RegisterInput,d
  const settle=async(existing:JudgmentRow):Promise<RegisterResult>=>{
   if(samePayload(existing,row))return {judgment_id,duplicate:true,abstained:row.abstained,dry_run:dry,row,registered_at:existing.registered_at,retrospective:existing.retrospective,quarantined:false};
   if(!dry&&deps.signal?.aborted)throw new RegisterDeferred();
-  if(!dry)await quarantine(deps.tables,{dataset:'judgments',table:'judgments',naturalKey:judgment_id,reasonCode:'idempotency_conflict',batchId:input.batchId,payload:{registered:normalizedPayload(existing),attempted:normalizedPayload(row)}});
+  if(!dry)await quarantine(deps.tables,{dataset:DATASETS.judgments.quarantine,table:'judgments',naturalKey:judgment_id,reasonCode:'idempotency_conflict',batchId:input.batchId,payload:{registered:normalizedPayload(existing),attempted:normalizedPayload(row)}});
   throw new IdempotencyConflict(`${judgment_id}: same id, different payload`,!dry);
  };
  const existing=await db.getJudgment(judgment_id);

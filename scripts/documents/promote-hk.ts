@@ -11,6 +11,7 @@
  * runHkFactsSync. --pub-gen overrides HK_PUB_GEN (owner-run generation bumps only).
  * Exit 0 on success, 1 when any issuer failed, 2 on bad arguments.
  */
+import {DATASETS} from '../../src/lib/dq/datasets';
 import {supabaseTableClient} from '../../src/lib/db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../src/lib/dq/batches';
 import type {BatchError} from '../../src/lib/dq/batches';
@@ -72,7 +73,7 @@ async function main(){
   console.log(JSON.stringify({mode:'dry-run (no batch written; pass --apply to promote)',pubGen:args.pubGen,issuers:report},null,1));
   process.exit(0);
  }
- const {batchId}=await startBatch(tables,{producer:'documents-candidates',dataset:'documents.candidates',toolVersions:{hk_pub_gen:String(args.pubGen),trigger:'promote-hk'},codeVersion:codeVersion as string,triggeredBy:'script'});
+ const {batchId}=await startBatch(tables,{producer:'documents-candidates',dataset:DATASETS.documents.candidates,toolVersions:{hk_pub_gen:String(args.pubGen),trigger:'promote-hk'},codeVersion:codeVersion as string,triggeredBy:'script'});
  let outcomes:Awaited<ReturnType<typeof runHkFactsSync>>=[];
  const counts=emptyCounts();const errors:BatchError[]=[];
  let status;

@@ -1,4 +1,5 @@
 // Topic spec §4.1 industry fixtures.
+import {DATASETS} from '../../dq/datasets';
 import type {MemorySourcesInput} from '../memory-sources';
 import type {IndustryCell} from '../sources';
 export const RUN={sic:'20000000-0000-4000-8000-000000000001',sw:'20000000-0000-4000-8000-000000000002',superseded:'20000000-0000-4000-8000-000000000003',building:'20000000-0000-4000-8000-000000000004',later:'20000000-0000-4000-8000-000000000005'};
@@ -12,5 +13,5 @@ export function industryFixture():MemorySourcesInput{
  });
  const zero=cell(RUN.sic,{},'0000');zero.row={...zero.row!,status:'missing',missing_reason:'zero_denominator',value_text:null};
  return {industry:{cells:[cell(RUN.sic),cell(RUN.sw,{scheme:'sw2021',version:'2021'}),cell(RUN.superseded,{scheme:'sw2021',version:'2021-pub',status:'superseded',history_class:'point_in_time'}),cell(RUN.building,{status:'building',activated_at:null}),cell(RUN.later,{activated_at:'2026-11-20T00:00:00.000Z'}),zero],
-  publicDatasets:['scheme:sic:sec-current','scheme:sw2021:2021-pub']},freshness:{'industry.agg.sic':'fresh'}};
+  publicDatasets:['scheme:sic:sec-current','scheme:sw2021:2021-pub']},freshness:{[DATASETS.industry.aggregate('sic')]:'fresh'}};
 }

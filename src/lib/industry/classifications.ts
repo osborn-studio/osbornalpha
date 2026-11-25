@@ -14,6 +14,7 @@
 // Nodes are only added (upsertClassifications); a node whose stored name/level/parent differs is returned as a
 // conflict and quarantined `classification_name_conflict` (never overwritten). attributes hold only stable upstream
 // fields (no raw_hash / locator: a re-fetch must compare equal); the batch receipt is the node's evidence.
+import {DATASETS} from '../dq/datasets';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
@@ -22,7 +23,7 @@ import type {ClassificationRow,IndustryDeps} from './types-us';
 import type {IndexClassifyRow,RowLocator,SnapshotCapture,TusharePage} from './providers/tushare-industry';
 import {defaultTushareCall,fetchIndexClassify,locatorOf} from './providers/tushare-industry';
 
-export const SW_CLASSIFY_DATASET='industry.sw2021.classifications';
+export const SW_CLASSIFY_DATASET=DATASETS.industry.classifications('sw2021');
 export const SW_CLASSIFY_PRODUCER='industry-sw-classify';
 const LEVEL:Record<string,number>={L1:1,L2:2,L3:3};
 const ROOT=new Set(['','0']);

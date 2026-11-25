@@ -1,4 +1,5 @@
 // Independent summary, private call provenance, three checks, approval and title translation (spec §6.4, §4.7).
+import {DATASETS} from '../../dq/datasets';
 import {finishBatch,startBatch,emptyCounts} from '../../dq/batches';
 import {checkDisclosure} from '../disclosure';
 import {effectiveValue} from '../effective';
@@ -28,7 +29,7 @@ async function failRun(deps:BrokerDeps,r:{runId:string;batchId:string;token:stri
 }
 async function llmRun(deps:BrokerDeps,report:ReportRow,kind:'summary'|'translate',by:string,request:{system:string;user:string},dispatch:(request:{system:string;user:string})=>Promise<string>):Promise<LlmRunOk>{
  if(report.status!=='draft')throw conflict('published_immutable');const {doc,licence,token}=await claimForProcessing(deps,report.document_id);const info=deps.llm.info();if(!info)return failUnavailable(deps,'broker-research-summary',doc.document_id,token,'llm_unavailable');
- const {batchId}=await startBatch(deps.tables,{producer:'broker-research-summary',dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:'manual',toolVersions:{kind}}),runId=deps.newId();
+ const {batchId}=await startBatch(deps.tables,{producer:'broker-research-summary',dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:'manual',toolVersions:{kind}}),runId=deps.newId();
  await deps.db.insertRun({run_id:runId,document_id:doc.document_id,kind,parse_run_id:doc.current_parse_run_id,extractor_version:null,artifact_path:null,artifact_hash:null,model_id:info.modelId,registry_hash:info.registryHash,prompt_version:kind==='summary'?SUMMARY_PROMPT_VERSION:'translate-title/1',schema_version:null,code_version:deps.codeVersion,behavior_digest:null,licence_version:licence.version,request_path:brokerPaths.request(runId),response_path:brokerPaths.response(runId),batch_id:batchId});
  const put=(path:string,call:Record<string,unknown>)=>trackedUpload(deps,{documentId:doc.document_id,path,writer:kind,body:JSON.stringify({run_id:runId,calls:[call]}),contentType:'application/json',lease:{token,ttlSeconds:LEASE_SECONDS}});
  const errorCode=(e:unknown)=>e instanceof LlmError||e instanceof BrokerError?e.code:'llm_failed';

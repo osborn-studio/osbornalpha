@@ -8,6 +8,7 @@
 // detail); 23505 → duplicate_key; other 23xxx → constraint_violation (detail = constraint name).
 // The normalisers, column lists and bundle builder below are shared with pgBrokerResearchDb (A5).
 // New RPCs are not registered in database.types.ts (repo convention): the client is narrowed here.
+import {DATASETS} from '../dq/datasets';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {BrokerResearchDbError} from './types';
 import type {AccessLogInput,AnalystRow,BrokerResearchDb,DocumentRow,EvalReceiptRow,FieldRow,InstitutionRow,IntentRow,LicenceRow,MaterializeReceipt,OutboxEvent,PublicReportBundle,PublicationRow,PurgeStepRow,PurgeTextStep,RatingScaleRow,ReportAnalystRow,ReportRow,RuleReceiptRow,RunRow,SettingsRow,SnippetRow,StorageWriteRow,SummaryRow,TargetRow} from './types';
@@ -266,7 +267,7 @@ export function supabaseBrokerResearchDb(clients:{admin?:SupabaseClient|null;ano
    if(r.status!=='withdrawn')throw new BrokerResearchDbError('report_not_withdrawn');
    if(step==='quarantine_payload'){
     const d=await required(from('broker_report_documents').select('sha256').eq('document_id',String(r.document_id)),'document');
-    return ((await run<R[]|null>(from('dq_quarantine').update({payload:{}}).eq('dataset','broker_research').like('natural_key',`${String(d.sha256)}:%`).select('id')))??[]).length;
+    return ((await run<R[]|null>(from('dq_quarantine').update({payload:{}}).eq('dataset',DATASETS.brokerResearch).like('natural_key',`${String(d.sha256)}:%`).select('id')))??[]).length;
    }
    const t=PURGE_TEXT[step];
    return ((await run<R[]|null>(from(t.table).update(t.patch).eq('report_id',reportId).select(t.key)))??[]).length;

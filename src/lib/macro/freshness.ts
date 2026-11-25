@@ -3,6 +3,7 @@
 // next period end + releaseLagDays + 3 days) and collection status per dataset (shared
 // dq_freshness via freshnessOf, recomputed at read time). Also the period arithmetic other macro
 // modules share (month ends, previous-quarter lookups).
+import {DATASETS} from '../dq/datasets';
 import {freshnessOf} from '../dq/freshness';
 import type {FreshnessStatus} from '../dq/freshness';
 import type {TableClient} from '../db/table-client';
@@ -26,9 +27,9 @@ export function releaseTimeliness(def:Pick<import('./display-catalog').AnySeries
  const deadline=(def.nativeFrequency==='weekly'?parseDate(latestPeriodEnd)+7*DAY:parseDate(nextPeriodEnd(def.period,latestPeriodEnd)))+(def.releaseLagDays+GRACE_DAYS)*DAY;
  return parseDate(today)>deadline?'late':'current';
 }
-export const MACRO_DATASETS=['macro.fred','macro.akshare'] as const;
+export const MACRO_DATASETS=[DATASETS.macro.fred,DATASETS.macro.akshare] as const;
 export type MacroDataset=typeof MACRO_DATASETS[number];
-export const datasetOf=(region:Region):MacroDataset=>region==='US'?'macro.fred':'macro.akshare';
+export const datasetOf=(region:Region):MacroDataset=>region==='US'?DATASETS.macro.fred:DATASETS.macro.akshare;
 export interface CollectionStatus{dataset:MacroDataset;status:FreshnessStatus;lastOkAt:string|null;lastAttemptAt:string|null}
 const isoOrNull=(v:unknown):string|null=>{if(v===null||v===undefined)return null;const t=Date.parse(String(v));return Number.isFinite(t)?new Date(t).toISOString():null;};
 /** Both macro datasets, status recomputed at `now`; a dataset never recorded reads as missing. */

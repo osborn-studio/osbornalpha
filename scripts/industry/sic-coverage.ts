@@ -1,4 +1,5 @@
-/** Read-only ops inventory. See SIC-COVERAGE.md. No ingestion, HTTP or application imports. */
+/** Read-only ops inventory. See SIC-COVERAGE.md. No ingestion or HTTP. */
+import {DATASETS} from '../../src/lib/dq/datasets';
 import {pathToFileURL} from 'node:url';
 import {Client} from 'pg';
 
@@ -19,7 +20,7 @@ const INVENTORY = `WITH
         or valid_to>($1::timestamptz at time zone 'UTC')::date)
   ),
   schedule AS (select s.* from public.industry_sync_scope s join eligible e using(issuer_id) where job='sic'),
-  latest AS (select status, started_at, finished_at, errors from public.ingest_batches where dataset='industry.sic.memberships'
+  latest AS (select status, started_at, finished_at, errors from public.ingest_batches where dataset='${DATASETS.industry.memberships('sic')}'
     order by started_at desc, batch_id desc limit 1),
   errors AS (select value->>'code' code from latest, jsonb_array_elements(errors))
 select jsonb_build_object(

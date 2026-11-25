@@ -25,6 +25,7 @@
 // duplicate without a network lookup (re-checking orgIds is the job of a full run: opts.recheckOrgIds).
 // Outcome per row: inserted (security attached), duplicates (already attached), skipped (reason, informational),
 // failed (exception). Issuer creations/backfills are reported in `issuers` (not BatchCounts).
+import {DATASETS} from '../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import {TableError,callRpc,selectAll} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
@@ -45,8 +46,8 @@ import type {DelistingScan} from './delistings';
 import type {SnapshotCapture,StockBasicRow,TusharePage} from './providers/tushare-industry';
 import {IndustryProviderError,TUSHARE_MIN_INTERVAL_MS,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 
-export const A_SHARE_DATASET='issuers.a_stock';
-const TARGETED_A_SHARE_DATASET='issuers.a_stock.targeted';
+export const A_SHARE_DATASET=DATASETS.issuers.aStock;
+const TARGETED_A_SHARE_DATASET=DATASETS.issuers.targeted;
 export const A_SHARE_PRODUCER='load-a-share';
 export const STOCK_BASIC_SOURCE='tushare:stock_basic';
 export const CNINFO_SOURCE='cninfo:topSearch';
