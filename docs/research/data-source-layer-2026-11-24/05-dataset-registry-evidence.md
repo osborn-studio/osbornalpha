@@ -1,6 +1,6 @@
 # P0 PR 5 · DQ dataset registry
 
-The application has 47 distinct persisted dataset names. The existing 22 entries retain their identifiers, producers and cadence. The other 25 already had writers. The exact-set test pins the strings independently of the registry and the producer scan derives its pattern from that registry.
+The application has 49 distinct persisted dataset names. The existing 22 entries retain their identifiers, producers and cadence. The other 27 already had writers. The exact-set test pins the strings independently of the registry and the producer scan derives its pattern from that registry.
 
 ## Inventory
 
@@ -49,6 +49,8 @@ Paths in the last column are relative to `src/lib/` unless they start with `src/
 | `industry.sw2021.source` | industry-sw-members | weekly | tushare | `industry/source-memberships.ts` |
 | `industry.marks` | industry-marks | weekly | tushare | `industry/db-contract.ts`, `industry/marks.ts`, `industry/memory-industry-db.ts` |
 | `industry.official` | apply_observations | event · receipt or quarantine only | tushare | `industry/memory-industry-db.ts` |
+| `vendor.gildata.industry.members.sw2021` | industry-vendor-gildata | weekly | gildata | `industry/vendor/types.ts` |
+| `vendor.gildata.industry.fin.sw2021` | industry-vendor-gildata | weekly | gildata | `industry/vendor/types.ts` |
 | `documents.edgar` | documents-sync | daily | sec | `documents/sync.ts` |
 | `documents.cninfo` | documents-sync | daily | cninfo | `documents/sync.ts` |
 | `documents.hkexnews` | documents-sync | daily | hkexnews | `documents/sync.ts` |
@@ -66,9 +68,10 @@ The trace started with the dataset fields of batch inserts, freshness upserts an
 
 SQL is outside the TypeScript scan. Existing migrations own literal writes of `industry.marks` and `industry.official` (the `apply_observations` RPC), `judgments` (settlement quarantine), and `documents.extract` (extraction quarantine). The facts extension also constructs market and reconcile names in SQL. These migrations remain byte-for-byte intact. The official-observation entry names the actual RPC because it has no standalone batch producer.
 
-The scan covers non-test TypeScript and TSX in `src/` and `scripts/`, including fixture directories, memory implementations and shared DB contracts. It exempts two files:
+The scan covers non-test TypeScript and TSX in `src/` and `scripts/`, including fixture directories, memory implementations and shared DB contracts. It exempts three files.
 
 - `src/lib/dq/datasets.ts` defines the identifiers.
+- `src/lib/industry/vendor/types.ts` owns `FRESHNESS`. A test compares its values with all Gildata inventory entries. The merged ingestion uses those two names for batches, quarantine and weekly freshness. The merge introduced no other DQ dataset writers with unregistered names.
 - `src/lib/judgments/types.ts` is a frozen formula input. Its settlement DB contract documents the literal quarantine dataset.
 
 Contract cases use the registry for real names. Synthetic names such as the randomized macro, judgments and industry contract datasets exercise arbitrary names, and are outside the persisted-name list. Test files can assert literal expected values independently.
@@ -77,13 +80,13 @@ Audit calls and admin action wrappers use action names. Translation functions co
 
 ## Admin visibility
 
-`dashboardDatasets` takes the sorted union of inventory names, loaded datasets and the selected filter. The API returns this list to the client for its dataset selector. A clean database now offers 47 choices instead of 22. On a populated database, the number of additional choices depends on which names already appeared in the loaded rows.
+`dashboardDatasets` takes the sorted union of inventory names, loaded datasets and the selected filter. The API returns this list to the client for its dataset selector. A clean database now offers 49 choices instead of 22. On a populated database, the number of additional choices depends on which names already appeared in the loaded rows.
 
 `freshnessOf` reads persisted rows. Dashboard KPIs, quarantine pagination and alert rows use queried records and counts. The calendar and reconcile blocks use their own tables and the view helpers format the resulting rows. Neither the API filter validation nor any write path enumerates the inventory to create records. This permits one full inventory. The filer-category job, facts sync, and the seven entity-key scripts look up existing names for their cadence. Their lookups continue to resolve to the same values. The registry's sole runtime dependency is the existing reconcile-ID module, whose own imports are type-only.
 
 ## Changed files and tests
 
-The table identifies the producer, reader and fixture changes. The two remaining TypeScript files are `dq/datasets.ts` and `dq/datasets.test.ts`. The latter is the only changed Vitest file. It adds the independent 47-value pin and source validation, expands the family coverage and derives the scanner from the inventory. Its historical cadence and producer assertions now match those fields while permitting the new metadata. Shared contract and fixture modules substitute real dataset constants for the same literal arguments and expected values.
+The table identifies the producer, reader and fixture changes. The two remaining TypeScript files are `dq/datasets.ts` and `dq/datasets.test.ts`. The latter is the only changed Vitest file. It adds the independent 49-value pin and source validation, expands the family coverage and derives the scanner from the inventory. Its historical cadence and producer assertions now match those fields while permitting the new metadata. Shared contract and fixture modules substitute real dataset constants for the same literal arguments and expected values.
 
 ## Verification
 

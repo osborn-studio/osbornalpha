@@ -1,5 +1,5 @@
 // src/lib/dq/datasets.ts
-// Typed dataset registry (spec 3 §6.3; plan 3 contract C1). Producers take dataset strings ONLY from
+// Typed dataset registry (spec 3 §6.3; plan 3 contract C1). Producers use the owner constant or
 // DATASETS (datasets.test.ts scans the source tree for stray literals). DQ_DATASET_INVENTORY lists
 // every dataset with its producer and cadence: the /admin/dq dataset dropdown shows all of them,
 // including ones that have not run yet (it creates no freshness rows), and producers read their
@@ -17,6 +17,7 @@ export const DATASETS={
   produce:<M extends string>(methodology:M)=>`judgments.produce.${methodology}` as const},
  industry:{aggregate:(s:Scheme)=>`industry.agg.${s}` as const,memberships:(s:Scheme)=>`industry.${s}.memberships` as const,
   classifications:(s:Scheme)=>`industry.${s}.classifications` as const,swSource:'industry.sw2021.source',marks:'industry.marks',official:'industry.official'},
+ gildata:{memberships:'vendor.gildata.industry.members.sw2021',financials:'vendor.gildata.industry.fin.sw2021'},
  issuers:{aStock:'issuers.a_stock',targeted:'issuers.a_stock.targeted'},
  hkFacts:'facts.hk',
  documents:{sync:(s:ListedSource)=>`documents.${s}` as const,upload:'documents.upload',extract:'documents.extract',candidates:'documents.candidates'},
@@ -91,6 +92,8 @@ export const DQ_DATASET_INVENTORY:readonly DatasetEntry[]=[
  {dataset:DATASETS.industry.marks,producer:'industry-marks',cadence:'weekly',source:'tushare'},
  // Official revisions are quarantined by the RPC itself. There is no separate batch or freshness writer.
  {dataset:DATASETS.industry.official,producer:'apply_observations',cadence:'event',source:'tushare'},
+ {dataset:DATASETS.gildata.memberships,producer:'industry-vendor-gildata',cadence:'weekly',source:'gildata'},
+ {dataset:DATASETS.gildata.financials,producer:'industry-vendor-gildata',cadence:'weekly',source:'gildata'},
  {dataset:DATASETS.documents.sync('edgar'),producer:'documents-sync',cadence:'daily',source:'sec'},
  {dataset:DATASETS.documents.sync('cninfo'),producer:'documents-sync',cadence:'daily',source:'cninfo'},
  {dataset:DATASETS.documents.sync('hkexnews'),producer:'documents-sync',cadence:'daily',source:'hkexnews'},
