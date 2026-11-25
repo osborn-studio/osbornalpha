@@ -12,6 +12,7 @@
 // payload's evidence_hash / cutoff read here (Q1-03: a worker refresh in between → stale; an item without them →
 // invalid_resolution), unless the judgment is already final (then validated atomic cleanup). RPC 'stale' / 'closed' → stale (nothing written); 'item_not_open' →
 // already_resolved. Other judgments reasons (idempotency_conflict on table judgments) are a plain resolveQuarantine, audited by the route.
+import {DATASETS} from './datasets';
 import type {Row,TableClient} from '../db/table-client';
 import {digest} from '../judgments/canonical';
 import {resolverFor} from '../judgments/resolvers';
@@ -76,7 +77,7 @@ export async function resolveJudgmentsItem(deps:JudgmentsResolveDeps,item:Row,in
  }
  // Q1-03: the rejection is bound to the evidence identity read here; a worker refresh in between makes the RPC answer stale.
  const resolver=resolverFor(judgment.condition.resolver);
- const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:'judgments.settle',codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:DATASETS.judgments.settle,codeVersion:deps.codeVersion,triggeredBy:'manual'});
  const counts={...emptyCounts(),fetched:1};
  let errors:{code:string;key:string;message?:string}[]=[];
  try{

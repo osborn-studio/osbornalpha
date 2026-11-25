@@ -14,6 +14,7 @@
 // awaited and cancels cooperatively through deps.signal (checked right before its register RPC), a deferred result being a stop, not a failure. The macro module not landed (MacroUnavailable) → skipped with info
 // macro_unavailable; macro_regime@v2 not in REGISTRY yet → skipped silently. produce counts go to the produce batch
 // (dataset judgments.produce.macro_regime); the settle receipt gets the scan's errors. Budget: deadlineAt (default start + 60 s).
+import {DATASETS} from '../dq/datasets';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,TriggeredBy} from '../dq/batches';
 import type {TableClient} from '../db/table-client';
@@ -107,7 +108,7 @@ export async function compensateMacro(deps:CompensateDeps):Promise<CompensationR
    if(s.status==='failed')report.skippedFailed++;
    else if(present.length>0)report.existing++;
    else{
-    if(!report.batchId)report.batchId=(await startBatch(deps.tables,{producer:'ts-judgments',dataset:`judgments.produce.${mm.id}`,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy})).batchId;
+    if(!report.batchId)report.batchId=(await startBatch(deps.tables,{producer:'ts-judgments',dataset:DATASETS.judgments.produce(mm.id),codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy})).batchId;
     if(signal.aborted||clock()>=deadlineAt){report.scanned--;deadline(s.snapshot_id);produceErrors.push({code:'deadline_hit',key:s.snapshot_id});break;}
     let ok=false,aborted=false;
     try{

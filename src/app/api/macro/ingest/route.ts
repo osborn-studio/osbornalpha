@@ -22,6 +22,7 @@
 //           finished, lease released). A retry skips completed steps; a finished run returns its stored receipt. Only this
 //           route publishes CN.
 // Responses carry codes, keys and counts only.
+import {DATASETS} from '@/lib/dq/datasets';
 import {createHash} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {emptyCounts,finishBatch,startBatch} from '@/lib/dq/batches';
@@ -46,7 +47,7 @@ import type {ChunkCounts,ChunkError,ChunkRecord,EvidenceInput,FinishProgress,Fin
 export const dynamic='force-dynamic';
 export const maxDuration=300;
 const INGEST_ROUTE_VERSION='macro-ingest/1';
-const DATASET='macro.akshare',PRODUCER='py-akshare';
+const DATASET=DATASETS.macro.akshare,PRODUCER='py-akshare';
 const LEASE_MS=2*3600_000,PROCESSING_TIMEOUT_MS=10*60_000,MAX_FUTURE_MS=5*60_000,MAX_AGE_MS=24*3600_000;   // maxDuration (300 s) < processing timeout
 const NO_STORE={'Cache-Control':'no-store'};
 const json=(body:unknown,status=200)=>NextResponse.json(body,{status,headers:NO_STORE});

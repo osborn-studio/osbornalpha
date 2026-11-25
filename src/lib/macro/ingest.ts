@@ -13,6 +13,8 @@
 // 第 6 稿: receipts carry `usable` (written rows minus previously_rejected, P2-1); batchFinalizeInput mirrors finishBatch's status
 // and error cap for MacroDb.finalizeBatch (P1-1/P2-4). quarantine() stays the shared, unfenced helper: an open item a fenced
 // worker parked has no members (its link is fenced) and is harmless.
+import {DATASETS} from '../dq/datasets';
+import type {MacroDataset} from './freshness';
 import type {AnySeriesDef} from './display-catalog';
 import {quarantine} from '../dq/quarantine';
 import {UNACCOUNTED_ERROR,batchStatusFromCounts} from '../dq/batches';
@@ -44,8 +46,8 @@ export class IngestAbort extends Error{
 export const abortError=(e:IngestAbort):BatchError=>e.key===undefined?{code:e.code}:{code:e.code,key:e.key};
 const isFenced=(e:unknown)=>e instanceof MacroDbError&&e.code==='fenced';
 
-export const DATASET_OF:Record<Adapter,'macro.fred'|'macro.akshare'>={fred_csv:'macro.fred',akshare:'macro.akshare'};
-export const DATASET_OF_REGION:Record<Region,'macro.fred'|'macro.akshare'>={US:'macro.fred',CN:'macro.akshare'};
+export const DATASET_OF:Record<Adapter,MacroDataset>={fred_csv:DATASETS.macro.fred,akshare:DATASETS.macro.akshare};
+export const DATASET_OF_REGION:Record<Region,MacroDataset>={US:DATASETS.macro.fred,CN:DATASETS.macro.akshare};
 export const WRITE_CHUNK=1000;
 /** Input periods read per derived series (complete history; daily inputs since 2000 are ≈ 7 000). */
 export const DERIVE_MAX_ROWS=20000;

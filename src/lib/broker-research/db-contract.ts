@@ -4,6 +4,7 @@
 // .test.ts block 4), so the rules the service unit tests rely on are the SQL functions' rules. Not
 // a test file: it registers describe/it only when called. Hash VALUES are never compared across
 // implementations (SQL jsonb text vs canonicalJson) — only equal/unequal relations.
+import {DATASETS} from '../dq/datasets';
 import {createHash,randomUUID} from 'node:crypto';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
 import type {TableClient} from '../db/table-client';
@@ -283,7 +284,7 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    await rules(r.rep);expect(await db.publishBlockers(r.rep)).toEqual([]);
    await db.updateReportDraft(r.rep,{evidence_ok:false});expect(await db.publishBlockers(r.rep)).toEqual(['evidence_drift']);await db.updateReportDraft(r.rep,{evidence_ok:true});
    const b=await h.batch();
-   const qid=String((await h.tables.insert('dq_quarantine',{id:randomUUID(),dataset:'broker_research',table_name:'broker_research_reports',natural_key:`${r.sha}:upside_identity:${r.tk}`,reason_code:'upside_mismatch',batch_id:b,payload:{},detail:{},status:'open',resolved_by:null,resolved_at:null,created_at:new Date().toISOString()})).id);
+   const qid=String((await h.tables.insert('dq_quarantine',{id:randomUUID(),dataset:DATASETS.brokerResearch,table_name:'broker_research_reports',natural_key:`${r.sha}:upside_identity:${r.tk}`,reason_code:'upside_mismatch',batch_id:b,payload:{},detail:{},status:'open',resolved_by:null,resolved_at:null,created_at:new Date().toISOString()})).id);
    expect(await db.publishBlockers(r.rep)).toEqual(['quarantine_open:upside_mismatch']);
    await h.tables.update('dq_quarantine',{id:qid},{status:'resolved_accept',resolved_by:by,resolved_at:new Date().toISOString()});
    expect(await db.publishBlockers(r.rep)).toEqual([]);
@@ -495,7 +496,7 @@ export function brokerResearchDbContract(label:string,setup:()=>Promise<BrokerCo
    const cands=(await db.verifyCandidates(100000)).map(d=>d.document_id);
    expect(cands).toContain(r.doc);expect(cands).toContain(r2.doc);expect(cands).not.toContain(w.doc);   // drafts are never verified
    expect(cands.indexOf(r2.doc)).toBeLessThan(cands.indexOf(r.doc));                            // never verified first
-   const q=async(rule:string,reason:string)=>String((await h.tables.insert('dq_quarantine',{id:randomUUID(),dataset:'broker_research',table_name:'broker_research_reports',natural_key:`${w.sha}:${rule}:-`,reason_code:reason,batch_id:await h.batch(),payload:{published_date:'2026-03-05'},detail:{},status:'open',resolved_by:null,resolved_at:null,created_at:new Date().toISOString()})).id);
+   const q=async(rule:string,reason:string)=>String((await h.tables.insert('dq_quarantine',{id:randomUUID(),dataset:DATASETS.brokerResearch,table_name:'broker_research_reports',natural_key:`${w.sha}:${rule}:-`,reason_code:reason,batch_id:await h.batch(),payload:{published_date:'2026-03-05'},detail:{},status:'open',resolved_by:null,resolved_at:null,created_at:new Date().toISOString()})).id);
    const pv=await q('possible_version','possible_version');
    expect(await db.quarantineResolve(pv,'resolved_reject',by,{})).toBe('resolved');
    expect(await db.quarantineResolve(pv,'resolved_reject',by,{})).toBe('already_resolved');

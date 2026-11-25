@@ -9,6 +9,7 @@
 // (code, period_end) group with its own members, values and counts, so the drawer's original replay
 // reproduces each stored value — except E2E_TAMPERED, whose stored value is deliberately altered so the
 // E2E run sees the "not reproduced" state too. Values are synthetic layout data, not facts.
+import {DATASETS} from '../dq/datasets';
 import {cookies} from 'next/headers';
 import type {FactRow} from '../facts/types';
 import {computeAggregateCellUs} from './aggregate-us';
@@ -106,7 +107,7 @@ const CARDS=new Map<string,IssuerCard>([[ISSUER_A,{issuerId:ISSUER_A,nameZh:'贵
 
 function fixtureDb(now:Date):ReadDb{
  const base=stubIndustryDb({tree:TREE,runs:[RUN,SIC_RUN],cells,memberships:MEMBERS,
-  freshness:[{dataset:'industry.agg.sic',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:'industry.agg.sw2021',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:'industry.sw2021.memberships',status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()}]});
+  freshness:[{dataset:DATASETS.industry.aggregate('sic'),status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:DATASETS.industry.aggregate('sw2021'),status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()},{dataset:DATASETS.industry.memberships('sw2021'),status:'fresh',last_ok_at:new Date(now.getTime()-86_400_000).toISOString()}]});
  return {...base,isDatasetPublic:async k=>k==='scheme:sic:sec-current'||(k==='scheme:sw2021:2021'&&await swLicensed())};
 }
 export function fixtureReadDeps(now:Date,preview=false):ReadDeps{

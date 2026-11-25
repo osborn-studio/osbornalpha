@@ -20,6 +20,7 @@
 // time (a promise chain), like row locks; the clock is injectable (setNow).
 // ingest_batches / dq_quarantine / research_audit_log live in the TableClient passed in (default: a
 // fresh memoryTableClient) so plan-1 startBatch / quarantine() and this db share rows.
+import {DATASETS} from '../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
 import type {TableClient} from '../db/table-client';
@@ -284,7 +285,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(!q)return fail('unknown_judgment');
    if(q.lease_token!==leaseToken||!leaseLive(q,ms(now())))return {status:'lease_lost',quarantine_id:null};
    const at=now();
-   const key={dataset:'judgments',table_name:'judgment_settlements',natural_key:judgmentId,reason_code:reasonCode};
+   const key={dataset:DATASETS.judgments.quarantine,table_name:'judgment_settlements',natural_key:judgmentId,reason_code:reasonCode};
    const [open]=await tables.select('dq_quarantine',{...key,status:'open'},{limit:1});
    let id:string;
    if(open){id=String(open.id);await tables.update('dq_quarantine',{id,status:'open'},{payload:clone(payload)});undo(async()=>{await tables.update('dq_quarantine',{id,status:'open'},{payload:open.payload});});}
@@ -302,7 +303,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    const q=queue.get(judgmentId);
    if(!q)return fail('unknown_judgment');
    const [item]=await tables.select('dq_quarantine',{id:quarantineId},{limit:1});
-   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId)return 'item_not_open';
+   if(!item||item.dataset!==DATASETS.judgments.quarantine||item.natural_key!==judgmentId)return 'item_not_open';
    if(item.status!=='open')return item.status==='resolved_accept'&&same(q.override,override)?'applied':'item_not_open';
    if(q.closed_at!==null)return 'closed';
    const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
@@ -320,7 +321,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    const q=queue.get(judgmentId);
    if(!q)return fail('unknown_judgment');
    const [item]=await tables.select('dq_quarantine',{id:quarantineId},{limit:1});
-   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId||item.status!=='open')return 'item_not_open';
+   if(!item||item.dataset!==DATASETS.judgments.quarantine||item.natural_key!==judgmentId||item.status!=='open')return 'item_not_open';
    const payload=isObj(item.payload)?item.payload:{};
    if(q.closed_at===null||item.table_name!=='judgment_settlements'||payload.evidence_hash!==expected.evidence_hash||payload.cutoff!==expected.cutoff)return 'stale';
    const at=now();
@@ -339,7 +340,7 @@ export function memoryJudgmentsDb(opts:{tables?:TableClient}={}):MemoryJudgments
    if(!q)return fail('unknown_judgment');
    const [item]=await tables.select('dq_quarantine',{id:quarantineId},{limit:1});
    const seq=historyOfJ(judgmentId).at(-1)?.seq??0;
-   if(!item||item.dataset!=='judgments'||item.natural_key!==judgmentId||item.status!=='open')return {seq,status:'item_not_open'};
+   if(!item||item.dataset!==DATASETS.judgments.quarantine||item.natural_key!==judgmentId||item.status!=='open')return {seq,status:'item_not_open'};
    const payload=(isObj(item.payload)?item.payload:{}) as Record<string,unknown>;
    // Q1-03: the identity the hook read must still be the locked queue's AND the locked item's.
    const inc=q.last_detail.incident;   // R3-01: the open incident decides, not last_status

@@ -3,6 +3,7 @@
 // (display only), gold receipt, recent batches, open quarantine, "newer mapping available" published
 // reports, outbox failures, licence impact counts, access log. None of these return full text, spans
 // or signed URLs, so they are not ★ reads. Callers must have passed adminGate() first.
+import {DATASETS} from '../dq/datasets';
 import {getAdminSupabase} from '../supabase/admin';
 import {selectAll,supabaseTableClient} from '../db/table-client';
 import type {Row,TableClient} from '../db/table-client';
@@ -59,13 +60,13 @@ export async function loadOverview(deps:AdminReadDeps):Promise<OverviewData>{
   c('broker_report_documents',{status:'uploaded',promotion_pending:false}),c('broker_report_documents',{status:'parse_failed'}),
   c('broker_research_reports',{status:'published'}),c('broker_report_documents',{status:'withdrawn'}),
   c('broker_research_reports',{status:'draft',review_status:'pending'}),c('broker_research_reports',{status:'draft',review_status:'in_review'}),
-  c('broker_research_reports',{status:'draft',review_status:'approved'}),c('broker_outbox',{status:'failed'}),c('dq_quarantine',{dataset:'broker_research',status:'open'}),
+  c('broker_research_reports',{status:'draft',review_status:'approved'}),c('broker_outbox',{status:'failed'}),c('dq_quarantine',{dataset:DATASETS.brokerResearch,status:'open'}),
  ]);
  const [parsed,reports,goldRows,batches,quarantineRows,reviewQueue,recentDocuments]=await Promise.all([
   selectAll(deps.tables,'broker_report_documents',{status:'parsed'},'document_id'),selectAll(deps.tables,'broker_research_reports',{},'report_id'),
   deps.tables.select('broker_eval_receipts',{corpus_kind:'gold'},{orderBy:'ran_at',desc:true,limit:1}),
-  deps.tables.select('ingest_batches',{dataset:'broker_research'},{orderBy:'started_at',desc:true,limit:5}),
-  listOpenQuarantine(deps.tables,'broker_research',5),deps.db.reviewQueue({limit:20}),
+  deps.tables.select('ingest_batches',{dataset:DATASETS.brokerResearch},{orderBy:'started_at',desc:true,limit:5}),
+  listOpenQuarantine(deps.tables,DATASETS.brokerResearch,5),deps.db.reviewQueue({limit:20}),
   deps.tables.select('broker_report_documents',{},{orderBy:'uploaded_at',desc:true,limit:20}),
  ]);
  const withReport=new Set(reports.map(r=>String(r.document_id)));

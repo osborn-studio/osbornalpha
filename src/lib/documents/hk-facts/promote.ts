@@ -36,6 +36,7 @@
 // write (guarded clients); steps 2 and 4 start only with MIN_PHASE_MS of budget left, else deadline_hit
 // (run abandoned, lease released) (codex plan round 1 P2-7).
 // raw_hash = value-citation locator hkex:<sha256[0:16]>:<extraction_id>:p<page>:c<start>-<end>.
+import {DATASETS} from '../../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import type {TableClient} from '../../db/table-client';
 import {emptyCounts,finishBatch,startBatch} from '../../dq/batches';
@@ -57,7 +58,7 @@ export const PROMOTE_LEASE_TTL_S=600;
 export const MIN_ISSUER_MS=60_000;
 /** Budget step 2 (staging) and step 4 (publish) need to start (P2-7). */
 export const MIN_PHASE_MS=20_000;
-export const HK_FACTS_DATASET='facts.hk';
+export const HK_FACTS_DATASET=DATASETS.hkFacts;
 const COUNTERS=['fetched','inserted','duplicates','versioned','quarantined','failed'] as const;
 export interface PromoteDeps{db:DocumentsDb;port:HkFactsPort;tables:TableClient;now:()=>Date;deadline:Date|null}
 export interface PromoteOptions{issuerIds:string[];batchId:string;triggeredBy:TriggeredBy;/** tests and promote-hk.ts --pub-gen only; default HK_PUB_GEN */pubGen?:number}
@@ -315,7 +316,7 @@ async function promoteClaimed(deps:PromoteDeps,batchId:string,issuer:string,pubG
  */
 export async function promoteIssuerNow(deps:PromoteDeps&{codeVersion:string|null},issuerId:string,triggeredBy:TriggeredBy):Promise<{state:'published'|'failed'|'skipped';message?:string;batchId?:string}>{
  if(!deps.codeVersion)return {state:'skipped',message:'code_version_unavailable'};
- const {batchId}=await startBatch(deps.tables,{producer:'documents-candidates',dataset:'documents.candidates',toolVersions:{hk_pub_gen:String(HK_PUB_GEN),trigger:'decide'},codeVersion:deps.codeVersion,triggeredBy});
+ const {batchId}=await startBatch(deps.tables,{producer:'documents-candidates',dataset:DATASETS.documents.candidates,toolVersions:{hk_pub_gen:String(HK_PUB_GEN),trigger:'decide'},codeVersion:deps.codeVersion,triggeredBy});
  let outcomes:HkIssuerOutcome[]=[];
  try{outcomes=await runHkFactsSync(deps,{issuerIds:[issuerId],batchId,triggeredBy});}
  finally{

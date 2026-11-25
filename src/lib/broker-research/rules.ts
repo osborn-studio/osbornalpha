@@ -2,6 +2,7 @@
 // materialized targets, evidence, rating scales, parse pages, and optional peer/text inputs.
 // The caller writes the receipt using reports.rules_input_hash as read from the DB. Decimal
 // comparisons use BigInt scaling; R1 spans and raw model content remain private.
+import {DATASETS} from '../dq/datasets';
 import type {FieldRow,RatingScaleRow,ReportRow,RuleResult,TargetRow,TypedValue} from './types';
 import {effectiveValue} from './effective';
 import {dec,decAbs,decCmp,decDiv,decMul,decString,decSub} from './decimal';
@@ -12,7 +13,7 @@ export const RULES_PARAMS=Object.freeze({upsideTolerance:'0.005',versionWindowDa
 /** dq reason codes that block publication (spec §4.4 blocker 10); must equal the SQL set. */
 export const BLOCKING_REASONS=['upside_mismatch','currency_mismatch','date_order','nonpositive_price','unknown_rating_label','ambiguous_rating_label','ticker_issuer_conflict','unresolved_ticker'] as const;
 export const RULE_IDS=Object.freeze({R1:'span_verbatim',R2:'upside_identity',R3:'currency_market',R4:'date_order',R5:'rating_scale_unique',R6:'positive_prices',R7:'possible_version',R8:'text_checks',R9:'ticker_resolution',R10:'horizon_present_with_target'});
-export const QUARANTINE_DATASET='broker_research';
+export const QUARANTINE_DATASET=DATASETS.brokerResearch;
 export const QUARANTINE_TABLE='broker_research_reports';
 
 export interface QuarantineItem{naturalKey:string;rule:string;reasonCode:string;targetKey:string|null;payload:Record<string,unknown>}

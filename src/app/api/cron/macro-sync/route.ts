@@ -16,6 +16,7 @@
 // writes, ZERO evidence uploads (it never touches deps.db / deps.evidence / deps.tables). A missing
 // code_version refuses a real run (preview does not write, so it needs none). Receipts carry codes,
 // keys and counts only, never messages.
+import {DATASETS} from '@/lib/dq/datasets';
 import {collectableSeriesOf} from '@/lib/macro/series-registry';
 import type {AnySeriesDef} from '@/lib/macro/display-catalog';
 import {NextResponse} from 'next/server';
@@ -79,7 +80,7 @@ async function sync(deps:MacroDeps,defs:AnySeriesDef[],codeVersion:string,signal
  const today=deps.now().toISOString().slice(0,10);
  await deps.db.upsertCatalog(MACRO_CATALOG,CATALOG_VERSION,MACRO_RULES_VERSION);
  await deps.db.upsertCatalog(DISPLAY_CATALOG,DISPLAY_CATALOG_VERSION,MACRO_RULES_VERSION);
- const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:'macro.fred',codeVersion,triggeredBy:'cron',
+ const {batchId}=await startBatch(deps.tables,{producer:'ts-fred',dataset:DATASETS.macro.fred,codeVersion,triggeredBy:'cron',
   toolVersions:{fetcher:FRED_FETCHER_VERSION,parser:FRED_PARSER_VERSION,catalog:CATALOG_VERSION,rules:MACRO_RULES_VERSION}});
  let native=emptyChunkCounts(),nativeUsable=0,derivedCounts=emptyChunkCounts(),counts=emptyChunkCounts();const errors:BatchError[]=[];
  // 四轮 P2-2: aggregates move after EVERY completed receipt, and an aborted call's partial (its committed outcomes) is merged
@@ -131,12 +132,12 @@ async function sync(deps:MacroDeps,defs:AnySeriesDef[],codeVersion:string,signal
    console.error('macro-sync: finalizeBatch failed in fatal abort; retrying once',{batchId});
    await deps.db.finalizeBatch(batchId,finalInput,null).catch(()=>console.error('macro-sync: finalizeBatch retry failed; batch left running',{batchId}));
   }
-  await recordAttempt(deps.tables,'macro.fred',{ok:false,cadence:'daily'}).catch(()=>undefined);
+  await recordAttempt(deps.tables,DATASETS.macro.fred,{ok:false,cadence:'daily'}).catch(()=>undefined);
   throw e;
  }
  const {status:batchStatus}=await deps.db.finalizeBatch(batchId,batchFinalizeInput({counts,errors},deps.now()),null);   // no run row: no tokens
  const nativeLanded=nativeUsable>0;
- await recordAttempt(deps.tables,'macro.fred',{ok:batchStatus!=='failed'&&nativeLanded,cadence:'daily'});
+ await recordAttempt(deps.tables,DATASETS.macro.fred,{ok:batchStatus!=='failed'&&nativeLanded,cadence:'daily'});
  // Task 11 (spec §4.4 step 4–5; 第 5 稿 P1-4/P2-2): publish US only, keyed by the batch; a failed FRED batch or a run without any
  // native outcome leaves the last active snapshot serving.
  const publish=batchStatus==='failed'||!nativeLanded

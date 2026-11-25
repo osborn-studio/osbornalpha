@@ -22,6 +22,7 @@
 // needs a code version (null → refused). deps.preflight runs first (R5-P2-1): a setup error such as
 // worker_missing fails the batch with that code before any document is read or claimed. dryRun: no batch, no claim, no writes — reads and extracts
 // the due documents and reports page counts.
+import {DATASETS} from '../../dq/datasets';
 import {emptyCounts,finishBatch,startBatch} from '../../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../../dq/batches';
 import {recordAttempt} from '../../dq/freshness';
@@ -120,12 +121,12 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
  }
  const codeVersion=deps.codeVersion;
  if(!codeVersion)throw new Error('code_version_unavailable');
- const {batchId}=await settle(deps,startBatch(tables,{producer:'documents-extract',dataset:'documents.extract',toolVersions:{extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION},codeVersion,triggeredBy:opts.triggeredBy}));
+ const {batchId}=await settle(deps,startBatch(tables,{producer:'documents-extract',dataset:DATASETS.documents.extract,toolVersions:{extractor_version:EXTRACTOR_VERSION,table_algo_version:TABLE_ALGO_VERSION},codeVersion,triggeredBy:opts.triggeredBy}));
  if(setup!==null){
   errors.push({code:setup,message:'setup: nothing claimed (build the extraction worker: npx tsx scripts/documents/build-extract-worker.ts)'});
   counts.failed=1;
   const status=await settle(deps,finishBatch(tables,batchId,{counts,errors},deps.now()));
-  await settle(deps,recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,setup}}));
+  await settle(deps,recordAttempt(tables,DATASETS.documents.extract,{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,setup}}));
   return {batchId,status,counts,errors,documents:[],idle:false};
  }
  let idle=false;
@@ -195,10 +196,10 @@ export async function runDocumentsExtract(deps:ExtractDeps,opts:ExtractOptions):
   // T10 review: anything thrown after startBatch (storedDue, documentById, ...) still closes the batch and records the failed attempt
   counts.failed++;errors.push({code:errCode(e),message:'run_error'});
   try{await settle(deps,finishBatch(tables,batchId,{counts,errors},deps.now()));}catch{/* left running; the runbook SQL closes it */}
-  try{await settle(deps,recordAttempt(tables,'documents.extract',{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,error:true}}));}catch{/* same */}
+  try{await settle(deps,recordAttempt(tables,DATASETS.documents.extract,{ok:false,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,error:true}}));}catch{/* same */}
   throw e;
  }
  const status=await settle(deps,finishBatch(tables,batchId,{counts,errors},deps.now()));
- await settle(deps,recordAttempt(tables,'documents.extract',{ok:idle||counts.inserted>0,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,idle}}));
+ await settle(deps,recordAttempt(tables,DATASETS.documents.extract,{ok:idle||counts.inserted>0,cadence:'daily',now:deps.now(),detail:{batch_id:batchId,idle}}));
  return {batchId,status,counts,errors,documents,idle};
 }

@@ -16,6 +16,7 @@
 //   'document', detail {route, requester, page_no?, citation_id?, signed_url_issued?}) → return. The
 //   audit is written after everything that will be returned is loaded and before it is returned; an
 //   audit failure throws OwnerAuditError (route → 500 audit_failed), so nothing is returned unaudited.
+import {DATASETS} from '../dq/datasets';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {TableClient} from '../db/table-client';
 import {blobPath} from './object-store';
@@ -51,7 +52,7 @@ export async function ingestUpload(deps:UploadDeps,input:UploadInput):Promise<{d
  const title=(input.title??filename).trim();
  if(title===''||Array.from(title).length>500)throw new UploadError('invalid_input','title');
  const sha=sha256Hex(input.bytes);const now=deps.now();const at=now.toISOString();
- const {batchId}=await startBatch(deps.tables,{producer:'documents-upload',dataset:'documents.upload',codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const {batchId}=await startBatch(deps.tables,{producer:'documents-upload',dataset:DATASETS.documents.upload,codeVersion:deps.codeVersion,triggeredBy:'manual'});
  const counts={...emptyCounts(),fetched:1};
  try{
   const storage_path=blobPath(sha,'application/pdf');

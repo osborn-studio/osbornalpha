@@ -1,4 +1,5 @@
 // Topic spec §4.1 / §5.4 industry cells (X18).
+import {DATASETS} from '../../dq/datasets';
 import {parseIndustryId} from '../ref';
 import {digestOf,missing,type EvidenceResolver,type Resolved} from '../resolve';
 import type {EvidenceSources} from '../sources';
@@ -18,7 +19,7 @@ export function industryResolver(sources:EvidenceSources):EvidenceResolver<'indu
     drawer:{kind:'industry_metric',identity,source:{publisher:'OsbornAlpha industry aggregates',adapter:`${run.scheme} · gen ${run.generation}`,url:null,locator:`${key.code} · ${key.metric} · ${key.period_end}`,evidence_sha256:null},
      times:{period:key.period_end,available_at:run.activated_at,ingested_at:null},transform:{code_version:run.code_version,mapping_version:null,method_version:run.method_version},
      licence:{status:'public',note_key:`industry:dataset:${run.scheme}`},attribution_key:`industry:${run.scheme}`,links:{module_href:`/intel/industries/${key.code}?scheme=${run.scheme}`}},
-    digest:digestOf(fact,identity),freshness:await sources.freshness(`industry.agg.${run.scheme}`,ctx.now),...(!isPublic?{admin_only:true as const}:{})} satisfies Resolved;
+    digest:digestOf(fact,identity),freshness:await sources.freshness(DATASETS.industry.aggregate(run.scheme),ctx.now),...(!isPublic?{admin_only:true as const}:{})} satisfies Resolved;
   }));},
   async latestIdentity(ref){
    const key=parseIndustryId(ref.id);if(!key)return null;

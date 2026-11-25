@@ -7,6 +7,7 @@
 // only and reach the views as counts through deps.unresolved; the manifest bucket is private and is
 // read only after the anon authorization chain passed (dataset public → run visible → cell exists).
 // Values stay decimal strings; a missing cell keeps its reason and is never turned into 0.
+import {DATASETS} from '../dq/datasets';
 import {computeFreshness} from '../dq/freshness';
 import type {FreshnessStatus} from '../dq/freshness';
 import {canonicalDecimal} from '../facts/json-numbers';
@@ -36,8 +37,8 @@ export const METRIC_DURATIONS:Record<AggMetric,readonly AggDuration[]>={revenue_
 /** The stored YoY metric shown next to a sum in the table view (no page-side arithmetic). */
 export const YOY_COMPANION:Partial<Record<AggMetric,AggMetric>>={revenue_sum:'revenue_yoy',net_income_parent_sum:'net_income_yoy'};
 /** dq_freshness datasets written by the jobs (Task 12 aggregate, Task 7 SW memberships, Task 9 SIC). */
-export const AGG_FRESHNESS:Record<Scheme,string>={sw2021:'industry.agg.sw2021',sic:'industry.agg.sic'};
-export const MEMBERSHIP_FRESHNESS:Record<Scheme,string>={sw2021:'industry.sw2021.memberships',sic:'industry.sic.memberships'};
+export const AGG_FRESHNESS:Record<Scheme,string>={sw2021:DATASETS.industry.aggregate('sw2021'),sic:DATASETS.industry.aggregate('sic')};
+export const MEMBERSHIP_FRESHNESS:Record<Scheme,string>={sw2021:DATASETS.industry.memberships('sw2021'),sic:DATASETS.industry.memberships('sic')};
 export type SourceId='sw_via_tushare'|'exchange_via_tushare'|'tushare_statements'|'sec_submissions'|'edgar_companyfacts';
 export const SOURCES:Record<Scheme,readonly SourceId[]>={sw2021:['sw_via_tushare','exchange_via_tushare','tushare_statements'],sic:['sec_submissions','edgar_companyfacts']};
 export const OFFICIAL_DATASET:DatasetKey='official:tushare-sw_daily';

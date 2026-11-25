@@ -16,6 +16,7 @@
 // every defer / error patch carries that incident forward unchanged. Counters (§7.5): fetched
 // claimed, inserted settled, versioned void, duplicates already_final, quarantined, failed resolver errors, deferred
 // pending / unavailable / lease_lost. preview=true lists the due queue without claiming and reports the decisions.
+import {DATASETS} from '../dq/datasets';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import type {BatchCounts,BatchError,BatchStatus,TriggeredBy} from '../dq/batches';
 import {recordAttempt} from '../dq/freshness';
@@ -28,7 +29,7 @@ import {JudgmentError} from './errors';
 import {MAX_FETCH_MS,resolverFor as defaultResolverFor} from './resolvers';
 import type {Condition,JudgmentInputsDb,JudgmentRow,JudgmentsDb,QueuePatch,QueueRow,Realized,ResolveContext,Resolver,ResolverResult,SettlementInsert} from './types';
 
-export const SETTLE_DATASET='judgments.settle';
+export const SETTLE_DATASET=DATASETS.judgments.settle;
 export const PRODUCER='ts-judgments';
 export const DEADLINE_MS=280_000,STOP_CLAIM_MS=200_000,TAIL_MS=30_000,BATCH_SIZE=20,CONCURRENCY=4,LEASE_SECONDS=600,STALE_BATCH_SECONDS=900,DAY_MS=86_400_000;
 /** Unavailable failures that can never become available: void at once (spec §7.2, O6, §12.4). */
@@ -432,7 +433,7 @@ export async function runSettle(deps:SettleDeps,opts:SettleOptions={}):Promise<S
    return receipt('preview');
   }
   detail.repaired=await deps.db.repairStaleBatches(SETTLE_DATASET,STALE_BATCH_SECONDS);
-  for(const id of new Set(REGISTRY.map(m=>m.id)))detail.repaired+=await deps.db.repairStaleBatches(`judgments.produce.${id}`,STALE_BATCH_SECONDS);
+  for(const id of new Set(REGISTRY.map(m=>m.id)))detail.repaired+=await deps.db.repairStaleBatches(DATASETS.judgments.produce(id),STALE_BATCH_SECONDS);
   const compensate=deps.compensate===undefined?compensateMacro:deps.compensate;
   if(compensate){
    detail.compensation=await compensate({db:deps.db,inputsDb:deps.inputsDb,tables:deps.tables,codeVersion:deps.codeVersion,triggeredBy:deps.triggeredBy,signal,clock,deadlineAt:t0+COMPENSATION_BUDGET_MS});

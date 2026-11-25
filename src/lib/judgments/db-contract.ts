@@ -7,6 +7,7 @@
 // harness.exclusiveClaims (pg: pg_advisory_lock(F4_CLAIM_LOCK) on a dedicated connection), because
 // claim_due_judgments is global and test files run in parallel. Judgments that are not claimed use
 // the default far-future target (2099-01-01) and never become due.
+import {DATASETS} from '../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import type {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
@@ -415,7 +416,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    expect(s.status).toBe('failed');expect(s.finished_at).not.toBeNull();expect((s.errors as {code:string}[]).at(-1)).toMatchObject({code:'stale_running'});
    expect((await h.tables.select('ingest_batches',{batch_id:fresh}))[0].status).toBe('running');
    expect(await db.repairStaleBatches(ds,900)).toBe(0);
-   expect(await code(db.repairStaleBatches('facts.us',900))).toBe('invalid_parameter');
+   expect(await code(db.repairStaleBatches(DATASETS.facts('US'),900))).toBe('invalid_parameter');
    expect(await code(db.repairStaleBatches(ds,30))).toBe('invalid_parameter');
   });
 
@@ -524,7 +525,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     expect(await h.tables.select('research_audit_log',{object_id:itemId})).toHaveLength(1);
     const s=await inconsistent(m,b,H('e'));
     expect(await db.applyQuarantineOverride(s.j.id,overrideOf(by,H('f')),s.itemId,{})).toBe('stale');   // writes nothing
-    const other=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:s.j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload:{evidence_hash:H('9'),cutoff:CUT}});
+    const other=await quarantine(h.tables,{dataset:DATASETS.judgments.quarantine,table:'judgment_settlements',naturalKey:s.j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload:{evidence_hash:H('9'),cutoff:CUT}});
     expect(await db.rejectQuarantinedSettlement(s.j.id,other,{evidence_hash:H('9'),cutoff:CUT},`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});   // the queue's inconsistency is not this item's
     // Q1-03: queue and item agree with each other but not with what the hook read → stale, nothing written
     expect(await db.rejectQuarantinedSettlement(s.j.id,s.itemId,{...EXP,evidence_hash:H('f')},`adm:${randomUUID()}`,row,{})).toEqual({seq:0,status:'stale'});
@@ -555,7 +556,7 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
     expect((await db.queueRow(j.id))!).toMatchObject({last_status:'inconsistent',lease_token:null,leased_until:null,attempts:0,
      last_detail:{evidence_hash:H('e'),cutoff:CUT,incident:{quarantine_id:itemId,reason_code:'settlement_basis_mismatch',evidence_hash:H('e'),cutoff:CUT,quarantined_at:at}}});
     const [item]=await h.tables.select('dq_quarantine',{id:itemId});
-    expect(item).toMatchObject({dataset:'judgments',table_name:'judgment_settlements',natural_key:j.id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b});
+    expect(item).toMatchObject({dataset:DATASETS.judgments.quarantine,table_name:'judgment_settlements',natural_key:j.id,reason_code:'settlement_basis_mismatch',status:'open',batch_id:b});
     const read=item.payload as {evidence_hash:string;cutoff:string};                           // what the hook reads
     // Worker A claims with a 1 s lease and stalls past it; worker B claims the row with a new token and publishes.
     const a=(await db.claimDue(100,1)).find(r=>r.judgment_id===j.id)!;
@@ -658,8 +659,8 @@ export function judgmentsDbContract(label:string,setup:()=>Promise<JudgmentsCont
    await h.exclusiveClaims(async()=>{
     const {j,itemId}=await inconsistent(m,b);
     const payload={evidence_hash:H('e'),cutoff:CUT,judgment_id:j.id};
-    const wrongTable=await quarantine(h.tables,{dataset:'judgments',table:'judgments',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload});
-    const wrongId=await quarantine(h.tables,{dataset:'judgments',table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload});
+    const wrongTable=await quarantine(h.tables,{dataset:DATASETS.judgments.quarantine,table:'judgments',naturalKey:j.id,reasonCode:'settlement_basis_mismatch',batchId:b,payload});
+    const wrongId=await quarantine(h.tables,{dataset:DATASETS.judgments.quarantine,table:'judgment_settlements',naturalKey:j.id,reasonCode:'settlement_benchmark_gap',batchId:b,payload});
     expect(new Set([wrongTable,wrongId,itemId]).size).toBe(3);
     for(const id of [wrongTable,wrongId]){
      expect(await db.applyQuarantineOverride(j.id,overrideOf(by),id,{})).toBe('stale');

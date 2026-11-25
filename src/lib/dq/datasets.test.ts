@@ -2,25 +2,34 @@
 import {readFileSync,readdirSync,statSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,it,expect} from 'vitest';
+import {REGISTRY as methodologies} from '../judgments/registry';
+import {SOURCE_CATALOG} from '../sources/catalog';
 import {CADENCES} from './freshness';
 import {DATASETS,DQ_DATASET_INVENTORY,DQ_DATASET_NAMES,inventoryEntry} from './datasets';
 import {RECONCILE_PAIRS} from './reconcile/pairs';
 import {CYCLE_PAIR_IDS,RECONCILE_PAIR_IDS} from './reconcile/types';
 
 // A dataset literal anywhere but the registry means a producer bypassed DATASETS (spec 3 §6.3).
-// TOPICS ↓
-const LITERAL=/(['"`])(topics\.replay|entities\.(?:sec|research-link|identifiers|cninfo|ah-link|windows|sec-submissions)|facts\.(?:us|cn|acceptance)|dq\.(?:calendar\.(?:us|cn)|filer-categories)|company\.events|reconcile\.[a-z][a-z_.]*)\1/;
-// TOPICS ↑
-// db-contract.ts is a test-fixture module (shared FactsDb contract cases), not a producer.
-const EXEMPT=new Set(['src/lib/dq/datasets.ts','src/lib/facts/db-contract.ts',
- // F4 — the judgments and macro db-contract modules are shared test-fixture contract cases too ('facts.us' is a negative case)
- 'src/lib/judgments/db-contract.ts','src/lib/macro/db-contract.ts',
- // /F4
+const names=[...DQ_DATASET_NAMES].sort((a,b)=>b.length-a.length).map(s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+const LITERAL=new RegExp("(['\"`])("+names.join('|')+")\\1",'g');
+const EXEMPT=new Set([
+ 'src/lib/dq/datasets.ts', // Defines the names.
+ 'src/lib/judgments/types.ts', // Frozen formula input documents the quarantine dataset in the DB contract.
 ]);
+
+// These strings also name UI views, translation namespaces, tables, adapters and audit actions.
+// Check the context of each match so a dataset literal elsewhere on the same line is still caught.
+function otherMeaning(path:string,name:string,before:string):boolean{
+ if(name==='judgments')return /(?:Translations\(|\.from\(|\.select\(|table:|adapter:|originFor\('judgment',|internalErrorResponse\(e,|view === |'tracking',\s*)$/.test(before)
+  ||(path==='src/i18n/request.ts'&&before.trim()==='');
+ if(name==='broker_research')return /(?:purpose:|object_type:)$/.test(before);
+ if(name==='judgments.settle')return /audit\(.*\},$/.test(before);
+ return name==='documents.extract'&&before.endsWith('adminPost<Ctx>(');
+}
 function sources(dir:string):string[]{
  const out:string[]=[];
  for(const name of readdirSync(dir)){
-  if(name==='node_modules'||name==='fixtures')continue;
+  if(name==='node_modules')continue;
   const p=join(dir,name);
   if(statSync(p).isDirectory())out.push(...sources(p));
   else if(/\.tsx?$/.test(name)&&!/\.test\.tsx?$/.test(name))out.push(p.replaceAll('\\','/'));
@@ -35,21 +44,48 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
   for(const e of DQ_DATASET_INVENTORY){
    expect(e.dataset.length).toBeGreaterThan(0);
    expect(e.dataset.length).toBeLessThanOrEqual(64);
-   expect(e.producer).toMatch(/^[a-z][a-z0-9-]{0,63}$/);
+   expect(e.producer).toMatch(/^[a-z][a-z0-9_-]{0,63}$/);
    expect(CADENCES).toContain(e.cadence);
   }
  });
- it('expands every DATASETS leaf, market and reconcile pair into the inventory, and nothing else',()=>{
-  // TOPICS ↓
-  const leaves=[DATASETS.topics.replay,...Object.values(DATASETS.company),...Object.values(DATASETS.entities),DATASETS.facts('US'),DATASETS.facts('CN'),DATASETS.acceptance,DATASETS.filerCategories,
-   ...RECONCILE_PAIR_IDS.map(p=>DATASETS.reconcile(p)),DATASETS.calendar('US'),DATASETS.calendar('CN')];
-  expect(DQ_DATASET_NAMES).toHaveLength(1+7+2+1+1+7+2+1);
-  // TOPICS ↑
-  expect([...leaves].sort()).toEqual([...DQ_DATASET_NAMES].sort());
+ it('covers every leaf and each supported family member',()=>{
+  const leaves=(value:unknown):string[]=>typeof value==='string'?[value]:
+   value&&typeof value==='object'?Object.values(value).flatMap(leaves):[];
+  const expanded=[...leaves(DATASETS),...RECONCILE_PAIR_IDS.map(DATASETS.reconcile),
+   ...methodologies.map(m=>DATASETS.judgments.produce(m.id)),
+   ...(['US','CN'] as const).flatMap(m=>[DATASETS.facts(m),DATASETS.calendar(m)]),
+   ...(['sw2021','sic'] as const).flatMap(s=>[DATASETS.industry.aggregate(s),DATASETS.industry.memberships(s),DATASETS.industry.classifications(s)]),
+   ...(['edgar','cninfo','hkexnews'] as const).map(DATASETS.documents.sync)];
+  expect([...new Set(expanded)].sort()).toEqual([...DQ_DATASET_NAMES].sort());
+ });
+ it('pins the complete set of persisted dataset values',()=>{
+  const expected=[
+   'topics.replay','company.events','entities.sec','entities.research-link','entities.identifiers','entities.cninfo',
+   'entities.ah-link','entities.windows','entities.sec-submissions','facts.us','facts.cn','facts.acceptance','dq.filer-categories',
+   'reconcile.us.companyfacts_vs_ixbrl','reconcile.cn.tushare_vs_cninfo_pdf_gold','reconcile.us.companyfacts_vs_gold',
+   'reconcile.facts.lineage_same_day','reconcile.sec.filing_date_vs_submissions','reconcile.sec.filer_category',
+   'reconcile.entities.isin_hkex_vs_gleif','dq.calendar.us','dq.calendar.cn',
+   'macro.fred','macro.akshare','judgments','judgments.settle','judgments.calibrate','judgments.produce.macro_regime',
+   'industry.agg.sw2021','industry.agg.sic','industry.sw2021.memberships','industry.sic.memberships',
+   'industry.sw2021.classifications','industry.sic.classifications','industry.sw2021.source','industry.marks','industry.official',
+   'issuers.a_stock','issuers.a_stock.targeted','facts.hk','documents.edgar','documents.cninfo','documents.hkexnews',
+   'documents.upload','documents.extract','documents.candidates','broker_research',
+  ];
+  expect([...DQ_DATASET_NAMES].sort()).toEqual(expected.sort());
+  expect(DQ_DATASET_NAMES).toHaveLength(47);
+ });
+ it('identifies the catalogued sources and registered upstream datasets',()=>{
+  const valid=new Set<string>(['derived','internal',...SOURCE_CATALOG.map(s=>s.id)]);
+  for(const entry of DQ_DATASET_INVENTORY){
+   const sources=Array.isArray(entry.source)?entry.source:[entry.source];
+   expect(sources.length).toBeGreaterThan(0);
+   for(const source of sources)expect(valid.has(source),entry.dataset).toBe(true);
+   for(const upstream of entry.derivedFrom??[])expect(DQ_DATASET_NAMES).toContain(upstream);
+  }
  });
  // TOPICS ↓
  it('registers the weekly topic replay producer',()=>{
-  expect(inventoryEntry('topics.replay')).toEqual({dataset:'topics.replay',producer:'topic-verify',cadence:'weekly'});
+  expect(inventoryEntry('topics.replay')).toMatchObject({dataset:'topics.replay',producer:'topic-verify',cadence:'weekly'});
  });
  // TOPICS ↑
  it('keeps the identifiers plans 1 and 2 already persist',()=>{
@@ -62,18 +98,18 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
  });
  it('runs the four cycle pairs weekly from the reconcile runner and records the inline pairs as events',()=>{
   for(const p of ['us.companyfacts_vs_ixbrl','cn.tushare_vs_cninfo_pdf_gold','us.companyfacts_vs_gold','facts.lineage_same_day'] as const)
-   expect(inventoryEntry(DATASETS.reconcile(p))).toEqual({dataset:`reconcile.${p}`,producer:'reconcile',cadence:'weekly'});
-  expect(inventoryEntry(DATASETS.reconcile('sec.filing_date_vs_submissions'))).toEqual({dataset:'reconcile.sec.filing_date_vs_submissions',producer:'enrich-acceptance',cadence:'event'});
-  expect(inventoryEntry(DATASETS.reconcile('sec.filer_category'))).toEqual({dataset:'reconcile.sec.filer_category',producer:'filer-categories',cadence:'event'});
-  expect(inventoryEntry(DATASETS.reconcile('entities.isin_hkex_vs_gleif'))).toEqual({dataset:'reconcile.entities.isin_hkex_vs_gleif',producer:'fill-identifiers',cadence:'event'});
-  expect(inventoryEntry(DATASETS.calendar('US'))).toEqual({dataset:'dq.calendar.us',producer:'filing-calendar',cadence:'daily'});
-  expect(inventoryEntry(DATASETS.facts('CN'))).toEqual({dataset:'facts.cn',producer:'facts-sync',cadence:'daily'});
-  expect(inventoryEntry(DATASETS.company.events)).toEqual({dataset:'company.events',producer:'company-digest',cadence:'daily'});
+   expect(inventoryEntry(DATASETS.reconcile(p))).toMatchObject({dataset:`reconcile.${p}`,producer:'reconcile',cadence:'weekly'});
+  expect(inventoryEntry(DATASETS.reconcile('sec.filing_date_vs_submissions'))).toMatchObject({dataset:'reconcile.sec.filing_date_vs_submissions',producer:'enrich-acceptance',cadence:'event'});
+  expect(inventoryEntry(DATASETS.reconcile('sec.filer_category'))).toMatchObject({dataset:'reconcile.sec.filer_category',producer:'filer-categories',cadence:'event'});
+  expect(inventoryEntry(DATASETS.reconcile('entities.isin_hkex_vs_gleif'))).toMatchObject({dataset:'reconcile.entities.isin_hkex_vs_gleif',producer:'fill-identifiers',cadence:'event'});
+  expect(inventoryEntry(DATASETS.calendar('US'))).toMatchObject({dataset:'dq.calendar.us',producer:'filing-calendar',cadence:'daily'});
+  expect(inventoryEntry(DATASETS.facts('CN'))).toMatchObject({dataset:'facts.cn',producer:'facts-sync',cadence:'daily'});
+  expect(inventoryEntry(DATASETS.company.events)).toMatchObject({dataset:'company.events',producer:'company-digest',cadence:'daily'});
   expect(()=>inventoryEntry('macro.cpi')).toThrow('unknown_dataset:macro.cpi');
  });
  it('finds no hard-coded dataset literal outside the registry',()=>{
   const hits=[...sources('src'),...sources('scripts')].filter(p=>!EXEMPT.has(p)).flatMap(p=>
-   readFileSync(p,'utf8').split('\n').flatMap((line,i)=>LITERAL.test(line)?[`${p}:${i+1}`]:[]));
+   readFileSync(p,'utf8').split('\n').flatMap((line,i)=>!/^\s*(?:\/\/|\/\*|\*)/.test(line)&&[...line.matchAll(LITERAL)].some(m=>!otherMeaning(p,m[2],line.slice(0,m.index)))?[`${p}:${i+1}`]:[]));
   expect(hits).toEqual([]);
  });
 });

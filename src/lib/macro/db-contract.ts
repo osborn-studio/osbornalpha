@@ -234,7 +234,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    const ra=(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
    const rb=(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.6',await retrieval(b,T3),T3,false)])).conflicts[0].observation_id!;
    const by=await h.resolver();
-   const item=(series:string,reasonCode='unexpected_revision',period='2026-09-30',dataset='macro.fred')=>h.addQuarantine({dataset,naturalKey:`${series}|${period}`,batchId:b,reasonCode});
+   const item=(series:string,reasonCode='unexpected_revision',period='2026-09-30',dataset:string=DATASETS.macro.fred)=>h.addQuarantine({dataset,naturalKey:`${series}|${period}`,batchId:b,reasonCode});
    const a=await item(s);
    expect(await db.linkQuarantine(a,[ra,rb])).toBe(2);                                             // one item, two values
    expect(await db.linkQuarantine(a,[ra])).toBe(0);
@@ -361,7 +361,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
   it('rejected values are final (第 5 稿 P1-2): ok 4.1 → 4.2 rejected → a newer 4.2 redelivery is previously_rejected and inserts nothing',async()=>{
    const {s,b}=await seeded();                                                                          // revisable; 4.1 available at T2
    const rej=(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.2',await retrieval(b,T1),T1)])).conflicts[0].observation_id!;
-   const q=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${s}|2026-09-30`,batchId:b,reasonCode:'stale_delivery'});
+   const q=await h.addQuarantine({dataset:DATASETS.macro.fred,naturalKey:`${s}|2026-09-30`,batchId:b,reasonCode:'stale_delivery'});
    await db.linkQuarantine(q,[rej]);await db.resolveConflict(q,'reject',await h.resolver());
    const st0=await db.publishState('US');
    expect(await db.writeObservations(b,'c',[nativeRow(s,'2026-09-30','4.2',await retrieval(b,T3),T3)])).toEqual({...zero,duplicates:1,conflicts:[{series_id:s,period_end:'2026-09-30',reason:'previously_rejected',value_text:'4.2',current_value_text:'4.1',observation_id:rej}]});
@@ -378,7 +378,7 @@ export function macroDbContract(label:string,setup:()=>Promise<MacroContractHarn
    const own=(await db.writeObservations(okB,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(okB,T3),T3,false)])).conflicts[0].observation_id!;
    expect(own).not.toBe(stranded);
    expect((await db.writeObservations(okB,'c',[nativeRow(s,'2026-09-30','4.5',await retrieval(okB,T3),T3,false)])).conflicts[0].observation_id).toBe(own);   // the current batch's row is reused
-   const q=await h.addQuarantine({dataset:'macro.fred',naturalKey:`${s}|2026-09-30`,batchId:failedB,reasonCode:'unexpected_revision'});
+   const q=await h.addQuarantine({dataset:DATASETS.macro.fred,naturalKey:`${s}|2026-09-30`,batchId:failedB,reasonCode:'unexpected_revision'});
    expect(await db.linkQuarantine(q,[stranded,own])).toBe(2);
    await h.finish(okB,'success');
    const by=await h.resolver();

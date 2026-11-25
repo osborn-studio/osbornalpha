@@ -1,4 +1,5 @@
 // Licensed chunked LLM extraction, private call storage, candidate commit and rules receipt (spec §6.2).
+import {DATASETS} from '../../dq/datasets';
 import {finishBatch,startBatch,emptyCounts} from '../../dq/batches';
 import type {BatchCounts,BatchError} from '../../dq/batches';
 import {behaviorDigest} from '../behavior';
@@ -98,7 +99,7 @@ export async function runExtract(deps:BrokerDeps,documentId:string,by:string,opt
  if(!info)return failUnavailable(deps,'broker-research-extract',documentId,token,'llm_unavailable');
  const report=await deps.db.ensureReport(documentId,deps.codeVersion),parseRun=await deps.db.getRun(doc.current_parse_run_id!);
  if(!parseRun||parseRun.status!=='succeeded')throw conflict('document_not_parsed');
- const {batchId}=await startBatch(deps.tables,{producer:'broker-research-extract',dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:'manual',toolVersions:{prompt:EXTRACT_PROMPT_VERSION,schema:SCHEMA_VERSION}});
+ const {batchId}=await startBatch(deps.tables,{producer:'broker-research-extract',dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:'manual',toolVersions:{prompt:EXTRACT_PROMPT_VERSION,schema:SCHEMA_VERSION}});
  const runId=deps.newId(),extractorVersion=parseRun.extractor_version??'unknown';
  const digest=behaviorDigest({extractorVersion,modelId:info.modelId,registryHash:info.registryHash,promptVersion:EXTRACT_PROMPT_VERSION,schemaVersion:SCHEMA_VERSION});
  await deps.db.insertRun({run_id:runId,document_id:documentId,kind:'extract',parse_run_id:parseRun.run_id,extractor_version:extractorVersion,artifact_path:null,artifact_hash:null,

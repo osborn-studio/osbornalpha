@@ -18,6 +18,7 @@
 // Decimal strings are
 // stored as given (callers pass canonical decimals); market_cap is close × total_share with
 // PostgreSQL's result scale (sum of the input scales).
+import {DATASETS} from '../dq/datasets';
 import {withUsIndustryTypes} from './types-us';
 import type {IndustryDbBoundary} from './types-us';
 import {createHash,randomUUID} from 'node:crypto';
@@ -395,7 +396,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
        obsId=randomUUID();
        s.marks.set(obsId,{observation_id:obsId,ticker:m.ticker,trade_date:m.trade_date,fetch_event_id:fetchEventId,observed_at:at,close:m.close,total_share:m.total_share,free_share:m.free_share??null,
         market_cap:mulDecimalText(m.close,m.total_share),source:m.source,upstream:m.upstream,raw_hash:m.raw_hash,locator:clone(m.locator),batch_id:ev!.batch_id,status,supersedes:cur?.observation_id??null});
-       if(cur){outcome='superseded_previous';superseded++;items.push({dataset:'industry.marks',table:'security_marks',key,reason:'mark_revised',detail:{previous:cur.observation_id,current:obsId,fetch_event_id:fetchEventId},batch:ev!.batch_id});}
+       if(cur){outcome='superseded_previous';superseded++;items.push({dataset:DATASETS.industry.marks,table:'security_marks',key,reason:'mark_revised',detail:{previous:cur.observation_id,current:obsId,fetch_event_id:fetchEventId},batch:ev!.batch_id});}
        else{outcome='inserted';inserted++;}   // a 'quarantined' input is stored as evidence and counted here, like the SQL function
       }
      }else{
@@ -407,7 +408,7 @@ export function memoryIndustryDb(opts:{tables?:TableClient;facts?:Pick<FactsDb,'
        obsId=randomUUID();
        s.officials.set(obsId,{observation_id:obsId,scheme:o.scheme,version:o.version,code:o.code,trade_date:o.trade_date,metric:o.metric,fetch_event_id:fetchEventId,value:o.value,observed_at:at,
         source:o.source,upstream:o.upstream,raw_hash:o.raw_hash,locator:clone(o.locator),batch_id:ev!.batch_id,status:'ok',supersedes:cur?.observation_id??null});
-       if(cur){outcome='superseded_previous';superseded++;items.push({dataset:'industry.official',table:'industry_official_valuations',key,reason:'official_revised',detail:{previous:cur.observation_id,current:obsId,fetch_event_id:fetchEventId},batch:ev!.batch_id});}
+       if(cur){outcome='superseded_previous';superseded++;items.push({dataset:DATASETS.industry.official,table:'industry_official_valuations',key,reason:'official_revised',detail:{previous:cur.observation_id,current:obsId,fetch_event_id:fetchEventId},batch:ev!.batch_id});}
        else{outcome='inserted';inserted++;}
       }
      }

@@ -1,6 +1,7 @@
 // Server composition only: imported by macro write deps, never by snapshot/read-model core.
 // The publication is already committed. A failed hook leaves recovery to settlement compensation;
 // it must not move that scan's marker or look up a newer active snapshot.
+import {DATASETS} from '../dq/datasets';
 import {emptyCounts,finishBatch,startBatch} from '../dq/batches';
 import {macroJudgmentsEnabled} from '../macro/flags';
 import type {OnPublished} from '../macro/snapshots';
@@ -17,7 +18,7 @@ export function productionMacroJudgmentHook(options:{codeVersion:string;triggere
   if(!methodology)throw new Error('macro_methodology_missing');
   const signal=AbortSignal.timeout(60_000);
   const deps=productionJudgmentDeps({...options,actor:options.triggeredBy,signal});
-  const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:'judgments.produce.macro_regime',...options});
+  const {batchId}=await startBatch(deps.tables,{producer:'ts-judgments',dataset:DATASETS.judgments.produce('macro_regime'),...options});
   let counts={...emptyCounts(),fetched:1,failed:1};
   let errors:import('../dq/batches').BatchError[]=[{code:'produce_failed',key:snapshot.snapshot_id}];
   try{

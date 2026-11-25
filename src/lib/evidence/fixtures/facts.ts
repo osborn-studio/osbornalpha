@@ -1,4 +1,5 @@
 // Topic spec §4.1 financial fact fixtures (X19).
+import {DATASETS} from '../../dq/datasets';
 import type {FactRow} from '@/lib/facts/types';
 import type {MemorySourcesInput} from '../memory-sources';
 import type {FactInfo} from '../sources';
@@ -10,5 +11,5 @@ export function factFixture():MemorySourcesInput{
   issuer:{name:{zh:'样本公司',en:'Sample Company'},ticker:'TEST'},filing:{form_type:'10-K',source_ref:fact_id,url:'https://example.com/filing'},publisher:'SEC',
  });
  return {facts:{infos:[info(FACT.usOk),info(FACT.usRestated,{value:'1010',value_text:'1010',available_date:'2026-11-20'}),info(FACT.hk,{market:'HK' as FactRow['market']}),info(FACT.quarantined,{status:'quarantined',value:'5555.55',value_text:'5555.55'}),info(FACT.staged,{status:'staged'}),info(FACT.usLater,{available_date:'2026-12-01',concept:'Later'}),info(FACT.cnPending,{market:'CN',value:'987654321.12',value_text:'987654321.12'}),info(FACT.usIncomplete,{concept:'Incomplete',value:'8888.88',value_text:'8888.88'})],
-  ineligible:new Map([[FACT.cnPending,'citation_pending'],[FACT.usIncomplete,'evidence_incomplete']])},freshness:{'facts.us':'fresh','facts.cn':'fresh'}};
+  ineligible:new Map([[FACT.cnPending,'citation_pending'],[FACT.usIncomplete,'evidence_incomplete']])},freshness:{[DATASETS.facts('US')]:'fresh',[DATASETS.facts('CN')]:'fresh'}};
 }

@@ -1,4 +1,5 @@
 // Re-run rules after accepting a broker quarantine item, keyed by document SHA (spec §7.3).
+import {DATASETS} from '../dq/datasets';
 import {finishBatch,startBatch,emptyCounts} from '../dq/batches';
 import {applyRules} from './rules-run';
 import type {CoreDeps} from './deps';
@@ -9,7 +10,7 @@ export async function afterRulesForItem(deps:Pick<CoreDeps,'db'|'storage'|'table
   return 'failed';
  };
  try{
-  ({batchId}=await startBatch(deps.tables,{producer:'broker-research-review',dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:'manual'}));
+  ({batchId}=await startBatch(deps.tables,{producer:'broker-research-review',dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:'manual'}));
   if(!/^[0-9a-f]{64}:/.test(naturalKey))return failed('invalid_natural_key');
   const doc=await deps.db.findDocumentBySha(naturalKey.split(':')[0]);const report=doc?await deps.db.reportByDocument(doc.document_id):null;
   if(!report||report.status!=='draft'){await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors:[]},deps.now());return 'skipped';}

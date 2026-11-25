@@ -5,6 +5,7 @@
 // reconciliation see byte-identical rows on every run (call db.setNow(FIXED_NOW) first so
 // created_at is fixed too). aaplParse() parses the plan-2 recorded EDGAR fixture
 // (spec §14.1 inputs.test.ts: fixtures/edgar/CIK0000320193.trimmed.json).
+import {DATASETS} from '../../dq/datasets';
 import {createHash,randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {quarantine} from '@/lib/dq/quarantine';
@@ -47,7 +48,7 @@ export async function publishFacts(db:MemoryFactsDb,o:PublishInput):Promise<{run
  });
  await db.stageFacts(runId,rows);
  if(o.quarantineRawHashes&&o.quarantineRawHashes.length>0){
-  const item=await quarantine(db.tables,{dataset:`facts.${o.market.toLowerCase()}`,table:'financial_facts',naturalKey:`${o.issuer}:seed:${runId}`,reasonCode:'identity_bs',batchId:batch});
+  const item=await quarantine(db.tables,{dataset:DATASETS.facts(o.market),table:'financial_facts',naturalKey:`${o.issuer}:seed:${runId}`,reasonCode:'identity_bs',batchId:batch});
   await db.quarantineFacts(runId,o.quarantineRawHashes.map(h=>{const id=factIds.get(h);if(!id)throw new Error(`seed_unknown_raw_hash:${h}`);return id;}),item);
  }
  if(o.publish!==false)await db.publishRun(runId,[...new Set(filingIds.values())]);

@@ -16,6 +16,7 @@
 // the manifest's objects (sha256-checked), evaluates (calibration.ts), writes the content-addressed
 // cohort file, and calls insert_calibration: inserted | duplicate → CAS-clear the unit (R05),
 // stale_revision → clear and restart with a new generation (acceptance example 10).
+import {DATASETS} from '../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import {selectAll} from '../db/table-client';
 import type {TableClient} from '../db/table-client';
@@ -32,7 +33,7 @@ import {jobKey} from './job-keys';
 import {PUBLIC_SUBJECT_TYPES} from './types';
 import type {CalibrationRow,CalibrationScope,JudgmentsDb,MethodologyRow,QueryBounds} from './types';
 
-export const CALIBRATE_DATASET='judgments.calibrate';
+export const CALIBRATE_DATASET=DATASETS.judgments.calibrate;
 /** The calibration cron's persisted round cursor (plan audit P2-02); per-unit outcome of the current round (Q1-04). */
 export const ROUND_JOB=jobKey('calibrate_round');
 export type RoundOutcome='completed'|'failed'|'in_progress';

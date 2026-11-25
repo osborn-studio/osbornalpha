@@ -1,4 +1,5 @@
 // Review and publication services: verbatim evidence, materialized rules, and SQL publish gate (spec §6.3/§6.5).
+import {DATASETS} from '../dq/datasets';
 import {finishBatch,startBatch,emptyCounts} from '../dq/batches';
 import {resolveIssuer} from '../entities/resolve';
 import {auditAdmin} from './audit';
@@ -35,7 +36,7 @@ async function sliceOr400(deps:RDeps,parseRunId:string,s:Span):Promise<string>{
  if(text===null)throw bad('span_out_of_range');return text;
 }
 async function afterChange(deps:RDeps,reportId:string):Promise<RulesOutcome>{
- const {batchId}=await startBatch(deps.tables,{producer:'broker-research-review',dataset:'broker_research',codeVersion:deps.codeVersion,triggeredBy:'manual'});
+ const {batchId}=await startBatch(deps.tables,{producer:'broker-research-review',dataset:DATASETS.brokerResearch,codeVersion:deps.codeVersion,triggeredBy:'manual'});
  try{const rules=await applyRules(deps,reportId,{batchId});
   await finishBatch(deps.tables,batchId,{counts:{...emptyCounts(),quarantined:rules.quarantined},errors:rules.quarantined?[{code:'rules_failed_summary',message:`${rules.quarantined} quarantined`}]:[]},deps.now());return rules;
  }catch(e){await finishBatch(deps.tables,batchId,{counts:emptyCounts(),errors:[{code:'rules_error',message:e instanceof Error?e.message:String(e)}]},deps.now());throw e;}
@@ -134,7 +135,7 @@ export async function reviewData(deps:RDeps,reportId:string):Promise<{payload:Re
  const report=await reportOr404(deps,reportId),doc=await deps.db.getDocument(report.document_id);if(!doc)throw notFound('document_not_found');if(doc.status==='withdrawn')throw new BrokerError('document_withdrawn',410);
  const [licence,fields,targets,snippets,summaries,runs,blockers,institutions,analysts,reportAnalysts]=await Promise.all([deps.db.getLicence(doc.licence_id),deps.db.listFields(reportId,{includeSuperseded:true}),deps.db.listTargets(reportId),deps.db.listSnippets(reportId),deps.db.listSummaries(reportId),deps.db.listRuns(doc.document_id),deps.db.publishBlockers(reportId),deps.db.listInstitutions(),report.institution_id?deps.db.listAnalysts(report.institution_id):Promise.resolve([]),deps.db.listReportAnalysts(reportId)]);
  if(!licence)throw new BrokerError('licence_not_found',500);
- const quarantine:ReviewQuarantineItem[]=(await deps.tables.select('dq_quarantine',{dataset:'broker_research',status:'open'},{limit:1000})).filter(q=>String(q.natural_key).startsWith(`${doc.sha256}:`)).map(q=>({id:String(q.id),reason_code:String(q.reason_code),natural_key:String(q.natural_key),payload:(q.payload??{}) as Record<string,unknown>,created_at:String(q.created_at)}));
+ const quarantine:ReviewQuarantineItem[]=(await deps.tables.select('dq_quarantine',{dataset:DATASETS.brokerResearch,status:'open'},{limit:1000})).filter(q=>String(q.natural_key).startsWith(`${doc.sha256}:`)).map(q=>({id:String(q.id),reason_code:String(q.reason_code),natural_key:String(q.natural_key),payload:(q.payload??{}) as Record<string,unknown>,created_at:String(q.created_at)}));
  return {payload:{report,document:doc,licence,fields,targets,snippets,summaries,runs,blockers,quarantine,institutions,analysts,reportAnalysts},log:{document_id:doc.document_id,user_id:'',action:'text_viewed',detail:{report_id:reportId,surface:'review'}}};
 }
 export async function pageText(deps:RDeps,documentId:string,page:number){

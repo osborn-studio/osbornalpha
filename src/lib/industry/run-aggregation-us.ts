@@ -4,6 +4,7 @@
 // fallback reads/uploads are bounded (default sixteen);
 // staging follows code/bucket/metric order regardless of completion order. dryRun computes and
 // self-checks every manifest with zero mutations, including no batch, quarantine or freshness writes.
+import {DATASETS} from '../dq/datasets';
 import type {TriggeredBy,BatchError} from '../dq/batches';
 import {emptyCounts,startBatch,finishBatch} from '../dq/batches';
 import {quarantine} from '../dq/quarantine';
@@ -37,7 +38,7 @@ export async function runIndustryAggregationUs(deps:IndustryDeps,opts:Aggregatio
  const receipt:AggregationReceipt={timings,status:'rejected',batchId:null,batchStatus:null,runId:null,generation:null,activatedAt:null,historyClass:'reconstruction',groups:0,reusedGroups:0,cells:{ok:0,missing:0},manifestMismatches:0,truncatedIssuers:[]};
  assertDay('factsAsOf',opts.factsAsOf);
  if(!deps.codeVersion)return {...receipt,code:'code_version_missing'};
- const {db,tables,facts,manifests}=deps,dataset='industry.agg.sic',dry=opts.dryRun===true;
+ const {db,tables,facts,manifests}=deps,dataset=DATASETS.industry.aggregate('sic'),dry=opts.dryRun===true;
  const counts=emptyCounts(),errors:BatchError[]=[];let ok=false;
  try{
   if(!dry)receipt.batchId=(await startBatch(tables,{producer:'industry-agg',dataset,toolVersions:{method:METHOD_VERSION_US,config:CONFIG_HASH_US,formula:FORMULA_VERSION},codeVersion:deps.codeVersion,triggeredBy:opts.triggeredBy??'script'})).batchId;

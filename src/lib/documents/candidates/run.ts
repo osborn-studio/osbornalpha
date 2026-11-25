@@ -24,6 +24,7 @@
 // Counters: candidates phase fetched = generated candidates, inserted = new rows, duplicates =
 // rows that already existed, quarantined = check findings parked, failed = extractions that failed.
 // dryRun writes nothing (no batch, lease or row): it reports what is due.
+import {DATASETS} from '../../dq/datasets';
 import type {SupabaseClient} from '@supabase/supabase-js';
 import {supabaseTableClient} from '../../db/table-client';
 import type {TableClient} from '../../db/table-client';
@@ -49,7 +50,7 @@ import {BudgetExceeded,FINAL_RESERVE_MS,HEARTBEAT_MS,guardCalls,withLeaseHeartbe
 
 export type CandidatesPhase='candidates'|'auto'|'promote';
 export const DEFAULT_PHASES:readonly CandidatesPhase[]=['candidates','auto','promote'];
-export const CANDIDATES_DATASET='documents.candidates';
+export const CANDIDATES_DATASET=DATASETS.documents.candidates;
 export const LEASE_TTL_S=600;
 export const MIN_ITEM_MS=90_000;
 /** Budget a costly phase (generation, checks) needs to start (P2-7). */

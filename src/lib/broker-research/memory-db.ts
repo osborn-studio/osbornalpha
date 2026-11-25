@@ -15,6 +15,7 @@
 // (3) a claim's subject.market comes from the ticker suffix (.HK → HK, .SH/.SZ/.BJ → A, else US),
 // not from stocks_universe; (4) only the upload intent document foreign key and check constraints named in the code;
 // (5) no row locks — calls are serialised by the event loop.
+import {DATASETS} from '../dq/datasets';
 import {randomUUID} from 'node:crypto';
 import {memoryTableClient} from '../db/memory-table-client';
 import {selectAll} from '../db/table-client';
@@ -234,7 +235,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   const ni=new Set(ts.map(t=>t.issuer_id).filter(x=>x!==null)).size;
   if((r.scope==='single_issuer'&&(ni!==1||ts.length<1))||(r.scope==='multi_issuer'&&ni<2)||((r.scope==='sector'||r.scope==='macro_strategy')&&ts.length!==0))b.push('target_cardinality');
   const q=(tables as unknown as {rows?:(t:string)=>Row[]}).rows?.('dq_quarantine')??[];
-  b.push(...[...new Set(q.filter(x=>x.dataset==='broker_research'&&x.status==='open'&&String(x.natural_key).startsWith(`${d.sha256}:`)&&BLOCKING_Q.has(String(x.reason_code))).map(x=>`quarantine_open:${String(x.reason_code)}`))].sort(cmp));
+  b.push(...[...new Set(q.filter(x=>x.dataset===DATASETS.brokerResearch&&x.status==='open'&&String(x.natural_key).startsWith(`${d.sha256}:`)&&BLOCKING_Q.has(String(x.reason_code))).map(x=>`quarantine_open:${String(x.reason_code)}`))].sort(cmp));
   const live=liveDigests(rep);
   if(r.materialized_hash===null||r.materialized_hash!==live.effective_hash||r.effective_hash!==live.effective_hash||r.rules_input_hash!==live.rules_input_hash||r.summary_input_digest!==live.summary_input_digest)b.push('materialize_stale');
   const rr=receiptFor(r);
@@ -747,7 +748,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
    if(step==='snippets_text'){const xs=[...snippets.values()].filter(s=>s.report_id===reportId);for(const s of xs)Object.assign(s,{text:null,status:'rejected',approved_by:null,approved_at:null});return xs.length;}
    if(step==='summaries'){const xs=[...summaries.values()].filter(s=>s.report_id===reportId);for(const s of xs)Object.assign(s,{status:'rejected',approved_by:null,approved_at:null});return xs.length;}
    const sha=docOf(r).sha256;let n=0;
-   for(const q of await selectAll(tables,'dq_quarantine',{dataset:'broker_research'},'id'))if(String(q.natural_key).startsWith(`${sha}:`)){await tables.update('dq_quarantine',{id:q.id as string},{payload:{}});n++;}
+   for(const q of await selectAll(tables,'dq_quarantine',{dataset:DATASETS.brokerResearch},'id'))if(String(q.natural_key).startsWith(`${sha}:`)){await tables.update('dq_quarantine',{id:q.id as string},{payload:{}});n++;}
    return n;
   },
   async verifyCandidates(limit){
@@ -794,7 +795,7 @@ export function memoryBrokerResearchDb(opts:{tables?:TableClient;now?:()=>Date}=
   async quarantineResolve(id,status,by,payload){
    if(status!=='resolved_accept'&&status!=='resolved_reject')fail('invalid_status');
    const [q]=await tables.select('dq_quarantine',{id});if(!q)return 'not_found';
-   if(q.dataset!=='broker_research')fail('wrong_dataset');if(q.status!=='open')return 'already_resolved';
+   if(q.dataset!==DATASETS.brokerResearch)fail('wrong_dataset');if(q.status!=='open')return 'already_resolved';
    const sha=String(q.natural_key).split(':')[0];const d=[...documents.values()].find(x=>x.sha256===sha);
    const r=d?[...reports.values()].find(x=>x.document_id===d.document_id):undefined;
    if(r?.status==='published')fail('published_immutable');

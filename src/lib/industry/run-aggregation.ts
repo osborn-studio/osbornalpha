@@ -32,6 +32,7 @@
 // current ones (canonical JSON, statuses and windows included) and every member_state_revs entry
 // equals the current state_rev (an issuer without a scope row counts as 0). code_version is not a
 // reuse key: reused rows keep the manifest's code_version inside the manifest.
+import {DATASETS} from '../dq/datasets';
 import type {TableClient} from '../db/table-client';
 import {currentSecurities} from '../facts/scope';
 import {industryKeysetAll as keysetAll} from './keyset';
@@ -164,7 +165,7 @@ export async function runIndustryAggregation(deps:AggregationDeps,opts:Aggregati
  if(!Number.isInteger(opts.level)||opts.level<1||opts.level>4)throw new Error('invalid_level');
  if(!deps.codeVersion)return {...receipt,code:'code_version_missing'};
  const {tables,db,facts,manifests}=deps;const codeVersion=deps.codeVersion;
- const dataset=`industry.agg.${opts.scheme}`;
+ const dataset=DATASETS.industry.aggregate(opts.scheme);
  const {batchId}=opts.dryRun?{batchId:null}:await startBatch(tables,{producer:'industry-agg',dataset,toolVersions:{method:METHOD_VERSION,config:CONFIG_HASH,formula:FORMULA_VERSION},codeVersion,triggeredBy:opts.triggeredBy??'script'});
  receipt.batchId=batchId;
  const errors:BatchError[]=[];let counts:BatchCounts=emptyCounts();
