@@ -2,12 +2,12 @@ import type { Market } from '@/lib/supabase/database.types';
 import type { KlineAdjustment } from '@/lib/data/kline/types';
 
 export type SourceId = 'eastmoney' | 'sina' | 'tencent' | 'twse' | 'tpex' | 'eodhd'
-  | 'datagateway' | 'tushare' | 'sec' | 'cninfo' | 'hkexnews' | 'fred' | 'akshare'
+  | 'datagateway' | 'tushare' | 'gildata' | 'sec' | 'cninfo' | 'hkexnews' | 'fred' | 'akshare'
   | 'openfigi' | 'gleif' | 'hkex' | 'nasdaq' | 'sp-global' | 'nbs' | 'chinabond'
   | 'safe' | 'pboc' | 'cfets' | 'federalreserve' | 'opm';
 export type DataDomain = 'quote' | 'kline_intraday' | 'kline_daily' | 'kline_weekly_monthly'
   | 'financial_facts' | 'filings' | 'documents' | 'entity_identifiers' | 'security_master'
-  | 'industry_classification' | 'industry_marks' | 'macro_series' | 'filing_calendar' | 'company_snapshot';
+  | 'industry_classification' | 'industry_aggregates' | 'industry_marks' | 'macro_series' | 'filing_calendar' | 'company_snapshot';
 
 type CatalogMarket = Market | 'CN'; // Macro regions use CN, equity routes use A.
 export interface Capability {
@@ -24,7 +24,7 @@ export interface SourceEntry {
   aliases: readonly string[];
   hosts: readonly string[];
   credentials: readonly string[];
-  pacing: { minIntervalMs: number; scope: 'process' } | null;
+  pacing: { minIntervalMs: number; scope: 'process' | 'instance' } | null;
   licence: {
     place: 'industry_dataset_licenses' | 'methodologies_licenses_json' | 'macro_catalog_rights' | 'none';
     keys: readonly string[];
@@ -109,6 +109,13 @@ export const SOURCE_CATALOG: readonly SourceEntry[] = [
       capability('security_master', ['A', 'HK']), capability('industry_classification', ['A']),
       capability('industry_marks', ['A']), capability('company_snapshot', ['A'], 'A'),
       { ...capability('kline_daily', ['A'], 'A'), bars: 'ohlcv', adjustments: ['none'] }],
+  },
+  {
+    ...defaults, id: 'gildata', name: { zh: '聚源', en: 'Gildata' },
+    aliases: ['datamap-mcp'], hosts: ['api.gildata.com'], credentials: ['GILDATA_API_KEY'],
+    pacing: { minIntervalMs: 1000, scope: 'instance' },
+    licence: { place: 'industry_dataset_licenses', keys: ['scheme:sw2021:2021', 'vendor:gildata:industry-financials'] },
+    capabilities: [capability('industry_classification', ['A']), capability('industry_aggregates', ['A'])],
   },
   {
     ...defaults, id: 'sec', name: { zh: '美国证券交易委员会', en: 'SEC EDGAR' },
