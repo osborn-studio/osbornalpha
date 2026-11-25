@@ -12,7 +12,7 @@
 import {createHash} from 'node:crypto';
 import {existsSync,readdirSync,readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {tusharePacer} from '../../sources/tushare-transport';
+import {TUSHARE_MIN_INTERVAL_MS,tusharePacer} from '../../sources/tushare-transport';
 import {TushareError,tushareCallRaw} from '../../data/sources/tushare';
 import {isTushareQuotaMessage} from '../../facts/providers/tushare-statements';
 import type {NumberSchema} from '../../facts/json-numbers';
@@ -162,7 +162,8 @@ export async function fetchPaged<T>(call:TushareCall,api:string,params:Record<st
  const out:TusharePage<T>[]=[];let prev:string|null=null;
  for(let page=1,offset=0;;page++){
   if(page>MAX_PAGES)throw new IndustryProviderError('too_many_pages',api);
-  await tusharePacer.admit(admission);
+  // Preserve the local inter-page wait even when the shared pacer is cold.
+  if(page>1)await tusharePacer.admit({...admission,notBeforeMs:Date.now()+(opts.minIntervalMs??TUSHARE_MIN_INTERVAL_MS)});
   const res=await call(api,{...params,limit:size,offset},fields.join(','));
   // structure first: duplicate names or a row of another width would let projection turn an absent cell into null
   if(new Set(res.fields).size!==res.fields.length)throw new IndustryProviderError('parse_error','duplicate_field');

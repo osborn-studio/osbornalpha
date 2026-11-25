@@ -43,7 +43,7 @@ import {validateAShareTickers} from './a-share-selection';
 import {persistDelistings,scanDelistings} from './delistings';
 import type {DelistingScan} from './delistings';
 import type {SnapshotCapture,StockBasicRow,TusharePage} from './providers/tushare-industry';
-import {IndustryProviderError,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
+import {IndustryProviderError,TUSHARE_MIN_INTERVAL_MS,defaultTushareCall,fetchStockBasic,ymdToIso} from './providers/tushare-industry';
 
 export const A_SHARE_DATASET='issuers.a_stock';
 const TARGETED_A_SHARE_DATASET='issuers.a_stock.targeted';
@@ -249,7 +249,9 @@ export async function runLoadAShare(deps:IndustryDeps,opts:RunLoadAShareOptions)
  try{
   const pages:TusharePage<StockBasicRow>[]=[];
   const fetchOptions={sleep:opts.sleep,now:deps.now,snapshots:batchId?opts.snapshots:undefined};
+  const wait=opts.sleep??((ms:number)=>new Promise<void>(r=>setTimeout(r,ms)));
   for(const listStatus of ['L','P','D'] as const)for(const tsCode of selected??[undefined]){
+   if(selected&&pages.length>0)await wait(TUSHARE_MIN_INTERVAL_MS);
    pages.push(...await fetchStockBasic(call,{listStatus,tsCode},fetchOptions));
   }
   scan=scanDelistings(pages);

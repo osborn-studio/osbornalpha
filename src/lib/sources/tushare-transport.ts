@@ -5,7 +5,8 @@ export const TUSHARE_MIN_INTERVAL_MS = 400;
 export const tusharePacer = createPacer(TUSHARE_MIN_INTERVAL_MS);
 export const resetTusharePacing = () => tusharePacer.reset();
 
-/** Direct importers that intentionally bypass shared admission: interactive, sync, diagnostic and recording paths. */
+/** Direct importers that intentionally bypass shared admission: interactive, sync, diagnostic and recording paths.
+ * Industry first pages are unpaced, as before. P1 decides their pacing. */
 export const TUSHARE_UNPACED_CALL_SITES = [
   'scripts/industry/record-fixture.ts',
   'src/app/api/diag/tushare/route.ts',

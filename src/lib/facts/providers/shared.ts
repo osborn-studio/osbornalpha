@@ -33,7 +33,7 @@ export function sleep(ms:number,signal:AbortSignal):Promise<void>{
 }
 /** Thrown by Pacer.admit; the message is the fixed code. Adapters map it to their own ProviderError code. */
 export class PacerError extends Error{constructor(public readonly code:'budget_aborted'|'budget_exhausted'){super(code);this.name='PacerError';}}
-export interface AdmitOptions{budget:Budget;reserveMs:number;now?:()=>number;sleep?:typeof sleep;propagateSleepError?:boolean;minIntervalMs?:number}
+export interface AdmitOptions{notBeforeMs?:number;budget:Budget;reserveMs:number;now?:()=>number;sleep?:typeof sleep;propagateSleepError?:boolean;minIntervalMs?:number}
 export interface Pacer{admit(o:AdmitOptions):Promise<void>;reset():void}
 /**
  * One process-wide request pacer per upstream. Admissions are SERIALISED (a promise chain), and each wait is computed from the
@@ -49,7 +49,7 @@ export function createPacer(defaultIntervalMs:number):Pacer{
   const now=o.now??Date.now,wait=o.sleep??sleep,interval=o.minIntervalMs??defaultIntervalMs;
   const check=()=>{if(o.budget.signal.aborted)throw new PacerError('budget_aborted');if(o.budget.remainingMs()<=o.reserveMs)throw new PacerError('budget_exhausted');};
   check();
-  const gap=lastStart+interval-now();
+  const gap=Math.max(lastStart+interval,o.notBeforeMs??-Infinity)-now();
   if(gap>0){
    if(o.budget.remainingMs()-gap<=o.reserveMs)throw new PacerError('budget_exhausted');
    try{await wait(gap,o.budget.signal);}catch(error){

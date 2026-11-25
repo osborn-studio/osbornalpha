@@ -37,29 +37,37 @@ it('agrees with the catalogue pacing interval', () => {
   expect(sourceByName('tushare')?.pacing?.minIntervalMs).toBe(TUSHARE_MIN_INTERVAL_MS);
 });
 
-it('spaces the first industry page after a statement admission and honors an override', async () => {
+it('paces only continuation pages, sharing their admissions with statements', async () => {
   resetTusharePacing();
   let time = 1000;
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => time);
   const sleep = vi.fn(async (ms: number) => { time += ms; });
-  const dispatches: number[] = [];
   const budget = { remainingMs: () => Infinity, signal: new AbortController().signal };
+  const statement = () => expect(fetchTushareStatements('600519.SH', 2024, budget, {
+    now: () => time, sleep, call: async () => { throw new Error('end of recording'); },
+  })).rejects.toMatchObject({ code: 'tushare_unavailable' });
   try {
-    await expect(fetchTushareStatements('600519.SH', 2024, budget, {
-      now: () => time, sleep, call: async () => {
-        dispatches.push(time);
-        throw new Error('end of recording');
-      },
-    })).rejects.toMatchObject({ code: 'tushare_unavailable' });
-    const call = async () => {
-      dispatches.push(time);
-      return { fields: [...STOCK_BASIC_FIELDS], items: [], has_more: false, raw: new Uint8Array() };
+    await statement();
+    const fields = [...STOCK_BASIC_FIELDS];
+    const page = (offset: number, more: boolean) => ({
+      fields, items: [fields.map(() => String(offset))], has_more: more, raw: new Uint8Array(),
+    });
+    await fetchStockBasic(async () => page(0, false), { listStatus: 'L' }, { sleep });
+    expect(sleep).not.toHaveBeenCalled();
+
+    resetTusharePacing();
+    const paged = (_api: string, params: Record<string, unknown>) => {
+      const offset = Number(params.offset);
+      return Promise.resolve(page(offset, offset < 2));
     };
-    const opts = { now: () => new Date(time), sleep };
-    await fetchStockBasic(call, { listStatus: 'L' }, opts);
-    await fetchStockBasic(call, { listStatus: 'D' }, { ...opts, minIntervalMs: 25 });
-    expect(dispatches).toEqual([1000, 1400, 1425]);
-    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([400, 25]);
+    await fetchStockBasic(paged, { listStatus: 'L' }, { sleep, pageSize: 1 });
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([400, 400]);
+    await statement();
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([400, 400, 400]);
+
+    sleep.mockClear();
+    await fetchStockBasic(paged, { listStatus: 'D' }, { sleep, pageSize: 1, minIntervalMs: 25 });
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([25, 25]);
   } finally {
     clock.mockRestore();
     resetTusharePacing();
