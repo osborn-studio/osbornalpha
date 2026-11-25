@@ -214,7 +214,7 @@ function providerFetchLimit(market: Market, range: KlineRange, nativeInterval: b
   return config.interval === 'week' ? WEEKLY_FALLBACK_DAILY_BARS : MONTHLY_FALLBACK_DAILY_BARS;
 }
 
-function providerDefinitions(request: KlineRequest, purpose: 'chart' | 'scoring' = 'chart'): KlineProvider[] {
+export function providerDefinitions(request: KlineRequest, purpose: 'chart' | 'scoring' = 'chart'): KlineProvider[] {
   const market = classifyMarket(request.ticker);
   const config = KLINE_RANGE_CONFIG[request.range];
   const adjustment = expectedAdjustment(market, request.range, request.adjustment);
