@@ -2,6 +2,7 @@
 import {readFileSync,readdirSync,statSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe,it,expect} from 'vitest';
+import {FRESHNESS} from '../industry/vendor/types';
 import {REGISTRY as methodologies} from '../judgments/registry';
 import {SOURCE_CATALOG} from '../sources/catalog';
 import {CADENCES} from './freshness';
@@ -14,6 +15,7 @@ const names=[...DQ_DATASET_NAMES].sort((a,b)=>b.length-a.length).map(s=>s.replac
 const LITERAL=new RegExp("(['\"`])("+names.join('|')+")\\1",'g');
 const EXEMPT=new Set([
  'src/lib/dq/datasets.ts', // Defines the names.
+ 'src/lib/industry/vendor/types.ts', // The Gildata owner module keeps its own constant.
  'src/lib/judgments/types.ts', // Frozen formula input documents the quarantine dataset in the DB contract.
 ]);
 
@@ -68,11 +70,17 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
    'macro.fred','macro.akshare','judgments','judgments.settle','judgments.calibrate','judgments.produce.macro_regime',
    'industry.agg.sw2021','industry.agg.sic','industry.sw2021.memberships','industry.sic.memberships',
    'industry.sw2021.classifications','industry.sic.classifications','industry.sw2021.source','industry.marks','industry.official',
+   'vendor.gildata.industry.members.sw2021','vendor.gildata.industry.fin.sw2021',
    'issuers.a_stock','issuers.a_stock.targeted','facts.hk','documents.edgar','documents.cninfo','documents.hkexnews',
    'documents.upload','documents.extract','documents.candidates','broker_research',
   ];
   expect([...DQ_DATASET_NAMES].sort()).toEqual(expected.sort());
-  expect(DQ_DATASET_NAMES).toHaveLength(47);
+  expect(DQ_DATASET_NAMES).toHaveLength(49);
+ });
+ it('matches the Gildata owner datasets and their weekly batch producer',()=>{
+  const entries=DQ_DATASET_INVENTORY.filter(e=>e.source==='gildata');
+  expect(entries.map(e=>e.dataset).sort()).toEqual(Object.values(FRESHNESS).sort());
+  for(const entry of entries)expect(entry).toMatchObject({producer:'industry-vendor-gildata',cadence:'weekly'});
  });
  it('identifies the catalogued sources and registered upstream datasets',()=>{
   const valid=new Set<string>(['derived','internal',...SOURCE_CATALOG.map(s=>s.id)]);
