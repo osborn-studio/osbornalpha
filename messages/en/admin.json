@@ -304,5 +304,166 @@
       "run_pending": "The related sync run has not finished; try again later.",
       "issuer_not_active": "The issuer is not currently active; the claim stays pending."
     }
+  },
+  "sources": {
+    "title": "Sources",
+    "admin": "Admin only",
+    "ro": "Read-only",
+    "crumb": "Admin / Sources",
+    "lead": "This page is read-only. Primary and fallback order are read from the routing tables in code, so they match what runs in production. Editing arrives in the next phase (P1).",
+    "first": "1st",
+    "cond": "Sources marked * join the order only when configured.",
+    "cfg_on": "configured",
+    "cfg_off": "not configured",
+    "gw": "Gateway",
+    "gwi": "Gateway intraday",
+    "sole": "only source",
+    "only_verified": "only verified source",
+    "health_na": "not measured",
+    "health_note": "Source health (success rate, timeouts, circuit state) lives only in each process's memory today and is not persisted, so it is not shown. This column fills in with P1.",
+    "st_denied_t": "No access",
+    "st_denied_b": "This page is open to administrators only.",
+    "st_err_t": "Some data could not be read",
+    "st_err_b": "Freshness is unavailable right now. Routing and the catalogue come from code and still show; affected columns say “could not be read”, never 0 and never “fresh”.",
+    "st_empty": "No batches recorded yet.",
+    "st_load": "Loading",
+    "st_fail": "could not be read",
+    "m_src": "Source",
+    "subtitle": "",
+    "a": {
+      "title": "A · Live data",
+      "subtitle": "",
+      "description": "Quotes, intraday and chart bars. Sources are tried in order per request; nothing is stored.",
+      "columns": {
+        "domain": "Domain",
+        "market": "Market",
+        "order": "Source order",
+        "health": "Health"
+      }
+    },
+    "b": {
+      "title": "B · Stored data",
+      "subtitle": "",
+      "description": "One row per dataset. Freshness and the latest batch come from the data-quality registry.",
+      "columns": {
+        "dataset": "Dataset",
+        "source": "Source",
+        "producer": "Producer",
+        "cadence": "Cadence",
+        "freshness": "Freshness",
+        "lastSuccess": "Last success",
+        "licence": "Licence"
+      }
+    },
+    "c": {
+      "title": "C · Frozen judgment inputs",
+      "subtitle": "",
+      "description": "Display only. The source is part of the formula hash, so changing it means publishing a new method version. Neither this page nor the next phase offers a switch.",
+      "columns": {
+        "kind": "Input kind",
+        "source": "Source",
+        "licence": "Licence",
+        "method": "Method"
+      }
+    },
+    "l": {
+      "title": "Licences",
+      "subtitle": "",
+      "description": "Kept in three places. This page only brings them together; storage is unchanged.",
+      "columns": {
+        "place": "Kept in",
+        "key": "Key",
+        "status": "Status",
+        "at": "Confirmed"
+      }
+    },
+    "d": {
+      "title": "Source catalogue",
+      "subtitle": "",
+      "description": "The single description in code. Credentials show the environment variable name and whether it is set, never the value.",
+      "columns": {
+        "source": "Source",
+        "capabilities": "Capabilities",
+        "credential": "Credential",
+        "pacing": "Pacing",
+        "place": "Licence kept in"
+      }
+    },
+    "tiles": {
+      "sources": {
+        "label": "Sources",
+        "note": "vendors in the catalogue"
+      },
+      "domains": {
+        "label": "Data domains",
+        "note": "live + stored + frozen"
+      },
+      "stale": {
+        "label": "Stale datasets",
+        "note": "freshness is stale or missing"
+      },
+      "unconfirmed": {
+        "label": "Licences unconfirmed",
+        "note": "across three places"
+      }
+    },
+    "route": {
+      "quotes": "Quotes",
+      "history": "Daily / weekly / monthly",
+      "daily": "Daily",
+      "back": "Back-adjusted",
+      "intraday": "Intraday",
+      "scoring": "Daily for scoring"
+    },
+    "status": {
+      "fresh": "fresh",
+      "stale": "stale",
+      "missing": "missing",
+      "confirmed": "confirmed",
+      "unverified": "unverified",
+      "pending": "pending",
+      "na": "n/a",
+      "on": "enabled",
+      "off": "disabled",
+      "error": "error",
+      "unreadable": "could not be read"
+    },
+    "place": {
+      "industry_dataset_licenses": "Industry table",
+      "methodologies_licenses_json": "Judgment file",
+      "macro_catalog_rights": "Macro catalogue"
+    },
+    "domains": {
+      "quote": "Quotes",
+      "kline_intraday": "Intraday",
+      "kline_daily": "Daily bars",
+      "kline_weekly_monthly": "Weekly / monthly bars",
+      "financial_facts": "Financial facts",
+      "filings": "Filings",
+      "documents": "Documents",
+      "entity_identifiers": "Entity identifiers",
+      "security_master": "Security master",
+      "industry_classification": "Industry classification",
+      "industry_marks": "Industry marks",
+      "macro_series": "Macro series",
+      "filing_calendar": "Filing calendar",
+      "company_snapshot": "Company snapshot"
+    },
+    "cadence": {
+      "daily": "daily",
+      "weekly": "weekly",
+      "monthly": "monthly",
+      "quarterly": "quarterly",
+      "event": "event"
+    },
+    "eodhd": "EODHD",
+    "dash": "—",
+    "none": "none",
+    "ms": "{n} ms",
+    "series": "{rights} · {n} series",
+    "third_party": "third party",
+    "macro_workbench": "Macro workbench",
+    "derived": "derived",
+    "internal": "internal"
   }
 }

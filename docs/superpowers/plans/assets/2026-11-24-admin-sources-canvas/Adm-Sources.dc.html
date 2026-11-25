@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数据源 /admin/sources</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/e7f107c10d4c61a3e863b6510f7fab5c">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#0a0a0b}
+a{color:#a1a1aa}a:hover{color:#fafafa}
+</style>
+</helmet>
+<div class="oa" style="min-height:100vh;display:flex;flex-direction:column">
+  <header class="top">
+    <a href="MacroLanding.dc.html" class="logo">Osborn<b>Alpha</b></a>
+    <nav class="topnav" aria-label="Main"><a href="#n0">宏观</a><a href="#n1">股票池</a><a href="#n2">研究</a><a href="#n3">我的投资</a><a href="#n4">分析</a><a href="#n5">工具</a><a href="#n6">设置</a></nav>
+    <span class="sp"></span>
+    <label class="row" style="gap:6px"><span class="tiny">搜索</span><input class="inp" type="search" style="width:240px"></label>
+  </header>
+  <main class="wrap">
+    <div class="ph">
+      <div class="col" style="gap:2px">
+        <span class="tiny">管理 / 数据源</span>
+        <h1 class="h1">数据源 <span class="en">Sources</span> <span class="chip">仅管理员</span> <span class="chip">只读</span></h1>
+      </div>
+    </div>
+    <span class="sub" style="max-width:900px">本页只读。主源和回退顺序直接读自代码里的路由表，和线上实际执行的一致；修改入口在下一期（P1）。</span>
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px"><div class="card in"><span class="cap">来源</span><span class="m" style="font-size:22px;font-weight:600">[n]</span><span class="tiny">目录登记的供应商</span></div><div class="card in"><span class="cap">数据类别</span><span class="m" style="font-size:22px;font-weight:600">[n]</span><span class="tiny">实时 + 入库 + 冻结</span></div><div class="card in"><span class="cap">过期数据集</span><span class="m" style="font-size:22px;font-weight:600">[n]</span><span class="tiny">新鲜度为“过期”或“缺失”</span></div><div class="card in"><span class="cap">许可未确认</span><span class="m" style="font-size:22px;font-weight:600">[n]</span><span class="tiny">三处合计</span></div></div>
+    <section class="card" aria-labelledby="s-a">
+  <div class="row"><h2 id="s-a" class="h2">A · 实时数据 <span class="en">Live, not stored</span></h2></div>
+  <span class="sub">报价、分时、图表 K 线。请求时逐个来源尝试，不入库。</span>
+  <div class="tw" style="overflow-x:auto"><table class="t" style="min-width:720px"><thead><tr><th>数据类别</th><th>市场</th><th>来源顺序</th><th>健康</th></tr></thead><tbody><tr><td>报价</td><td><span class="m">A · HK · US</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;网关<sup>*</sup></span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;东方财富</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">3</span>&nbsp;新浪</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">4</span>&nbsp;腾讯</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>报价</td><td><span class="m">TW</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;网关<sup>*</sup></span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;TWSE</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>报价</td><td><span class="m">JP · KR</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;网关<sup>*</sup></span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;EODHD<sup>*</sup></span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>日 / 周 / 月线</td><td><span class="m">A · HK</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;东方财富</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;腾讯</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">3</span>&nbsp;网关<sup>*</sup></span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>日 / 周 / 月线</td><td><span class="m">US</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;东方财富</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;新浪</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">3</span>&nbsp;网关<sup>*</sup></span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>日线</td><td><span class="m">TW</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;TWSE / TPEx</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;网关<sup>*</sup></span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>日线</td><td><span class="m">JP · KR</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;网关<sup>*</sup></span><span class="tiny">唯一来源</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>后复权</td><td><span class="m">A · HK</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;东方财富</span><span class="tiny">唯一已验证</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>分时</td><td><span class="m">A</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;网关分时<sup>*</sup></span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;东方财富</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">3</span>&nbsp;新浪</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>分时</td><td><span class="m">HK · US</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;网关分时<sup>*</sup></span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;东方财富</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>评分用日线</td><td><span class="m">A · HK</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;腾讯</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;东方财富</span></span></td><td><span class="tiny">未度量</span></td></tr><tr><td>评分用日线</td><td><span class="m">US</span></td><td><span class="row" style="gap:6px;flex-wrap:wrap"><span class="chip on"><span class="m">主</span>&nbsp;腾讯</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">2</span>&nbsp;新浪</span><span class="fog" aria-hidden="true">→</span><span class="chip"><span class="m">3</span>&nbsp;东方财富</span></span></td><td><span class="tiny">未度量</span></td></tr></tbody></table></div><span class="tiny"><sup>*</sup> 带 * 的来源只在已配置时进入顺序。　网关 <span class="chip"><span class="dot"></span>已配置</span>　EODHD <span class="chip" style="color:#8b8b94">未配置</span></span><div class="note">来源健康（成功率、超时、熔断）目前只存在于单个进程的内存里，没有持久化，所以这里不显示。P1 接入后本列才有数。</div>
+</section>
+    <section class="card" aria-labelledby="s-b">
+  <div class="row"><h2 id="s-b" class="h2">B · 入库数据 <span class="en">Stored, replayable</span></h2></div>
+  <span class="sub">每个数据集一行。新鲜度和最近批次来自数据质量登记。</span>
+  <div class="tw" style="overflow-x:auto"><table class="t" style="min-width:860px"><thead><tr><th>数据集</th><th>来源</th><th>生产者</th><th>周期</th><th>新鲜度</th><th>最近成功</th><th>许可</th></tr></thead><tbody><tr><td><span class="m">facts.us</span></td><td>SEC</td><td><span class="m dim">facts-sync</span></td><td>每日</td><td><span class="chip"><span class="dot"></span>新鲜</span></td><td><span class="m">[时刻]</span></td><td><span class="chip warn">未核实</span></td></tr><tr><td><span class="m">facts.cn</span></td><td>Tushare</td><td><span class="m dim">facts-sync</span></td><td>每日</td><td><span class="chip warn">过期</span></td><td><span class="m">[时刻]</span></td><td><span class="chip warn">未核实</span></td></tr><tr><td><span class="m">macro.fred</span></td><td>FRED</td><td><span class="m dim">ts-fred</span></td><td>每日</td><td><span class="chip"><span class="dot"></span>新鲜</span></td><td><span class="m">[时刻]</span></td><td><span class="chip"><span class="dot"></span>已确认</span></td></tr><tr><td><span class="m">macro.akshare</span></td><td>AKShare</td><td><span class="m dim">py-akshare</span></td><td>每日</td><td><span class="chip"><span class="dot"></span>新鲜</span></td><td><span class="m">[时刻]</span></td><td><span class="chip"><span class="dot"></span>已确认</span></td></tr><tr><td><span class="m">industry.agg.sic</span></td><td>SEC</td><td><span class="m dim">industry-agg</span></td><td>事件</td><td><span class="chip"><span class="dot"></span>新鲜</span></td><td><span class="m">[时刻]</span></td><td><span class="chip"><span class="dot"></span>已确认</span></td></tr><tr><td><span class="m">industry.agg.sw2021</span></td><td>Tushare</td><td><span class="m dim">industry-agg</span></td><td>事件</td><td><span class="chip" style="color:#8b8b94">缺失</span></td><td><span class="m">—</span></td><td><span class="chip warn">待确认</span></td></tr><tr><td><span class="m">entities.sec-submissions</span></td><td>SEC</td><td><span class="m dim">sec-submissions</span></td><td>事件</td><td><span class="chip"><span class="dot"></span>新鲜</span></td><td><span class="m">[时刻]</span></td><td><span class="chip" style="color:#8b8b94">不适用</span></td></tr></tbody></table></div><span class="tiny">其余 [n] 个数据集</span>
+</section>
+    <div class="g2">
+      <section class="card" aria-labelledby="s-c">
+  <div class="row"><h2 id="s-c" class="h2">C · 判断的冻结输入 <span class="en">Frozen judgment inputs</span></h2></div>
+  <span class="sub">只展示。来源是公式哈希的一部分，换来源等于发布新的方法版本，本页和下一期都不提供切换。</span>
+  <div class="tw" style="overflow-x:auto"><table class="t" style="min-width:560px"><thead><tr><th>输入种类</th><th>来源</th><th>许可</th><th>所属方法</th></tr></thead><tbody><tr><td><span class="m">macro_observation</span></td><td>宏观工作台</td><td><span class="chip"><span class="dot"></span>已确认</span></td><td><span class="m dim">macro_regime@v2</span></td></tr><tr><td><span class="m">financial_fact</span></td><td>SEC</td><td><span class="chip warn">未核实</span></td><td><span class="m dim">—</span></td></tr><tr><td><span class="m">financial_fact</span></td><td>Tushare</td><td><span class="chip warn">未核实</span></td><td><span class="m dim">—</span></td></tr><tr><td><span class="m">price</span></td><td>东方财富 · 网关</td><td><span class="chip warn">未核实</span></td><td><span class="m dim">—</span></td></tr></tbody></table></div>
+</section>
+      <section class="card" aria-labelledby="s-l">
+  <div class="row"><h2 id="s-l" class="h2">许可汇总 <span class="en">Licences, three places</span></h2></div>
+  <span class="sub">三处各自保存，本页只做汇总，不改存储。</span>
+  <div class="tw" style="overflow-x:auto"><table class="t" style="min-width:560px"><thead><tr><th>登记处</th><th>键</th><th>状态</th><th>确认时间</th></tr></thead><tbody><tr><td>行业表</td><td><span class="m">scheme:sw2021:2021</span></td><td><span class="chip" style="color:#8b8b94">已关闭</span></td><td><span class="m">—</span></td></tr><tr><td>行业表</td><td><span class="m">scheme:sic:sec-current</span></td><td><span class="chip"><span class="dot"></span>已开启</span></td><td><span class="m">[时刻]</span></td></tr><tr><td>判断文件</td><td><span class="m">macro_observation×macro_workbench</span></td><td><span class="chip"><span class="dot"></span>已确认</span></td><td><span class="m">[时刻]</span></td></tr><tr><td>判断文件</td><td><span class="m">financial_fact×tushare</span></td><td><span class="chip warn">未核实</span></td><td><span class="m">—</span></td></tr><tr><td>宏观目录</td><td><span class="m">public_domain · [n] 条序列</span></td><td><span class="chip"><span class="dot"></span>已确认</span></td><td><span class="m">—</span></td></tr><tr><td>宏观目录</td><td><span class="m">第三方 · [n] 条序列</span></td><td><span class="chip warn">待确认</span></td><td><span class="m">—</span></td></tr></tbody></table></div>
+</section>
+    </div>
+    <section class="card" aria-labelledby="s-d">
+  <div class="row"><h2 id="s-d" class="h2">来源目录 <span class="en">Source catalogue</span></h2></div>
+  <span class="sub">代码里的单一描述。凭据只显示环境变量名和是否已配置，不显示值。</span>
+  <div class="tw" style="overflow-x:auto"><table class="t" style="min-width:860px"><thead><tr><th>来源</th><th>能力</th><th>凭据</th><th>限速</th><th>许可登记处</th></tr></thead><tbody><tr><td><b>东方财富</b></td><td>报价 · K 线（前 / 后复权）· 分时</td><td>—</td><td><span class="m">无</span></td><td>—</td></tr><tr><td><b>网关 DataGateway</b></td><td>报价 · 日线（仅收盘价）· 分时</td><td><span class="m">[ENV_NAME]</span> <span class="chip"><span class="dot"></span>已配置</span></td><td><span class="m">无</span></td><td>—</td></tr><tr><td><b>Tushare</b></td><td>财务事实 · 证券主数据 · 申万行业 · 披露日历</td><td><span class="m">TUSHARE_TOKEN</span> <span class="chip"><span class="dot"></span>已配置</span></td><td><span class="m">400 ms</span></td><td>行业表 · 判断文件</td></tr><tr><td><b>SEC</b></td><td>submissions · companyfacts · 文档 · SIC</td><td><span class="m">EDGAR_USER_AGENT</span> <span class="chip"><span class="dot"></span>已配置</span></td><td><span class="m">150 ms</span></td><td>行业表 · 判断文件</td></tr><tr><td><b>FRED</b></td><td>美国宏观序列</td><td>—</td><td><span class="m">[n] ms</span></td><td>宏观目录</td></tr><tr><td><b>EODHD</b></td><td>报价（JP · KR）</td><td><span class="m">[ENV_NAME]</span> <span class="chip" style="color:#8b8b94">未配置</span></td><td><span class="m">无</span></td><td>—</td></tr></tbody></table></div>
+</section>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2300}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

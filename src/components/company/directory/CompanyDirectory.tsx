@@ -41,6 +41,7 @@ export function DirectorySyncCell({ row }: { row: Pick<DirectoryRow, 'scopeLastS
 
 export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
   const t = useTranslations('company.directory');
+  const sourcesT = useTranslations('admin.sources');
   const tf = useTranslations('research.freshness.status');
   const thf = useTranslations('company.header.freshness');
   const locale = useLocale() === 'en' ? 'en' : 'zh';
@@ -149,7 +150,10 @@ export function CompanyDirectory({ isAdmin }: { isAdmin: boolean }) {
       {data && data.rows.length === 0 && (
         <Card className="text-[13px] text-[var(--text-dim)]" data-testid="directory-empty">
           {filtered ? t('noMatch') : t('empty')}
-          {!filtered && isAdmin && <> <Link href="/admin/dq" className="text-[var(--accent)]">{t('adminDq')}</Link></>}
+          {!filtered && isAdmin && <>
+            <Link href="/admin/dq" className="text-[var(--accent)]">{t('adminDq')}</Link>{' '}
+            <Link href="/admin/sources" className="text-[var(--accent)]">{sourcesT('title')}</Link>
+          </>}
         </Card>
       )}
 

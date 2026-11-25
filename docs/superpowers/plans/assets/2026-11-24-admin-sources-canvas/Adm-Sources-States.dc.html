@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>数据源 状态</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/e7f107c10d4c61a3e863b6510f7fab5c">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#0a0a0b}
+a{color:#a1a1aa}a:hover{color:#fafafa}
+</style>
+</helmet>
+<div class="oa" style="width:1440px;min-height:760px;box-sizing:border-box;padding:24px;display:flex;gap:24px"><div class="col" style="gap:12px;flex:1;min-width:0">
+<span class="cap">状态 · ZH</span>
+<section class="card"><h2 class="h2">无权访问</h2><span class="sub">这个页面只对管理员开放。</span></section>
+<section class="card"><div class="note warn"><b>部分数据读取失败</b><br>新鲜度暂时读不到。路由和目录来自代码，仍然显示；受影响的列写“读取失败”，不写 0，也不写“新鲜”。</div>
+<div class="tw" style="overflow-x:auto"><table class="t" style="min-width:560px"><thead><tr><th>数据集</th><th>来源</th><th>生产者</th><th>周期</th><th>新鲜度</th></tr></thead><tbody><tr><td><span class="m">facts.us</span></td><td>SEC</td><td><span class="m dim">facts-sync</span></td><td>每日</td><td><span class="chip err">读取失败</span></td></tr></tbody></table></div></section>
+<section class="card"><h2 class="h2">B · 入库数据</h2><div class="note">还没有任何批次记录。</div></section>
+<section class="card" role="status" aria-busy="true"><span class="tiny">加载中</span><div class="sk" style="width:40%;height:20px"></div><div class="sk" style="height:36px"></div><div class="sk" style="height:36px"></div></section>
+</div><div class="col" style="gap:12px;flex:1;min-width:0">
+<span class="cap">States · EN</span>
+<section class="card"><h2 class="h2">No access</h2><span class="sub">This page is open to administrators only.</span></section>
+<section class="card"><div class="note warn"><b>Some data could not be read</b><br>Freshness is unavailable right now. Routing and the catalogue come from code and still show; affected columns say “could not be read”, never 0 and never “fresh”.</div>
+<div class="tw" style="overflow-x:auto"><table class="t" style="min-width:560px"><thead><tr><th>Dataset</th><th>Source</th><th>Producer</th><th>Cadence</th><th>Freshness</th></tr></thead><tbody><tr><td><span class="m">facts.us</span></td><td>SEC</td><td><span class="m dim">facts-sync</span></td><td>daily</td><td><span class="chip err">could not be read</span></td></tr></tbody></table></div></section>
+<section class="card"><h2 class="h2">B · Stored data</h2><div class="note">No batches recorded yet.</div></section>
+<section class="card" role="status" aria-busy="true"><span class="tiny">Loading</span><div class="sk" style="width:40%;height:20px"></div><div class="sk" style="height:36px"></div><div class="sk" style="height:36px"></div></section>
+</div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
