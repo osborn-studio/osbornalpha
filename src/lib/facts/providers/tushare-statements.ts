@@ -32,22 +32,20 @@ import type {NumberSchema} from '../json-numbers';
 import {TUSHARE_CONTROL_FIELDS,canonicalDecimal,decodeColumns,scanJsonNumbers} from '../json-numbers';
 import {classifyDuration,isDate} from '../classify';
 import {tushareCallRaw,type TushareRaw} from '../../data/sources/tushare';
-import {createPacer,nearestDuration,PacerError,ProviderError,rawHashOf,sleep,snapshotOf,ymd} from './shared';
+import {tusharePacer} from '../../sources/tushare-transport';
+import {nearestDuration,PacerError,ProviderError,rawHashOf,sleep,snapshotOf,ymd} from './shared';
 
 export type TushareApi='income'|'balancesheet'|'cashflow';
 export const TUSHARE_APIS:TushareApi[]=['income','balancesheet','cashflow'];
 export const TUSHARE_REPORT_TYPES=[1,4,5] as const;
 export const COMMON_FIELDS=['ts_code','ann_date','f_ann_date','end_date','report_type','comp_type','end_type','update_flag'];
 export const PAGE_SIZE=2000;
-export const TUSHARE_MIN_INTERVAL_MS=400;   // 150 calls/min: headroom under the 200/min tier limit
+export {TUSHARE_MIN_INTERVAL_MS,resetTusharePacing} from '../../sources/tushare-transport';
 const RESERVE_MS=20_000;
 const CALL_TIMEOUT_MS=30_000;
 const API_OF_STATEMENT:Record<string,TushareApi|undefined>={IS:'income',BS:'balancesheet',CF:'cashflow'};
 /** Decimal columns = every value column of every api, from the catalogue (single source, tushareFieldsFor). */
 export const TUSHARE_NUMBER_SCHEMA:NumberSchema={control:TUSHARE_CONTROL_FIELDS,decimal:[...new Set(TUSHARE_APIS.flatMap(a=>tushareFieldsFor(a)))]};
-const pacer=createPacer(TUSHARE_MIN_INTERVAL_MS);   // module-level pace across callers of this process
-/** Test hook: forget the pacing state. */
-export const resetTusharePacing=()=>pacer.reset();
 
 function valueFieldsOf(api:TushareApi,concepts:readonly ConceptDef[]):string[]{
  if(concepts===FACT_CONCEPTS)return tushareFieldsFor(api);
@@ -74,7 +72,7 @@ export async function fetchTushareStatements(tsCode:string,sinceYear:number,budg
   const params={ts_code:tsCode,start_date:`${sinceYear}0101`,report_type:String(rt)};
   {
    const page=1,offset=0;   // single page per stream (see deviation 6)
-   try{await pacer.admit({budget,reserveMs:RESERVE_MS,now,sleep:wait});}catch(e){throw new ProviderError('tushare_unavailable',e instanceof PacerError?e.code:'budget_aborted');}
+   try{await tusharePacer.admit({budget,reserveMs:RESERVE_MS,now,sleep:wait});}catch(e){throw new ProviderError('tushare_unavailable',e instanceof PacerError?e.code:'budget_aborted');}
    let raw:TushareRaw;
    try{raw=await call(api,params,fields,{limit:pageSize,offset,budget,reserveMs:0,timeoutMs:Math.min(CALL_TIMEOUT_MS,budget.remainingMs()-RESERVE_MS)});}
    catch(e){
