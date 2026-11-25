@@ -259,6 +259,15 @@ const journeys = {
     const p = await getJson('/api/portfolio');
     save(`auth-api-portfolio-${MODE}.json`, p);
     check('GET /api/portfolio signed out → 401 JSON {error}', p.status === 401 && typeof p.body?.error === 'string', `${p.status} ${JSON.stringify(p.body)}`);
+    // Feishu simulation import (#317): a server-to-server POST that is only served with FEISHU_SIMULATION_INGEST_ENABLED=true
+    // (launch.sh pins it empty). Switched off, the route answers 404 not_found before reading the token or body, in both modes
+    // (in gate mode /api/* is public, so the middleware lets it through to the route).
+    const feishu = await fetch(BASE + '/api/integrations/feishu/simulation', { method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer verify-dummy-token-verify-dummy-token-00' },
+      body: JSON.stringify({ sourceId: 'verify:1' }), signal: AbortSignal.timeout(60_000) });
+    let feishuBody = null; try { feishuBody = await feishu.json(); } catch {}
+    save(`auth-api-feishu-simulation-${MODE}.json`, { status: feishu.status, body: feishuBody });
+    check('POST /api/integrations/feishu/simulation (ingest off) → 404 not_found', feishu.status === 404 && feishuBody?.error === 'not_found', `${feishu.status} ${JSON.stringify(feishuBody)}`);
     await page.goto(BASE + '/login', { waitUntil: 'networkidle' });
     check('/login shows email + password inputs', await page.locator('input[type="email"]').isVisible() && await page.locator('input[type="password"]').isVisible());
     await shot(page, `auth-login-${MODE}`);

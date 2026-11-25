@@ -28,16 +28,17 @@ function resolveSpec(from:string,spec:string):string|null{
  for(const ext of ['.ts','.tsx','/index.ts','/index.tsx'])if(existsSync(base+ext))return base+ext;
  return null;
 }
-/** Every import chain from `entry` that ends in a node builtin. */
-function nodeChains(entry:string):string[]{
+/** Import chains reaching a node builtin, or a specific forbidden module when supplied. */
+function forbiddenChains(entry:string,forbidden?:string):string[]{
  const bad:string[]=[];const seen=new Set<string>();const stack:[string,string[]][]=[[entry,[entry]]];
  while(stack.length){
   const [file,path]=stack.pop()!;
   if(seen.has(file))continue;seen.add(file);
   for(const spec of specifiers(readFileSync(file,'utf8'))){
-   if(NODE.test(spec)){bad.push([...path.map(p=>p.slice(ROOT.length)),spec].join(' > '));continue;}
+   if(!forbidden&&NODE.test(spec)){bad.push([...path.map(p=>p.slice(ROOT.length)),spec].join(' > '));continue;}
    const next=resolveSpec(file,spec);
-   if(next)stack.push([next,[...path,next]]);
+   if(next===forbidden)bad.push([...path,next].join(' > '));
+   else if(next)stack.push([next,[...path,next]]);
   }
  }
  return bad;
@@ -47,13 +48,19 @@ describe('client bundle guard',()=>{
  it("no 'use client' module of the industry UI reaches a node: builtin",()=>{
   const clients=ROOTS.flatMap(sources).filter(f=>/^\s*['"]use client['"]/.test(readFileSync(f,'utf8')));
   expect(clients.length).toBeGreaterThan(0);
-  expect(clients.flatMap(nodeChains)).toEqual([]);
+  expect(clients.flatMap(f=>forbiddenChains(f))).toEqual([]);
+ });
+ it('no client module reaches the Gildata transport',()=>{
+  const transport=join(SRC,'lib/vendor/gildata/client.ts');
+  const clients=sources(SRC).filter(f=>/^\s*['"]use client['"]/m.test(readFileSync(f,'utf8')));
+  expect(clients.length).toBeGreaterThan(0);
+  expect(clients.flatMap(f=>forbiddenChains(f,transport))).toEqual([]);
  });
  it('display.ts and method-constants.ts are browser-safe',()=>{
-  expect(nodeChains(join(SRC,'lib/industry/display.ts'))).toEqual([]);
+  expect(forbiddenChains(join(SRC,'lib/industry/display.ts'))).toEqual([]);
   expect(readFileSync(join(SRC,'lib/industry/method-constants.ts'),'utf8')).not.toMatch(/^\s*import\s/m);
  });
  it('the walker does see a node import (method.ts reaches node:crypto through canonical-json.ts)',()=>{
-  expect(nodeChains(join(SRC,'lib/industry/method.ts')).some(c=>c.endsWith('node:crypto'))).toBe(true);
+  expect(forbiddenChains(join(SRC,'lib/industry/method.ts')).some(c=>c.endsWith('node:crypto'))).toBe(true);
  });
 });

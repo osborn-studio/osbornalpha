@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>中国行业 设计决定与流程</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="/_blob/e7f107c10d4c61a3e863b6510f7fab5c">
+<link rel="stylesheet" href="/_blob/64aacd73a73d78af6311172313e6f989">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+body{margin:0;background:#0a0a0b}
+a{color:#a1a1aa}a:hover{color:#fafafa}
+</style>
+</helmet>
+<div class="oa" style="width:1920px;min-height:1081px;display:flex;flex-direction:column">
+<div style="padding:28px;display:flex;flex-direction:column;gap:16px">
+<div class="col" style="gap:4px"><span class="cap">中国行业研究 · 设计决定与流程 / China industry research · design decisions and flow</span>
+<span style="font-size:15px;color:#fafafa">这一组画板把申万 2021 方案接到现有“行业研究”里，与美国 SIC 页同一外壳、同一状态词表。新增的只有下面几件；其余全部沿用共用件。数值全是示意，行业与公司用占位名。</span></div>
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:start">
+<section class="card"><h2 class="h2">1 · 带符号热力阶 <span class="en">Signed heat ramp</span></h2>
+<table class="t"><thead><tr><th>格</th><th>类</th><th>令牌 + 透明度</th></tr></thead><tbody><tr><td><span class="hc p4" style="width:92px">+128.4%</span></td><td class="m">p4</td><td class="m">--accent · α .60</td></tr><tr><td><span class="hc p3" style="width:92px">+20.0%</span></td><td class="m">p3</td><td class="m">--accent · α .44</td></tr><tr><td><span class="hc p2" style="width:92px">+12.3%</span></td><td class="m">p2</td><td class="m">--accent · α .28</td></tr><tr><td><span class="hc p1" style="width:92px">+4.5%</span></td><td class="m">p1</td><td class="m">--accent · α .14</td></tr><tr><td><span class="hc n1" style="width:92px">−2.5%</span></td><td class="m">n1</td><td class="m">--text-secondary · α .08 + 1px α .45</td></tr><tr><td><span class="hc n2" style="width:92px">−4.5%</span></td><td class="m">n2</td><td class="m">--text-secondary · α .16 + 1px α .45</td></tr><tr><td><span class="hc n3" style="width:92px">−10.0%</span></td><td class="m">n3</td><td class="m">--text-secondary · α .26 + 1px α .45</td></tr><tr><td><span class="hc n4" style="width:92px">−14.0%</span></td><td class="m">n4</td><td class="m">--text-secondary · α .36 + 1px α .45</td></tr></tbody></table>
+<div class="row"><span class="hc na" style="width:92px">缺失<small>无对比期</small></span><span class="hc na" style="width:92px">覆盖不足<small>0.62</small></span><span class="hc p2" style="width:110px">+1.5%<span class="rv">已修订</span></span></div>
+<span class="sub">决定：正值用铜色填充，负值用中性灰填充加 1px 实线细框，符号始终印出。每侧 4 档；在卡面底色上相邻档差 ≥ 0.14（铜）/ ≥ 0.08（灰），再多就分不清。不用斜线纹（要靠渐变实现，违反令牌规则）。缺失是虚线空格，与负值的实线框区分。按固定阈值分档，不按当前屏幕重排。</span></section>
+<section class="card"><h2 class="h2">2 · 口径标签与衍生标 <span class="en">Origin tag</span></h2>
+<div class="row"><span class="org"><i></i>供应商口径</span><span class="org"><i></i>Vendor-reported</span></div>
+<div class="row"><span class="org cmp"><i></i>本站计算</span><span class="org cmp"><i></i>Computed</span></div>
+<div class="row"><span class="chip">本站推算 · <span class="m">yoy/1</span></span><span class="chip">Derived · <span class="m">cagr_3y/1</span></span></div>
+<span class="sub">空心方块 = 数据商给的聚合值；实心方块 = 本站按自己的方法聚合（第二期）。放在列表表头、详情各小节标题和抽屉里，不放在每个格上。由供应商数值算出来的同比、复合增速、分位，沿用“供应商口径”，再加一枚写明公式版本的“本站推算”芯片。同一页混用两种口径时（第二期）：小节标题写默认口径，只有不同于默认的行另加标签。</span>
+<h2 class="h2" style="margin-top:6px">3 · 口径与视图切换 <span class="en">Basis and view toggles</span></h2>
+<div class="row"><span class="seg"><a href="#a" class="on">年度</a><a href="#q">单季</a></span><span class="seg"><a href="#g" class="on">网格</a><a href="#s">阶段</a></span></div>
+<span class="sub">分段控件，每一段是链接（查询参数 basis、view），不是客户端状态。</span>
+<h2 class="h2" style="margin-top:6px">4 · 内部预览条 <span class="en">Admin-only bar</span></h2>
+<div class="adm"><span class="row"><span class="st recon">内部预览</span><b>仅管理员可见</b></span></div>
+<span class="sub">所有用到供应商数据的页面，页头下第一块就是它；沿用现有 adminPreview 的铜色条。</span></section>
+<section class="card"><h2 class="h2">5 · 阶段行与分位条 <span class="en">Stage row, percentile bar</span></h2>
+<div class="row"><a href="#x" class="src">+12.3%</a><span class="cb"><i style="left:50%;width:20%"></i></span><a href="#x" class="src">−4.5%</a><span class="cb"><i class="neg" style="left:42%;width:8%"></i></span></div>
+<div class="row"><span class="pb"><i style="width:72%"></i><b style="left:72%"></b></span><span class="m">P72</span></div>
+<div class="row"><span class="pb na"></span><span class="st miss">缺失 · 历史不足</span></div>
+<span class="sub">迷你条以 0 为中线，数值始终印出。景气分项只用条形，不画雷达：雷达上的缺口容易被读成 0。每组条形都有表格等价物。</span>
+<h2 class="h2" style="margin-top:6px">6 · 判断与事实分开 <span class="en">Judgment apart from fact</span></h2>
+<div class="card in judg" style="padding:8px 10px"><div class="row"><span class="tag judg">判断</span><b>成长后期</b><span class="chip">方法 <span class="m">industry_lifecycle_stage@v1</span></span><span class="chip">判断截至 <span class="m">2026-11-21</span></span></div></div>
+<span class="sub">阶段不是数据商字段。分组标题、“进入该阶段”和阶段分布在铜色边的判断容器里，带方法、日期、输入、证伪条件；复合增速与 ROE 在另一张事实卡里，照样可点开来源。阶段标签不出现在网格和列表列里。阶段分布用带计数的芯片（兼作锚点），不用堆叠条。</span></section>
+</div>
+<section class="card"><h2 class="h2">流程（桌面与手机相同；手机上抽屉是全屏面板） <span class="en">Flow — same on desktop and phone; on a phone the drawer is a full-height sheet</span></h2>
+<div class="col" style="gap:10px">
+<div class="row"><span class="cap" style="width:36px">A</span><div class="flow"><a href="Cn-List.dc.html" class="chip" style="min-height:32px">列表 · 网格</a><span class="arr">→</span><a href="Cn-List.dc.html" class="chip" style="min-height:32px">点一个格</a><span class="arr">→</span><a href="Cn-Drawer.dc.html" class="chip" style="min-height:32px">来源抽屉</a><span class="arr">→</span><a href="Cn-Drawer.dc.html" class="chip" style="min-height:32px">重放（原始响应）</a></div></div>
+<div class="row"><span class="cap" style="width:36px">B</span><div class="flow"><a href="Cn-List.dc.html" class="chip" style="min-height:32px">列表</a><span class="arr">→</span><a href="Cn-List.dc.html" class="chip" style="min-height:32px">点行名</a><span class="arr">→</span><a href="Cn-Detail.dc.html" class="chip" style="min-height:32px">行业详情</a><span class="arr">→</span><a href="Cn-Constituents.dc.html" class="chip" style="min-height:32px">成分</a><span class="arr">→</span><a href="Company.dc.html" class="chip" style="min-height:32px">公司页</a></div></div>
+<div class="row"><span class="cap" style="width:36px">C</span><div class="flow"><a href="Cn-List.dc.html" class="chip" style="min-height:32px">列表</a><span class="arr">→</span><a href="Cn-Stages.dc.html" class="chip" style="min-height:32px">视图 = 阶段</a><span class="arr">→</span><a href="Cn-Stages.dc.html" class="chip" style="min-height:32px">阶段锚点</a><span class="arr">→</span><a href="Cn-Stages.dc.html" class="chip" style="min-height:32px">阶段行</a><span class="arr">→</span><a href="Cn-Detail.dc.html" class="chip" style="min-height:32px">行业详情</a><span class="arr">→</span><a href="Cn-Detail.dc.html" class="chip" style="min-height:32px">判断卡</a><span class="arr">→</span><a href="Cn-Detail.dc.html" class="chip" style="min-height:32px">方法文档</a></div></div>
+<div class="row"><span class="cap" style="width:36px">D</span><div class="flow"><a href="Cn-States.dc.html" class="chip" style="min-height:32px">非管理员落到申万方案</a><span class="arr">→</span><a href="Cn-States.dc.html" class="chip" style="min-height:32px">“受限”整页提示</a><span class="arr">→</span><a href="IndustrySic.dc.html" class="chip" style="min-height:32px">切换到 SIC</a></div></div>
+<div class="row"><span class="cap" style="width:36px">手机</span><div class="flow"><a href="M-Cn-List.dc.html" class="chip" style="min-height:32px">M 列表</a><span class="arr">→</span><a href="M-Cn-Drawer.dc.html" class="chip" style="min-height:32px">M 抽屉</a></div><div class="flow"><a href="M-Cn-Stages.dc.html" class="chip" style="min-height:32px">M 阶段</a><span class="arr">→</span><a href="M-Cn-Detail.dc.html" class="chip" style="min-height:32px">M 详情</a><span class="arr">→</span><a href="M-Cn-Constituents.dc.html" class="chip" style="min-height:32px">M 成分</a></div><div class="flow"><a href="M-Cn-Withheld.dc.html" class="chip" style="min-height:32px">M 受限</a><span class="arr">→</span><a href="M-Industry.dc.html" class="chip" style="min-height:32px">M SIC</a></div></div>
+</div></section>
+<section class="card"><h2 class="h2">手机 390px 的三个决定 <span class="en">Three phone decisions</span></h2>
+<span class="sub">① 列表以表格为先：一次只显示一个指标、一个期间，行业名固定在左，用期间步进器前后翻；390px 放不下 31×10 的网格，所以不提供整幅热力图，只在这一列的格子上保留同一套带符号色阶。② 阶段分布条在自己的容器里横向滚动，页面本身不横向滚动；每个阶段是可折叠小节，阶段行变成两行卡。③ 详情各小节上下堆叠，图在上、表在开关后；分位条的标签在条的上方。</span></section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1920,"height":1081}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
