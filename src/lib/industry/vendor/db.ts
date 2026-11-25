@@ -12,6 +12,7 @@ export interface VendorObservationReader{
  observationsOfRun(runId:string,query:ObservationQuery):Promise<Observation[]>;
 }
 export interface VendorIndustryDb extends VendorObservationReader{
+ observationsGrid(runId:string,q:{metrics:string[];periodEnds:string[]}):Promise<Observation[]>;
  recordRetrieval(input:RetrievalInput):Promise<string>;
  createRun(input:RunInput):Promise<{run_id:string;generation:number}>;
  stageClassifications(id:string,rows:Classification[]):Promise<void>;
@@ -26,7 +27,7 @@ export interface VendorIndustryDb extends VendorObservationReader{
  listRetrievals(limit:number):Promise<Retrieval[]>;
  retrievalsByIds(ids:string[]):Promise<Retrieval[]>;
 }
-export function vendorDbFromTables(tables:TableClient,reads:Pick<VendorIndustryDb,'observationsOfRun'|'retrievalsByIds'>):VendorIndustryDb{
+export function vendorDbFromTables(tables:TableClient,reads:Pick<VendorIndustryDb,'observationsOfRun'|'observationsGrid'|'retrievalsByIds'>):VendorIndustryDb{
  async function rpc<T>(fn:string,args:Row):Promise<T>{
   try{return await callRpc(tables,fn,args) as T;}
   catch(e){
@@ -51,6 +52,8 @@ export function vendorDbFromTables(tables:TableClient,reads:Pick<VendorIndustryD
   listRetrievals:limit=>tables.select('vendor_retrievals',{vendor:'gildata'},{orderBy:'fetched_at',desc:true,limit}) as Promise<Retrieval[]>,
  };
 }
+// Select the wire decimal text, omitting PostgreSQL's numeric mirror from JSON responses.
+export const OBSERVATION_COLUMNS='code,metric,period_start,period_end,duration,status,missing_reason,value_text,unit,vendor_as_of,retrieval_id,locator';
 export function supabaseVendorIndustryDb(admin:SupabaseClient):VendorIndustryDb{
  return vendorDbFromTables(supabaseTableClient(admin),{
   async observationsOfRun(runId,{code,metric,from,to}){
@@ -64,6 +67,18 @@ export function supabaseVendorIndustryDb(admin:SupabaseClient):VendorIndustryDb{
     if(error)throw new VendorDbError('vendor_db_failed');
     if(!data?.length)return rows;
     rows.push(...data as Observation[]);
+   }
+  },
+  async observationsGrid(id,{metrics,periodEnds}){
+   const rows:Observation[]=[];
+   if(!metrics.length||!periodEnds.length)return rows;
+   for(;;){
+    const {data,error}=await admin.from('industry_vendor_observations').select(OBSERVATION_COLUMNS).eq('run_id',id)
+     .in('metric',metrics).in('period_end',periodEnds).order('code').order('period_end').order('metric').order('duration')
+     .range(rows.length,rows.length+499);
+    if(error)throw new VendorDbError('vendor_db_failed');
+    rows.push(...(data??[]) as Observation[]);
+    if(!data||data.length<500)return rows;
    }
   },
   async retrievalsByIds(ids){

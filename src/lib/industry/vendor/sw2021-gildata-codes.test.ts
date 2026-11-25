@@ -13,3 +13,8 @@ it('maps all 31 distinct codes in both directions',()=>{
  for(const key of ['indexCode','gildataCode'] as const)
   expect(new Set(SW2021_L1_GILDATA.map(r=>r[key])).size).toBe(31);
 });
+
+it('has a reviewed English name for every index code',async()=>{
+ const {SW2021_L1_NAME_EN}=await import('./sw2021-names-en');
+ expect(Object.keys(SW2021_L1_NAME_EN).sort()).toEqual(SW2021_L1_GILDATA.map(r=>r.indexCode).sort());
+});

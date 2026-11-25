@@ -17,3 +17,15 @@ it('limits vendor imports in application code to the two authorized routes',()=>
  }
  walk('src/app');walk('src/components');
 });
+
+it('keeps vendor modules out of shared caches',()=>{
+ for(const root of ['src/lib/industry/vendor','src/lib/vendor']){
+  for(const file of readdirSync(root,{recursive:true,encoding:'utf8'})){
+   if(!/\.[cm]?[jt]sx?$/.test(file))continue;
+   const path=join(root,file);
+   const body=readFileSync(path,'utf8');
+   expect(body,path).not.toMatch(/(?:from\s*|import\s*\(?\s*|require\(\s*)['"][^'"]*(?:stale-views|next\/cache)[^'"]*['"]/);
+   expect(body,path).not.toMatch(/\bunstable[_]cache\b/);
+  }
+ }
+});

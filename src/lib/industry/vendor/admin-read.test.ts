@@ -1,4 +1,4 @@
-import {expect,it} from 'vitest';
+import {expect,it,vi} from 'vitest';
 import {memoryTableClient} from '../../db/memory-table-client';
 import {memoryVendorIndustryDb} from './db';
 import {readVendorAdmin} from './admin-read';
@@ -30,10 +30,34 @@ it('joins each active snapshot to evidence and scopes the run list licenses and 
   const result=await get('view='+view);
   expect(result.run).toMatchObject({generation:1,origin:'vendor_reported',history_class:'reconstruction',parser_version:expect.any(String),mapping_version:expect.any(String)});
   expect(result.rows).toHaveLength(count);
-  for(const row of result.rows)expect(row).toMatchObject({source:{vendor:'gildata',product:'datamap-mcp',sha256:expect.stringMatching(/^[0-9a-f]{64}$/),
+  for(const row of result.rows!)expect(row).toMatchObject({source:{vendor:'gildata',product:'datamap-mcp',sha256:expect.stringMatching(/^[0-9a-f]{64}$/),
    retrieval_id:expect.any(String),canonical_sha256:expect.any(String),api_names:expect.any(Array),template:{id:expect.any(String),version:1},
    locator:view==='classifications'?null:expect.any(Object),fetched_at:expect.any(String)}});
  }
+ const identity='metric=revenue_cum&period_end=2024-12-31';
+ const grid=await get('view=grid&'+identity);
+ expect(grid.rows).toMatchObject([{code:'801080.SI',source:{interface:expect.any(String),locator:{row:expect.any(Number)}}}]);
+ const gridRow=grid.rows?.[0];
+ if(!gridRow||!('value_text' in gridRow))throw Error('expected grid observation');
+ const replay='view=replay&code=801080.SI&duration=YTD&'+identity;
+ expect(await get(replay)).toMatchObject({match:true,replayed_text:gridRow.value_text,source:gridRow.source});
+ await expect(get(replay.replace('2024','2023'))).rejects.toThrow('not_found');
+ const [original]=await deps.db.observationsOfRun((await deps.db.activeRun('financials'))!.run_id,{code:'801080.SI',metric:'revenue_cum',from:'2024-12-31',to:'2024-12-31'});
+ const observations=vi.spyOn(deps.db,'observationsOfRun');
+ observations.mockResolvedValueOnce([{...original,value_text:'-99'}]);
+ expect(await get(replay)).toMatchObject({match:false,observation:{value_text:'-99'}});
+ const download=vi.spyOn(deps.raw,'get');
+ observations.mockResolvedValueOnce([{...original,status:'missing',value_text:null,missing_reason:'vendor_not_provided'}]);
+ expect(await get(replay)).toMatchObject({match:null,replayed_text:null,observation:{value_text:null}});
+ expect(download).not.toHaveBeenCalled();
  const log=await get('view=retrievals&limit=1');
- expect(log.rows).toHaveLength(1);expect(log.rows[0]).toHaveProperty('request_canonical');expect(log.rows[0]).not.toHaveProperty('bytes');
+ expect(log.rows).toHaveLength(1);expect(log.rows?.[0]).toHaveProperty('request_canonical');expect(log.rows?.[0]).not.toHaveProperty('bytes');
+});
+
+it.each([['grid&metric=gross_margin','period_end'],['grid&period_end=2024-12-31','metric'],
+ ['grid&metric=gross_margin&period_end=2024-12-31&period_end=2025-12-31','period_end'],
+ ['grid&metric=revenue_yoy&period_end=2025-12-31','metric'],['grid&code=x','code'],
+ ['replay&code=801080.SI&metric=revenue_cum&period_end=2024-12-31','duration'],
+ ['replay&code=801080.SI&metric=revenue_cum&duration=X&period_end=2024-12-31','duration']])('rejects %s',async(q,key)=>{
+ await expect(read('view='+q)).rejects.toThrow('invalid_parameter:'+key);
 });
