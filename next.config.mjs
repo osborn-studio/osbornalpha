@@ -31,6 +31,7 @@ const nextConfig = {
     '/api/cron/reconcile': RECONCILE_MANIFESTS,
     '/api/admin/dq/quarantine/[id]': RECONCILE_MANIFESTS,
     '/api/admin/dq': RECONCILE_MANIFESTS,
+    '/admin/sources': ['./docs/methodologies/licenses.json'],
     // F3 document pipeline
     '/api/cron/documents-extract': F3_EXTRACT_FILES,
     '/api/cron/documents-candidates': F3_EXTRACT_FILES,

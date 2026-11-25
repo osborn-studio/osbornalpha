@@ -304,5 +304,170 @@
       "run_pending": "相关同步运行尚未结束，请稍后重试。",
       "issuer_not_active": "发行人当前不是活跃状态，声明保持待审核。"
     }
+  },
+  "sources": {
+    "title": "数据源",
+    "admin": "仅管理员",
+    "ro": "只读",
+    "crumb": "管理 / 数据源",
+    "lead": "本页只读。主源和回退顺序直接读自代码里的路由表，和线上实际执行的一致；修改入口在下一期（P1）。",
+    "first": "主",
+    "cond": "带 * 的来源只在已配置时进入顺序。",
+    "cfg_on": "已配置",
+    "cfg_off": "未配置",
+    "gw": "网关",
+    "gwi": "网关分时",
+    "sole": "唯一来源",
+    "only_verified": "唯一已验证",
+    "health_na": "未度量",
+    "health_note": "来源健康（成功率、超时、熔断）目前只存在于单个进程的内存里，没有持久化，所以这里不显示。P1 接入后本列才有数。",
+    "st_denied_t": "无权访问",
+    "st_denied_b": "这个页面只对管理员开放。",
+    "st_err_t": "部分数据读取失败",
+    "st_err_b": "新鲜度暂时读不到。路由和目录来自代码，仍然显示；受影响的列写“读取失败”，不写 0，也不写“新鲜”。",
+    "st_empty": "还没有任何批次记录。",
+    "st_load": "加载中",
+    "st_fail": "读取失败",
+    "m_src": "来源",
+    "subtitle": "Sources",
+    "a": {
+      "title": "A · 实时数据",
+      "subtitle": "Live, not stored",
+      "description": "报价、分时、图表 K 线。请求时逐个来源尝试，不入库。",
+      "columns": {
+        "domain": "数据类别",
+        "market": "市场",
+        "order": "来源顺序",
+        "health": "健康"
+      }
+    },
+    "b": {
+      "title": "B · 入库数据",
+      "subtitle": "Stored, replayable",
+      "description": "每个数据集一行。新鲜度和最近批次来自数据质量登记。",
+      "columns": {
+        "dataset": "数据集",
+        "source": "来源",
+        "producer": "生产者",
+        "cadence": "周期",
+        "freshness": "新鲜度",
+        "lastSuccess": "最近成功",
+        "licence": "许可"
+      }
+    },
+    "c": {
+      "title": "C · 判断的冻结输入",
+      "subtitle": "Frozen judgment inputs",
+      "description": "只展示。来源是公式哈希的一部分，换来源等于发布新的方法版本，本页和下一期都不提供切换。",
+      "columns": {
+        "kind": "输入种类",
+        "source": "来源",
+        "licence": "许可",
+        "method": "所属方法"
+      }
+    },
+    "l": {
+      "title": "许可汇总",
+      "subtitle": "Licences, three places",
+      "description": "三处各自保存，本页只做汇总，不改存储。",
+      "columns": {
+        "place": "登记处",
+        "key": "键",
+        "status": "状态",
+        "at": "确认时间"
+      }
+    },
+    "d": {
+      "title": "来源目录",
+      "subtitle": "Source catalogue",
+      "description": "代码里的单一描述。凭据只显示环境变量名和是否已配置，不显示值。",
+      "columns": {
+        "source": "来源",
+        "capabilities": "能力",
+        "credential": "凭据",
+        "pacing": "限速",
+        "place": "许可登记处"
+      }
+    },
+    "tiles": {
+      "sources": {
+        "label": "来源",
+        "note": "目录登记的供应商"
+      },
+      "domains": {
+        "label": "数据类别",
+        "note": "实时 + 入库 + 冻结"
+      },
+      "stale": {
+        "label": "过期数据集",
+        "note": "新鲜度为“过期”或“缺失”"
+      },
+      "unconfirmed": {
+        "label": "许可未确认",
+        "note": "三处合计"
+      }
+    },
+    "route": {
+      "quotes": "报价",
+      "history": "日 / 周 / 月线",
+      "daily": "日线",
+      "back": "后复权",
+      "intraday": "分时",
+      "scoring": "评分用日线"
+    },
+    "status": {
+      "fresh": "新鲜",
+      "stale": "过期",
+      "missing": "缺失",
+      "confirmed": "已确认",
+      "unverified": "未核实",
+      "pending": "待确认",
+      "na": "不适用",
+      "public": "公开",
+      "on": "已开启",
+      "internal": "内部 · 仅管理员",
+      "off": "已关闭",
+      "error": "错误",
+      "unreadable": "读取失败"
+    },
+    "place": {
+      "industry_dataset_licenses": "行业表",
+      "methodologies_licenses_json": "判断文件",
+      "macro_catalog_rights": "宏观目录"
+    },
+    "domains": {
+      "quote": "报价",
+      "kline_intraday": "分时",
+      "kline_daily": "日线",
+      "kline_weekly_monthly": "周线 / 月线",
+      "financial_facts": "财务事实",
+      "filings": "披露",
+      "documents": "文档",
+      "entity_identifiers": "实体标识",
+      "security_master": "证券主数据",
+      "industry_classification": "行业分类",
+      "industry_aggregates": "行业聚合",
+      "industry_marks": "行业指标",
+      "macro_series": "宏观序列",
+      "filing_calendar": "披露日历",
+      "company_snapshot": "公司快照"
+    },
+    "cadence": {
+      "daily": "每日",
+      "weekly": "每周",
+      "monthly": "每月",
+      "quarterly": "每季",
+      "event": "事件"
+    },
+    "eodhd": "EODHD",
+    "dash": "—",
+    "none": "无",
+    "ms_per_instance": "{n} ms 每实例",
+    "ms": "{n} ms",
+    "series": "{rights} · {n} 条序列",
+    "third_party": "第三方",
+    "macro_workbench": "宏观工作台",
+    "derived": "派生",
+    "internal": "内部"
   }
 }
