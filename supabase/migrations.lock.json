@@ -348,6 +348,10 @@
     {
       "file": "20261213090000_feishu_simulation_ingestion.sql",
       "sha256": "689734f60197e70f8da2a3aafa24e9d7aac4dfb6c81620afc9354d99992bc30f"
+    },
+    {
+      "file": "20261214090000_industry_vendor_gildata.sql",
+      "sha256": "137dbe6277f45617e98ca0655fdfa3107c12316d49952eb713c9d6cc21834bd7"
     }
   ]
 }
