@@ -29,11 +29,11 @@ function Rows({ columns, rows, mobile, empty }: {
 
 export function SourcesView({ view, t, locale }: { view:AdminView; t:T; locale:'en'|'zh' }) {
   const dash = t('dash');
-  const mono = (value:ReactNode) => <span className="font-mono tabular-nums">{value}</span>;
+  const mono = (value:ReactNode) => <span className="break-words font-mono tabular-nums">{value}</span>;
   const name = (id:string) => sourceByName(id)?.name[locale] ?? (t.has(id) ? t(id) : id);
   const status = (key:string) => <Pill value={t('status.' + key)} tone={({
     unreadable:STATUS_TONE.error, unverified:STATUS_TONE.stale, pending:STATUS_TONE.stale,
-    on:'text-text', confirmed:'text-text',
+    public:'text-text', confirmed:'text-text',
   })[key] ?? STATUS_TONE[key]} />;
   const config = (on:boolean) => <Pill value={t(on ? 'cfg_on' : 'cfg_off')} tone={on ? 'text-text' : 'text-text-muted'} />;
   const time = (at:string|null) => at === 'unreadable' ? status(at) : mono(at ?? dash);
@@ -79,7 +79,7 @@ export function SourcesView({ view, t, locale }: { view:AdminView; t:T; locale:'
   const catalogue = view.catalogue.map(s => ({
     key:s.id, cells:[<strong key="name">{s.name[locale]}</strong>, s.domains.map(d => t('domains.' + d)).join(' · '),
       s.credentials.length ? s.credentials.map(c => <div key={c.name}>{mono(c.name)} {config(c.configured)}</div>) : dash,
-      mono(s.pacing === null ? t('none') : t('ms',{ n:s.pacing })), s.place === 'none' ? dash : t('place.' + s.place)],
+      mono(s.pacing === null ? t('none') : t(s.pacing.scope === 'instance' ? 'ms_per_instance' : 'ms',{ n:s.pacing.minIntervalMs })), s.place === 'none' ? dash : t('place.' + s.place)],
   }));
 
   return <div data-density="data" className="mx-auto w-full min-w-0 max-w-7xl space-y-4">

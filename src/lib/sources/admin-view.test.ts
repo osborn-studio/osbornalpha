@@ -58,7 +58,7 @@ it('resolves stored licences by catalogue pointer and counts individual unconfir
     },
     hasBatches:true,
   });
-  expect(view.datasets.find(d => d.dataset === 'facts.cn')).toMatchObject({ freshness:'fresh', lastSuccess:'2026-11-24T09:00:00Z', licences:['off'] });
+  expect(view.datasets.find(d => d.dataset === 'facts.cn')).toMatchObject({ freshness:'fresh', lastSuccess:'2026-11-24T09:00:00Z', licences:['internal'] });
   expect(view.datasets.find(d => d.dataset === 'facts.us')?.licences).toEqual(['unverified']);
   expect(view.frozen.map(r => r.methods)).toEqual([['macro_regime@v2'],[]]);
   expect(view.tiles.unconfirmed).toBe(2 + (view.macro.find(r => r.key === 'third_party')?.count ?? 0));

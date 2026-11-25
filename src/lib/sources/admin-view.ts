@@ -5,7 +5,8 @@ import { quoteSourcesFor } from '@/lib/data/sources/registry';
 import type { Row } from '@/lib/db/table-client';
 import { DQ_DATASET_INVENTORY } from '@/lib/dq/datasets';
 import type { FreshnessStatus } from '@/lib/dq/freshness';
-import { DATASET_KEYS } from '@/lib/industry/licenses';
+import { VENDOR_DATASET_KEYS } from '@/lib/industry/vendor/types';
+import { DATASET_KEYS, isLicensedStatus } from '@/lib/industry/licenses';
 import { ORIGINS } from '@/lib/judgments/origins';
 import { REGISTRY } from '@/lib/judgments/registry';
 import type { LicenseTable } from '@/lib/judgments/methodology-sync';
@@ -43,7 +44,7 @@ export function readRouting() {
     catalogue:SOURCE_CATALOG.map(s => ({
       id:s.id, name:s.name, domains:[...new Set(s.capabilities.map(c => c.domain))],
       credentials:s.credentials.map(name => ({ name, configured:Boolean(process.env[name]) })),
-      pacing:s.pacing?.minIntervalMs ?? null, place:s.licence.place,
+      pacing:s.pacing, place:s.licence.place,
     })),
   };
 }
@@ -65,9 +66,9 @@ export function buildAdminView(routing:ReturnType<typeof readRouting>, reads:Rea
       methods:REGISTRY.filter(m => key in ORIGINS && m.input_kinds.some(k => k === kind)).map(m => m.id + '@' + m.version) };
   });
   const industryRows = industry?.map(r => ({
-    key:String(r.dataset_key), status:r.status === 'public' ? 'on' : r.status === 'internal' ? 'off' : 'unreadable',
+    key:String(r.dataset_key), status:isLicensedStatus(r.status) ? r.status : 'unreadable',
     at:typeof r.decided_at === 'string' ? r.decided_at : null,
-  })) ?? DATASET_KEYS.map(key => ({ key, status:'unreadable', at:null }));
+  })) ?? [...DATASET_KEYS, ...VENDOR_DATASET_KEYS].map(key => ({ key, status:'unreadable', at:null }));
   const rights = new Map<string, number>();
   const macroStatuses = new Map<string,string>();
   for (const series of MACRO_CATALOG) {
@@ -102,7 +103,7 @@ export function buildAdminView(routing:ReturnType<typeof readRouting>, reads:Rea
       sources:routing.catalogue.length, domains:new Set(routing.catalogue.flatMap(s => s.domains)).size,
       stale:freshness && datasets.filter(d => d.freshness === 'stale' || d.freshness === 'missing').length,
       unconfirmed:industry && judgments && !industryRows.some(r => r.status === 'unreadable')
-        ? industryRows.filter(r => r.status === 'off').length + frozen.filter(r => r.status === 'unverified').length
+        ? industryRows.filter(r => r.status === 'internal').length + frozen.filter(r => r.status === 'unverified').length
           + macro.filter(r => r.status === 'pending').reduce((sum,r) => sum+r.count,0)
         : null,
     },
