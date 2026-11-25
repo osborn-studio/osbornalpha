@@ -10,12 +10,13 @@ import type {CSSProperties,ReactNode} from 'react';
 import {useLocale,useTranslations} from 'next-intl';
 import type {Locale} from '@/lib/industry/display';
 import {SourceDrawer as SharedSourceDrawer} from '@/components/research-ui';
+import {VendorDrawer} from './cn/VendorDrawer';
 import {adaptSourceDrawer} from './source-drawer-adapter';
 import type {Translate} from './cell-text';
 import {CoverageCell} from './CoverageCell';
 import {nodeName} from './hrefs';
 import {diffCounts,errorCodeOf,factEvidenceUrl,inputRows,normalizeRecompute,normalizeReplay,presentModal,replayUrl,roleSummary,short,valuationReplayUrl} from './drawer-model';
-import type {AggregatePayload,DrawerPayload,RecomputePayload,ReplayPayload} from './drawer-model';
+import type {AggregatePayload,DrawerPayload,VendorDrawerPayload,RecomputePayload,ReplayPayload} from './drawer-model';
 
 const DrawerContext=createContext<{open:(p:DrawerPayload)=>void}|null>(null);
 
@@ -23,7 +24,7 @@ export function SourceDrawerProvider({children}:{children:ReactNode}){
   const [payload,setPayload]=useState<DrawerPayload|null>(null);
   const open=useCallback((p:DrawerPayload)=>setPayload(p),[]);
   const value=useMemo(()=>({open}),[open]);
-  return (<DrawerContext.Provider value={value}>{children}{payload&&<DrawerHost key={payload.kind==='aggregate'?`${payload.header.runId}:${payload.code}:${payload.cell.metric}:${payload.cell.periodEnd}:${payload.cell.duration}`:JSON.stringify(payload)} payload={payload} onClose={()=>setPayload(null)} />}</DrawerContext.Provider>);
+  return (<DrawerContext.Provider value={value}>{children}{payload&&<DrawerHost key={payload.kind==='aggregate'?`${payload.header.runId}:${payload.code}:${payload.cell.metric}:${payload.cell.periodEnd}:${payload.cell.duration}`:JSON.stringify(payload)} payload={payload} onOpen={open} onClose={()=>setPayload(null)} />}</DrawerContext.Provider>);
 }
 
 export function SourceButton({payload,children,className,label,style}:{payload:DrawerPayload;children:ReactNode;className?:string;label?:string;style?:CSSProperties}){
@@ -71,9 +72,11 @@ function useJson<T>(url:string|null,parse:(j:unknown)=>T|null){
   return state;
 }
 
-function DrawerHost({payload,onClose}:{payload:DrawerPayload;onClose:()=>void}){
+function DrawerHost({payload,onClose,onOpen}:{payload:DrawerPayload;onClose:()=>void;onOpen:(p:VendorDrawerPayload)=>void}){
  const t=useTranslations('industries');
  const locale=useLocale()==='en'?'en':'zh';
+ if(payload.kind==='vendor_derived'||payload.kind==='vendor_observation'||payload.kind==='vendor_membership')
+  return <VendorDrawer payload={payload} onOpen={onOpen} onClose={onClose}/>;
  if(payload.kind==='membership')return <DrawerPanel payload={payload} onClose={onClose}/>;
  if(payload.kind==='aggregate')return <AggregateDrawer p={payload} onClose={onClose}/>;
  if(payload.kind==='valuation')return <ValuationDrawer p={payload} onClose={onClose}/>;

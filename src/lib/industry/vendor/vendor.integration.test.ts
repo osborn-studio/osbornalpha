@@ -140,6 +140,7 @@ describe.skipIf(!process.env.S4_TEST_STATE)('vendor page reads on PG17',()=>{
   expect(await views({...deps,isAdmin:async()=>false})).toEqual(Array(3).fill({state:'withheld'}));
   const [list,detail,members]=await views(deps);
   if(list.state!=='ok'||detail.state!=='ok'||members.state!=='ok')throw Error('expected active views');
+  expect(list.freshness).toMatchObject({financials:{status:'fresh'},memberships:{status:'fresh'}});
   expect(list.nodes).toHaveLength(2);expect(members.total).toBe(6);
   const hashes=new Set((await fresh.pool.query('select sha256 from vendor_evidence_objects')).rows.map(r=>r.sha256));
   async function verify(cell:VendorCell){

@@ -21,10 +21,8 @@ import {buildAggregateManifest,encodeManifest} from './manifest';
 import type {IssuerCard,ReadDb,ReadDeps,ReplayDeps,ValuationReplayDeps} from './read';
 import type {AggregateManifest,ManifestMember,MetricCellRow} from './types-us';
 
-export const E2E_COOKIE='industry_e2e';
-/** Fails closed (Codex task20 P2): only an isolated local test server — flag on, not production, not Vercel, no Supabase credentials. */
-export const fixtureMode=(env:Record<string,string|undefined>=process.env)=>env.INDUSTRY_E2E_FIXTURES==='1'&&env.NODE_ENV!=='production'&&!env.VERCEL
- &&!env.NEXT_PUBLIC_SUPABASE_URL&&!env.SUPABASE_SERVICE_ROLE_KEY;
+import {E2E_COOKIE} from './fixture-mode';
+export {fixtureMode,E2E_COOKIE} from './fixture-mode';
 /** The one cell whose stored value disagrees with its manifest (E2E checks the "not reproduced" drawer). */
 export const E2E_TAMPERED={code:'801080.SI',periodEnd:'2025-12-31',metric:'gross_margin' as const,storedValue:'0.25'};
 

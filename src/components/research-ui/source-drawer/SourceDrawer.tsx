@@ -31,19 +31,17 @@ function externalLinkProps(href: string, newTab = false) {
   return (newTab || /^https?:\/\//.test(href)) ? {target: '_blank', rel: 'noopener noreferrer'} : {};
 }
 
-export function SourceDrawer({input, onClose, text = identityText, pending = [], failed = [], failedText, slots}: SourceDrawerProps) {
-  const t = useTranslations('research.drawer');
+export function SourceDrawerShell({title,mark,kind,onClose,children,footer}:{
+  title:string;mark:'fact'|'judgment';kind?:string;onClose:()=>void;children:ReactNode;footer?:ReactNode;
+}) {
+  const t=useTranslations('research.drawer');
   const panel = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-  const open = input !== null;
   useEffect(() => {
-    if (!open) return;
-    setCopied(null);
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeButton.current?.focus();
     return () => { if (opener?.isConnected) opener.focus(); };
-  }, [open]);
+  }, []);
   function onKeyDown(event: KeyboardEvent) {
     if (event.key === 'Escape') { event.stopPropagation(); onClose(); return; }
     if (event.key !== 'Tab' || !panel.current) return;
@@ -54,6 +52,27 @@ export function SourceDrawer({input, onClose, text = identityText, pending = [],
     if (event.shiftKey && (document.activeElement === first || !panel.current.contains(document.activeElement))) {event.preventDefault(); last.focus();}
     else if (!event.shiftKey && (document.activeElement === last || !panel.current.contains(document.activeElement))) {event.preventDefault(); first.focus();}
   }
+  return <div className="fixed inset-0 z-[60] flex sm:justify-end" onKeyDown={onKeyDown}>
+    <div aria-hidden="true" className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg)_70%,transparent)]" onClick={onClose} />
+    <div ref={panel} role="dialog" aria-modal="true" data-drawer-kind={kind} aria-label={`${t('title')} · ${title}`} className="relative flex h-[100dvh] w-full flex-col border-l border-border bg-bg-elevated sm:h-full sm:w-[min(520px,100vw)]">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 sm:justify-end">
+        <button ref={closeButton} type="button" onClick={onClose} aria-label={t('close')} className="flex h-11 w-11 items-center justify-center rounded text-text-dim hover:bg-[var(--accent-wash)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        <span className="text-sm sm:hidden">{t('title')}</span>
+        <span className="ml-auto sm:hidden"><MarkTag kind={mark} /></span>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {children}
+      </div>
+      {footer}
+    </div>
+  </div>;
+}
+
+export function SourceDrawer({input, onClose, text = identityText, pending = [], failed = [], failedText, slots}: SourceDrawerProps) {
+  const t = useTranslations('research.drawer');
+  const [copied, setCopied] = useState<string | null>(null);
+  const open = input !== null;
+  useEffect(() => { if(open)setCopied(null); }, [open]);
   if (!input) return null;
   const header = drawerHeader(input);
   const exposed = input.variant === 'ok' || input.variant === 'revised' ? input : null;
@@ -66,15 +85,10 @@ export function SourceDrawer({input, onClose, text = identityText, pending = [],
     try { await navigator.clipboard.writeText(sha); setCopied(sha); } catch { /* Keep the copy action available after a denied clipboard write. */ }
   }
   const copyLabel = (mobile: boolean) => copied === sha ? t('copied') : t(mobile ? 'copyHash' : 'copy');
-  return <div className="fixed inset-0 z-[60] flex sm:justify-end" onKeyDown={onKeyDown}>
-    <div aria-hidden="true" className="absolute inset-0 bg-[color-mix(in_srgb,var(--bg)_70%,transparent)]" onClick={onClose} />
-    <div ref={panel} role="dialog" aria-modal="true" aria-label={`${t('title')} · ${header.title}`} className="relative flex h-[100dvh] w-full flex-col border-l border-border bg-bg-elevated sm:h-full sm:w-[min(520px,100vw)]">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-2 sm:justify-end">
-        <button ref={closeButton} type="button" onClick={onClose} aria-label={t('close')} className="flex h-11 w-11 items-center justify-center rounded text-text-dim hover:bg-[var(--accent-wash)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-        <span className="text-sm sm:hidden">{t('title')}</span>
-        <span className="ml-auto sm:hidden"><MarkTag kind={header.mark} /></span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+  return <SourceDrawerShell title={header.title} mark={header.mark} onClose={onClose} footer={exposed && <div className="sticky bottom-0 flex gap-2 border-t border-border bg-bg-elevated px-3.5 py-2.5 sm:hidden">
+        <a href={exposed.payload.links.module_href} className={`${button} min-h-[44px] flex-1 bg-accent font-semibold text-bg`}>{t(`links.module.${kind}`)}</a>
+        {sha && <button type="button" onClick={copyHash} className={`${button} min-h-[44px]`}>{copyLabel(true)}</button>}
+      </div>}>
         <header className="space-y-2 px-4 py-3">
           <div className={caption}>{t('title')} · {t(`kinds.${kind}`)} <span className={mono}>{kind}</span></div>
           <h2 className="break-words text-base font-semibold">{header.title}{header.value !== null && <> <span className={mono}>{header.value}</span></>}{header.period !== null && <> <span className={`${mono} text-xs font-normal text-text-dim`}>{header.period}</span></>}</h2>
@@ -122,11 +136,5 @@ export function SourceDrawer({input, onClose, text = identityText, pending = [],
         </section>;})}
         {input.variant === 'withheld' && <p className="mx-4 my-3 rounded border border-border p-2 text-xs text-text-dim">{t('withheldNote')}</p>}
         {input.variant === 'retracted' && <p className="mx-4 my-3 rounded border border-danger p-2 text-xs">{t('retractedNote')}</p>}
-      </div>
-      {exposed && <div className="sticky bottom-0 flex gap-2 border-t border-border bg-bg-elevated px-3.5 py-2.5 sm:hidden">
-        <a href={exposed.payload.links.module_href} className={`${button} min-h-[44px] flex-1 bg-accent font-semibold text-bg`}>{t(`links.module.${kind}`)}</a>
-        {sha && <button type="button" onClick={copyHash} className={`${button} min-h-[44px]`}>{copyLabel(true)}</button>}
-      </div>}
-    </div>
-  </div>;
+  </SourceDrawerShell>;
 }

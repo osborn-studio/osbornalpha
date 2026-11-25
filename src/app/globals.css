@@ -172,3 +172,17 @@ table { font-variant-numeric: tabular-nums; }
     padding-bottom: 0;
   }
 }
+
+/* SW industry grid. The phone table retains signs and reasons without the heat ramp. */
+@media (min-width: 640px) {
+  [data-heat="p1"] { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  [data-heat="p2"] { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+  [data-heat="p3"] { background: color-mix(in srgb, var(--accent) 44%, transparent); }
+  [data-heat="p4"] { background: color-mix(in srgb, var(--accent) 60%, transparent); }
+  [data-heat="n1"] { background: color-mix(in srgb, var(--text-dim) 8%, transparent); }
+  [data-heat="n2"] { background: color-mix(in srgb, var(--text-dim) 16%, transparent); }
+  [data-heat="n3"] { background: color-mix(in srgb, var(--text-dim) 26%, transparent); }
+  [data-heat="n4"] { background: color-mix(in srgb, var(--text-dim) 36%, transparent); }
+  [data-heat^="n"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-dim) 45%, transparent); }
+}
+[data-heat="missing"] { border: 1px dashed var(--border); }

@@ -6,15 +6,16 @@ import {StateBadge,unifiedState} from '@/components/research-ui';
 import type {ReactNode} from 'react';
 import {useTranslations} from 'next-intl';
 
-export type NoticeKind='loading'|'stale'|'error'|'unlicensed'|'empty'|'reconstruction'|'partialUnpublished'|'replayMismatch'|'officialUnavailable'|'notEnabled'|'adminPreview'|'noJudgment'|'currentOnly'|'noMembers'|'notPublished';
+export type NoticeKind='loading'|'stale'|'error'|'unlicensed'|'empty'|'reconstruction'|'partialUnpublished'|'replayMismatch'|'officialUnavailable'|'notEnabled'|'adminPreview'|'noJudgment'|'currentOnly'|'noMembers'|'notPublished'|'withheldCn'|'noStageMethod'|'notServed';
 
 const TONE:Record<NoticeKind,string>={
+  withheldCn:'border-border',noStageMethod:'border-border',notServed:'border-border',
   notPublished:'border-border',loading:'',stale:'border-warn',error:'border-danger',unlicensed:'border-border',empty:'border-border',reconstruction:'border-warn',
   partialUnpublished:'border-border',replayMismatch:'border-danger',officialUnavailable:'border-border',notEnabled:'border-border',
   adminPreview:'border-accent bg-[var(--accent-wash)]',noJudgment:'border-border',currentOnly:'border-warn',noMembers:'border-border',
 };
 
-export function StateNotice({kind,values,body,children}:{kind:NoticeKind;values?:Record<string,string|number>;body?:string;children?:ReactNode}){
+export function StateNotice({kind,values,title,body,children}:{kind:NoticeKind;values?:Record<string,string|number>;title?:string;body?:string;children?:ReactNode}){
   const t=useTranslations('industries.states');
   if(kind==='loading'){
     return (
@@ -28,13 +29,13 @@ export function StateNotice({kind,values,body,children}:{kind:NoticeKind;values?
     );
   }
   const text=body??t(`${kind}.body`,values);
-  const first=kind==='currentOnly'?text:text.match(/^.*?(?:。|\.(?:\s|$))/)?.[0]??text;
+  const first=kind==='currentOnly'||kind==='withheldCn'?text:text.match(/^.*?(?:。|\.(?:\s|$))/)?.[0]??text;
   const rest=text.slice(first.length);
-  const state=unifiedState(kind);
+  const state=kind==='withheldCn'?'withheld':unifiedState(kind);
   const alert=kind==='error'||kind==='replayMismatch';
   return (
     <div role={alert?'alert':'status'} data-state={kind} className={`rounded-lg border p-4 ${TONE[kind]}`}>
-      <div className={`text-sm font-semibold ${alert?'text-danger':kind==='adminPreview'?'text-accent':'text-text'}`}>{state&&<StateBadge state={state}/>} {t(`${kind}.title`,values)}</div>
+      <div className={`text-sm font-semibold ${alert?'text-danger':kind==='adminPreview'?'text-accent':'text-text'}`}>{state&&<StateBadge state={state}/>} {title??t(`${kind}.title`,values)}</div>
       <p className="mt-1 max-w-[65ch] text-sm text-text-dim">{first}<span className="hidden sm:inline">{rest}</span></p>
       {rest&&<details className="mt-1 text-sm text-text-dim sm:hidden"><summary className="cursor-pointer">{t('more')}</summary><p>{rest}</p></details>}
       {children&&<div className="mt-3 flex flex-wrap items-center gap-3 text-sm">{children}</div>}

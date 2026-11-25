@@ -4,12 +4,12 @@ import {unifiedState} from '@/components/research-ui/states';
 import {formatMetricValue,formatMoney,formatValuation,type Locale} from '@/lib/industry/display';
 import {schemeDatasetKey,SCHEME_VERSION} from '@/lib/industry/licenses';
 import industryMessages from '../../../messages/en/industries.json';
-import type {DrawerPayload} from './drawer-model';
+import type {DrawerPayload,VendorDrawerPayload} from './drawer-model';
 import {coverageOf,factEvidenceUrl} from './drawer-model';
 import {cellPresentation,type Translate} from './cell-text';
 import {industryPath,stockPath,INDUSTRIES_PATH} from './hrefs';
 
-export function adaptSourceDrawer(p:DrawerPayload,locale:Locale,t:Translate,options:{unlicensed?:boolean}={}):SourceDrawerInput|null{
+export function adaptSourceDrawer(p:Exclude<DrawerPayload,VendorDrawerPayload>,locale:Locale,t:Translate,options:{unlicensed?:boolean}={}):SourceDrawerInput|null{
  if(p.kind==='membership')return null;
  const fact=p.kind==='fact';
  const kind=fact?'financial_fact':'industry_metric';
@@ -40,3 +40,5 @@ export function adaptSourceDrawer(p:DrawerPayload,locale:Locale,t:Translate,opti
  const value=aggregate?(p.cell.display==='value'&&p.cell.value!==null?formatMetricValue(p.cell.metric,p.cell.value,locale,p.cell.unit):undefined):formatValuation(p.cell.metric,p.cell.value,locale);
  return {variant:'ok',payload,extras:{title:label,value,period,mark:'fact',as_of:header?.factsAsOf??(!aggregate?p.cell.factsAsOf:undefined),states,rows:{source,transform,licence:[row('dataset','drawer.dataset',dataset)]}}};
 }
+
+export {adaptVendorDrawer} from './cn/vendor-drawer-model';

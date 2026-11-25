@@ -13,7 +13,6 @@ import {StateNotice} from '@/components/industries/StateNotice';
 import {FreshnessChip} from '@/components/research-ui';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,issuerLabel,nodeName,stockPath} from '@/components/industries/hrefs';
 import {formatMoney} from '@/lib/industry/display';
-import {codeOfPath,constituentsQueryFromSearch,loadView,schemeOfPath} from '@/lib/industry/page-data';
 import {SOURCES,constituentsView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
@@ -26,6 +25,8 @@ function fiscalYearLabel(periodEnds:(string|undefined)[]):string|null{
 
 export default async function ConstituentsPage({params,searchParams}:{params:Promise<{scheme:string;code:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}){
   const raw=await params;
+  if(raw.scheme==='sw2021')return (await import('../../../cn-load')).loadCnConstituents(raw.code,flatSearch(await searchParams));
+  const {codeOfPath,constituentsQueryFromSearch,loadView,schemeOfPath}=await import('@/lib/industry/page-data');
   const scheme=schemeOfPath(raw.scheme),code=codeOfPath(raw.code);
   if(!scheme||!code)notFound();
   const search=flatSearch(await searchParams);

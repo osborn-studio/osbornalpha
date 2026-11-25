@@ -14,17 +14,18 @@ import {RunHeaderBar} from '@/components/industries/RunHeaderBar';
 import {LinkMenu,LinkSegment,SchemeLevelSwitch,SchemeSwitch} from '@/components/industries/SchemeLevelSwitch';
 import {SourceDrawerProvider} from '@/components/industries/SourceDrawer';
 import {PageHeader,ResearchFooter} from '@/components/research-ui';
-import {publicReadDeps} from '@/lib/industry/public-deps';
 import {StateNotice} from '@/components/industries/StateNotice';
 import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
-import {listQueryFromSearch,loadView} from '@/lib/industry/page-data';
 import {durationsForScheme,SOURCES,industryListView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
 export default async function IndustriesPage({searchParams}:{searchParams:Promise<Record<string,string|string[]|undefined>>}){
   const search=flatSearch(await searchParams);
+  if(search.scheme==='sw2021')return (await import('./cn-load')).loadCnList(search);
+  const {publicReadDeps}=await import('@/lib/industry/public-deps');
+  const {listQueryFromSearch,loadView}=await import('@/lib/industry/page-data');
   const q=listQueryFromSearch(search);
   const {view:mode,...query}=q;
   const load=await loadView(`list:${JSON.stringify(query)}`,deps=>industryListView(deps,query),{scheme:query.scheme});

@@ -37,7 +37,7 @@ function forbiddenChains(entry:string,forbidden?:string):string[]{
   for(const spec of specifiers(readFileSync(file,'utf8'))){
    if(!forbidden&&NODE.test(spec)){bad.push([...path.map(p=>p.slice(ROOT.length)),spec].join(' > '));continue;}
    const next=resolveSpec(file,spec);
-   if(next===forbidden)bad.push([...path,next].join(' > '));
+   if(next&&forbidden&&(next===forbidden||next.startsWith(forbidden+'/')))bad.push([...path,next].join(' > '));
    else if(next)stack.push([next,[...path,next]]);
   }
  }
@@ -55,6 +55,10 @@ describe('client bundle guard',()=>{
   const clients=sources(SRC).filter(f=>/^\s*['"]use client['"]/m.test(readFileSync(f,'utf8')));
   expect(clients.length).toBeGreaterThan(0);
   expect(clients.flatMap(f=>forbiddenChains(f,transport))).toEqual([]);
+ });
+ it('keeps the vendor read layer out of client modules',()=>{
+  const clients=ROOTS.flatMap(sources).filter(f=>/^\s*['"]use client['"]/m.test(readFileSync(f,'utf8')));
+  expect(clients.flatMap(f=>forbiddenChains(f,join(SRC,'lib/industry/vendor')))).toEqual([]);
  });
  it('display.ts and method-constants.ts are browser-safe',()=>{
   expect(forbiddenChains(join(SRC,'lib/industry/display.ts'))).toEqual([]);

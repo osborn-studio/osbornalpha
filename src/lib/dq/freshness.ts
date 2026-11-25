@@ -51,9 +51,9 @@ export async function recordAttempt(client:TableClient,dataset:string,input:{ok:
  return status;
 }
 
-/** All freshness rows with status recomputed at `now`; `stored_status` keeps what the writer last stored. */
-export async function freshnessOf(client:TableClient,now=new Date()):Promise<(Row&{stored_status:string;status:FreshnessStatus})[]>{
- const rows=await selectAll(client,'dq_freshness',{},'dataset');
+/** Freshness rows (optionally scoped to one dataset) with status recomputed at `now`; `stored_status` keeps what the writer last stored. */
+export async function freshnessOf(client:TableClient,now=new Date(),dataset?:string):Promise<(Row&{stored_status:string;status:FreshnessStatus})[]>{
+ const rows=dataset===undefined?await selectAll(client,'dq_freshness',{},'dataset'):await client.select('dq_freshness',{dataset});
  return rows.map(r=>({...r,stored_status:String(r.status),status:CADENCES.includes(r.expected_cadence as Cadence)?computeFreshness({
   cadence:r.expected_cadence as Cadence,lastOkAt:r.last_ok_at?new Date(r.last_ok_at as string):null,
   consecutiveErrors:Number(r.consecutive_errors??0),now}):'error'}));

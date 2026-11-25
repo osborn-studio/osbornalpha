@@ -15,18 +15,19 @@ import {LinkSegment,SchemeSwitch} from '@/components/industries/SchemeLevelSwitc
 import {SeriesChart} from '@/components/industries/SeriesChart';
 import {SourceDrawerProvider} from '@/components/industries/SourceDrawer';
 import {PageHeader,ResearchFooter,StateBadge} from '@/components/research-ui';
-import {publicReadDeps} from '@/lib/industry/public-deps';
 import {StateNotice} from '@/components/industries/StateNotice';
 import {ValuationSnapshot} from '@/components/industries/ValuationSnapshot';
 import {INDUSTRIES_PATH,constituentsPath,flatSearch,hrefWith,industryPath,nodeName} from '@/components/industries/hrefs';
 import {industrySubjectKey,judgmentsEnabled} from '@/lib/industry/judgment-contract';
-import {codeOfPath,detailQueryFromSearch,loadView,schemeOfPath} from '@/lib/industry/page-data';
 import {durationsForScheme,industryDetailView} from '@/lib/industry/read';
 
 export const dynamic='force-dynamic';
 
 export default async function IndustryDetailPage({params,searchParams}:{params:Promise<{scheme:string;code:string}>;searchParams:Promise<Record<string,string|string[]|undefined>>}){
   const raw=await params;
+  if(raw.scheme==='sw2021')return (await import('../../cn-load')).loadCnDetail(raw.code,flatSearch(await searchParams));
+  const {publicReadDeps}=await import('@/lib/industry/public-deps');
+  const {codeOfPath,detailQueryFromSearch,loadView,schemeOfPath}=await import('@/lib/industry/page-data');
   const scheme=schemeOfPath(raw.scheme),code=codeOfPath(raw.code);
   if(!scheme||!code)notFound();
   const search=flatSearch(await searchParams);
