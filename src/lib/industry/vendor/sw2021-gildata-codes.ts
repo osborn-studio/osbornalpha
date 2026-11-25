@@ -1,0 +1,37 @@
+// Reviewed crosswalk from the Tushare SW2021 L1 classification.
+export const SW2021_GILDATA_MAPPING_VERSION='sw2021-l1-gildata/1';
+export const SW2021_L1_GILDATA:readonly {indexCode:string;gildataCode:string;nameZh:string}[]=[
+ {indexCode:'801010.SI',gildataCode:'110000',nameZh:'农林牧渔'},
+ {indexCode:'801030.SI',gildataCode:'220000',nameZh:'基础化工'},
+ {indexCode:'801040.SI',gildataCode:'230000',nameZh:'钢铁'},
+ {indexCode:'801050.SI',gildataCode:'240000',nameZh:'有色金属'},
+ {indexCode:'801080.SI',gildataCode:'270000',nameZh:'电子'},
+ {indexCode:'801880.SI',gildataCode:'280000',nameZh:'汽车'},
+ {indexCode:'801110.SI',gildataCode:'330000',nameZh:'家用电器'},
+ {indexCode:'801120.SI',gildataCode:'340000',nameZh:'食品饮料'},
+ {indexCode:'801130.SI',gildataCode:'350000',nameZh:'纺织服饰'},
+ {indexCode:'801140.SI',gildataCode:'360000',nameZh:'轻工制造'},
+ {indexCode:'801150.SI',gildataCode:'370000',nameZh:'医药生物'},
+ {indexCode:'801160.SI',gildataCode:'410000',nameZh:'公用事业'},
+ {indexCode:'801170.SI',gildataCode:'420000',nameZh:'交通运输'},
+ {indexCode:'801180.SI',gildataCode:'430000',nameZh:'房地产'},
+ {indexCode:'801200.SI',gildataCode:'450000',nameZh:'商贸零售'},
+ {indexCode:'801210.SI',gildataCode:'460000',nameZh:'社会服务'},
+ {indexCode:'801780.SI',gildataCode:'480000',nameZh:'银行'},
+ {indexCode:'801790.SI',gildataCode:'490000',nameZh:'非银金融'},
+ {indexCode:'801230.SI',gildataCode:'510000',nameZh:'综合'},
+ {indexCode:'801710.SI',gildataCode:'610000',nameZh:'建筑材料'},
+ {indexCode:'801720.SI',gildataCode:'620000',nameZh:'建筑装饰'},
+ {indexCode:'801730.SI',gildataCode:'630000',nameZh:'电力设备'},
+ {indexCode:'801890.SI',gildataCode:'640000',nameZh:'机械设备'},
+ {indexCode:'801740.SI',gildataCode:'650000',nameZh:'国防军工'},
+ {indexCode:'801750.SI',gildataCode:'710000',nameZh:'计算机'},
+ {indexCode:'801760.SI',gildataCode:'720000',nameZh:'传媒'},
+ {indexCode:'801770.SI',gildataCode:'730000',nameZh:'通信'},
+ {indexCode:'801950.SI',gildataCode:'740000',nameZh:'煤炭'},
+ {indexCode:'801960.SI',gildataCode:'750000',nameZh:'石油石化'},
+ {indexCode:'801970.SI',gildataCode:'760000',nameZh:'环保'},
+ {indexCode:'801980.SI',gildataCode:'770000',nameZh:'美容护理'},
+];
+export const byIndexCode=(code:string)=>SW2021_L1_GILDATA.find(r=>r.indexCode===code);
+export const byGildataCode=(code:string)=>SW2021_L1_GILDATA.find(r=>r.gildataCode===code);

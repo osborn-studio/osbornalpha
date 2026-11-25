@@ -1,0 +1,6 @@
+{
+ "synthetic": true,
+ "note": "Shape recorded from the live service on 2026-11-24; every figure and every security name/code is synthetic.",
+ "industry": null,
+ "response_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"code\\\":0,\\\"results\\\":[],\\\"message\\\":\\\"为您找到0条数据\\\"}\"}],\"isError\":false}}"
+}
