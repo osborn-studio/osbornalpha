@@ -36,3 +36,19 @@ it.each(['runs','classifications','observations&code=801080.SI','memberships&cod
  const res=await admin(req('view='+view));expect(res.status).toBe(200);expect(res.headers.get('cache-control')).toBe('no-store');
 });
 it('rejects unknown admin parameters',async()=>expect((await admin(req('bad=1'))).status).toBe(400));
+it.each(['grid','replay'])('denies %s before touching the service client',async view=>{
+ mocks.auth.mockRejectedValueOnce(new AdminForbidden());
+ const res=await admin(req('view='+view+'&invalid=1'));
+ expect(res.status).toBe(403);expect(res.headers.get('cache-control')).toBe('no-store');
+ expect((await res.json()).error.code).toBe('unlicensed');expect(mocks.supabase).not.toHaveBeenCalled();
+});
+it.each([['grid&metric=bad',400],['replay&code=801080.SI&metric=revenue_cum&duration=YTD&period_end=2024-12-31',404]])('uncached %s error',async(view,status)=>{
+ const res=await admin(req('view='+view));expect(res.status).toBe(status);expect(res.headers.get('cache-control')).toBe('no-store');
+ if(status===404)expect((await res.json()).error.code).toBe('not_found');
+});
+it('keeps unexpected errors uncached and omits internal details',async()=>{
+ mocks.auth.mockRejectedValueOnce(Error('internal detail'));
+ const res=await admin(req('view=grid'));
+ expect(res.status).toBe(500);expect(res.headers.get('cache-control')).toBe('no-store');
+ expect(await res.json()).toEqual({error:{code:'read_failed',message:'Vendor read failed'}});
+});

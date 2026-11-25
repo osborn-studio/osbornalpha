@@ -35,12 +35,12 @@ export const decMul=(a:string,b:string):string=>{const x=parse(a),y=parse(b);ret
 export const decAbs=(a:string):string=>{const x=parse(a);return toStr({n:x.n<0n?-x.n:x.n,s:x.s});};
 export const decCmp=(a:string,b:string):-1|0|1=>{const [x,y]=align(parse(a),parse(b));return x<y?-1:x>y?1:0;};
 export const decIsZero=(a:string):boolean=>parse(a).n===0n;
-/** a / b rounded half away from zero to RATIO_SCALE places (derive.ts div semantics); null when b is zero. */
-export function decDiv(a:string,b:string):string|null{
+/** a / b rounded half away from zero to scale places (defaults to derive.ts div semantics); null when b is zero. */
+export function decDiv(a:string,b:string,scale:number=RATIO_SCALE):string|null{
  const p=parse(a),q=parse(b);
  if(q.n===0n)return null;
  const [x,y]=align(p,q);
- const t=(x*pow10(RATIO_SCALE+1))/y;      // one guard digit; BigInt division truncates toward zero
+ const t=(x*pow10(scale+1))/y;      // one guard digit; BigInt division truncates toward zero
  const r=t<0n?-((-t+5n)/10n):(t+5n)/10n;
- return toStr({n:r,s:RATIO_SCALE});
+ return toStr({n:r,s:scale});
 }

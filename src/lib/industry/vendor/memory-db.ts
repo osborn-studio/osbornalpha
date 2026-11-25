@@ -64,6 +64,11 @@ export function memoryVendorIndustryDb():VendorIndustryDb{
   async classificationsOfRun(id){return structuredClone(classes.get(id)??[]);},
   async membershipsOfRun(id,code){return structuredClone((members.get(id)??[]).filter(r=>r.code===code));},
   async observationsOfRun(id,q){return structuredClone((obs.get(id)??[]).filter(r=>r.code===q.code&&(!q.metric||r.metric===q.metric)&&(!q.from||r.period_end>=q.from)&&(!q.to||r.period_end<=q.to)));},
+  async observationsGrid(id,{metrics,periodEnds}){
+   const rows=(obs.get(id)??[]).filter(r=>metrics.includes(r.metric)&&periodEnds.includes(r.period_end));
+   return structuredClone(rows.sort((a,b)=>a.code.localeCompare(b.code)||a.period_end.localeCompare(b.period_end)||
+    a.metric.localeCompare(b.metric)||a.duration.localeCompare(b.duration)));
+  },
   async listRetrievals(limit){return structuredClone([...retrievals.values()].reverse().sort((a,b)=>b.fetched_at.localeCompare(a.fetched_at)).slice(0,limit));},
   async retrievalsByIds(ids){return structuredClone([...new Set(ids)].flatMap(id=>retrievals.get(id)??[]));},
  };
