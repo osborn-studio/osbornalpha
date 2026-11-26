@@ -26,7 +26,7 @@ test('experiment uses only the selected prompt on the formal local adapter and c
   const run=await evaluateExample(example,candidate,settings,async (url,options)=>{
     assert.equal(new URL(url).hostname,'127.0.0.1');
     const packet=JSON.parse(options.body);
-    assert.ok(packet.messages[0].content.endsWith(candidate.extraction));
+    assert.ok(packet.messages[0].content.includes('\n\n'+candidate.extraction+'\n'));
     assert.ok(!packet.messages[0].content.includes(candidate.chat));
     return Response.json({choices:[{finish_reason:'stop',message:{content:JSON.stringify(reply)}}]});
   });

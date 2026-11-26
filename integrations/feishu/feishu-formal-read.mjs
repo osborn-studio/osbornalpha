@@ -27,11 +27,11 @@ export function validFormalSections(value){
 function verifyOwner(row,ownerId){
   if(!row||row.user_id!==ownerId)throw Error('正式系统数据范围不一致。');
 }
-function recommendationProfile(row,ownerId,analystId){
+function recommendationProfile(row,ownerId,analystIds){
   verifyOwner(row,ownerId);
   const profile=one(row.profile);
   verifyOwner(profile,ownerId);
-  if(row.analyst_id!==profile.id||(analystId!==null&&analystId!==row.analyst_id)){
+  if(profile.is_self!==false||row.analyst_id!==profile.id||!analystIds.includes(row.analyst_id)){
     throw Error('正式分析师绑定不一致。');
   }
   return label(profile.display_name);
@@ -61,18 +61,18 @@ function formatScoredRow(row,name,score){
     (points===null?'暂无得分':points.toFixed(1)+' 分')+'｜'+(score.hit===true?'命中':score.hit===false?'未命中':'暂无命中判定')+
     '｜'+returns.join(' / ');
 }
-async function readAnalysis(db,ownerId,analystId,sections,signal){
+async function readAnalysis(db,ownerId,analystIds,sections,signal){
   const wantsRecommendations=sections.includes('recommendations'),wantsScores=sections.includes('scores');
   const columns=['id','user_id','analyst_id','ticker','market','action','recommended_at','withdrawn_at','reference_price','target_price','stop_loss',
-    'profile:analyst_profiles!inner(id,user_id,display_name)'];
+    'profile:analyst_profiles!inner(id,user_id,display_name,is_self)'];
   if(wantsScores)columns.push('assessment:recommendation_scores(user_id,recommendation_id,hit,score,forward_5d_pct,forward_20d_pct,forward_60d_pct)');
   const latest=[],scored=[];
   let total=0,live=0,hitSamples=0,hits=0,scoredCount=0,pointsSum=0,cursor;
   for(;;){
     let query=db.from('recommendations').select(columns.join(','),wantsScores?{}:{count:'exact'})
-      .eq('user_id',ownerId).eq('profile.user_id',ownerId);
+      .eq('user_id',ownerId).eq('profile.user_id',ownerId).eq('profile.is_self',false)
+      .in('analyst_id',analystIds);
     if(wantsScores)query=query.eq('assessment.user_id',ownerId);
-    if(analystId)query=query.eq('analyst_id',analystId);
     if(cursor){
       // Only canonical database timestamps and UUIDs are interpolated in this PostgREST cursor.
       const {recommended_at:stamp,id}=cursor;
@@ -82,7 +82,7 @@ async function readAnalysis(db,ownerId,analystId,sections,signal){
     const {rows,count}=await getRows(query.order('recommended_at',{ascending:false}).order('id',{ascending:false})
       .limit(wantsScores?pageSize:rowLimit),signal);
     for(const row of rows){
-      const name=recommendationProfile(row,ownerId,analystId);
+      const name=recommendationProfile(row,ownerId,analystIds);
       if(wantsRecommendations&&latest.length<rowLimit){
         const prices=[['参考',row.reference_price],['目标',row.target_price],['止损',row.stop_loss]]
           .filter(([,value])=>number(value)!==null)
@@ -115,37 +115,39 @@ async function readAnalysis(db,ownerId,analystId,sections,signal){
   }
   return parts;
 }
-async function readLinkedTrades(db,ownerId,analystId,signal){
+async function readLinkedTrades(db,ownerId,analystIds,signal){
   const select='id,user_id,ticker,direction,price,quantity,fee,currency,executed_at,'+
-    'decision:decisions!inner(user_id,rec:recommendations!inner(id,user_id,analyst_id,action,recommended_at,profile:analyst_profiles!inner(id,user_id,display_name)))';
-  let query=db.from('trades').select(select,{count:'exact'}).eq('user_id',ownerId).eq('decision.user_id',ownerId)
-    .eq('decision.rec.user_id',ownerId).eq('decision.rec.profile.user_id',ownerId);
-  if(analystId)query=query.eq('decision.rec.analyst_id',analystId);
+    'decision:decisions!inner(user_id,rec:recommendations!inner(id,user_id,analyst_id,action,recommended_at,profile:analyst_profiles!inner(id,user_id,display_name,is_self)))';
+  const query=db.from('trades').select(select,{count:'exact'}).eq('user_id',ownerId).eq('decision.user_id',ownerId)
+    .eq('decision.rec.user_id',ownerId).eq('decision.rec.profile.user_id',ownerId).eq('decision.rec.profile.is_self',false)
+    .in('decision.rec.analyst_id',analystIds);
   const {rows,count}=await getRows(query.order('executed_at',{ascending:false}).order('id',{ascending:false}).limit(rowLimit),signal);
   if(!Number.isInteger(count))throw Error('正式系统未返回成交总数。');
   const lines=rows.map(row=>{
     verifyOwner(row,ownerId);
     const decision=one(row.decision);verifyOwner(decision,ownerId);
-    const rec=one(decision.rec),name=recommendationProfile(rec,ownerId,analystId);
+    const rec=one(decision.rec),name=recommendationProfile(rec,ownerId,analystIds);
     if(!['buy','sell'].includes(row.direction)||number(row.price)===null||number(row.quantity)===null)throw Error('正式成交字段无效。');
     return formatTime(row.executed_at)+' '+name+' '+label(row.ticker)+' '+(row.direction==='buy'?'买入':'卖出')+' '+
       numberFormat.format(number(row.quantity))+' 股 × '+formatPrice(row.price,row.currency)+(number(row.fee)>0?'｜手续费 '+formatPrice(row.fee,row.currency):'')+
       '｜来源建议 '+actions[rec.action]+'（'+formatTime(rec.recommended_at)+'）';
   });
-  return [listHeader('我的投资 · 建议关联的模拟成交',count,rows.length),...lines].join('\n');
+  return [listHeader('分析师建议关联的模拟成交',count,rows.length),...lines].join('\n');
 }
 
 /** @param {object} db
- * @param {{ownerId:string,analystId:string|null,sections:string[]}} scope
+ * @param {{ownerId:string,analystId:string|null,boundAnalystIds:string[],sections:string[]}} scope
  * @param {{signal?:AbortSignal}} options
  */
-export async function readFormalOverview(db,{ownerId,analystId,sections}, {signal=AbortSignal.timeout(18000)}={}){
-  if(!isUuid(ownerId)||(analystId!==null&&!isUuid(analystId))||!validFormalSections(sections))throw Error('正式查询范围无效。');
+export async function readFormalOverview(db,{ownerId,analystId,boundAnalystIds,sections}, {signal=AbortSignal.timeout(18000)}={}){
+  if(!isUuid(ownerId)||!Array.isArray(boundAnalystIds)||!boundAnalystIds.length||!boundAnalystIds.every(isUuid)||
+    (analystId!==null&&!boundAnalystIds.includes(analystId))||!validFormalSections(sections))throw Error('正式查询范围无效。');
+  const analystIds=analystId===null?[...new Set(boundAnalystIds)]:[analystId];
   const [analysis,trades]=await Promise.all([
-    sections.some(key=>key!=='trades')?readAnalysis(db,ownerId,analystId,sections,signal):[],
-    sections.includes('trades')?readLinkedTrades(db,ownerId,analystId,signal):null,
+    sections.some(key=>key!=='trades')?readAnalysis(db,ownerId,analystIds,sections,signal):[],
+    sections.includes('trades')?readLinkedTrades(db,ownerId,analystIds,signal):null,
   ]);
-  return ['正式模拟账户查询（'+(analystId===null?'全账户':'指定分析师')+'，北京时间）',...analysis,trades].filter(Boolean).join('\n\n');
+  return ['正式模拟账户查询（'+(analystId===null?'已绑定分析师':'指定分析师')+'，北京时间）',...analysis,trades].filter(Boolean).join('\n\n');
 }
 
 export function createFormalReader(env=process.env,{fetchImpl=fetch}={}){

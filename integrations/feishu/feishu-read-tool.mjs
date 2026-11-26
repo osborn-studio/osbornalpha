@@ -7,8 +7,11 @@ function allowedSections(value) {
     value.every(key=>sections.includes(key)) && new Set(value).size===value.length;
 }
 
-// Describes the verified source of an already-delivered report, even when there were no rows to display.
+// Only send verified topic and public names to the model.
 export function publicFeishuReadContext(value) {
+  if (value?.source==='report_scope_question' && allowedSections(value.sections)) {
+    return {source:value.source,sections:sections.filter(key=>value.sections.includes(key))};
+  }
   if (value?.source!=='formal_report' || !['named','all'].includes(value.scope)) return null;
   const result={source:'formal_report',scope:value.scope};
   if (value.scope==='named' && typeof value.analyst==='string') {

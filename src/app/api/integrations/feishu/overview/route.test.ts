@@ -19,9 +19,11 @@ describe('authenticated formal read-only overview',()=>{
     const r=await GET(request('owner='+owner+'&analyst=A&sections=scores,trades'));
     expect(r.status).toBe(200);expect(r.headers.get('cache-control')).toContain('no-store');
     expect(await r.json()).toEqual({text:'正式评分'});
-    expect(read).toHaveBeenCalledWith(admin.mock.results[0].value,{ownerId:owner,analystId:analyst,sections:['scores','trades']});
+    expect(read).toHaveBeenCalledWith(admin.mock.results[0].value,{ownerId:owner,analystId:analyst,boundAnalystIds:[analyst],sections:['scores','trades']});
+    const second='c448bfbc-130a-416d-8f74-a54ed0beb948';
+    vi.stubEnv('FEISHU_SIMULATION_ANALYSTS',JSON.stringify({A:analyst,B:second}));
     await GET(request('owner='+owner+'&sections=trades'));
-    expect(read).toHaveBeenLastCalledWith(admin.mock.results[1].value,{ownerId:owner,analystId:null,sections:['trades']});
+    expect(read).toHaveBeenLastCalledWith(admin.mock.results[1].value,{ownerId:owner,analystId:null,boundAnalystIds:[analyst,second],sections:['trades']});
   });
   it('rejects invalid authentication, owner, roles, duplicate params and unknown sections before accessing the data',async()=>{
     expect((await GET(request('owner='+owner+'&sections=scores','wrong'))).status).toBe(401);
@@ -30,6 +32,8 @@ describe('authenticated formal read-only overview',()=>{
       ['owner='+owner+'&sections=scores&user_id='+analyst,400],['owner='+owner+'&sections=positions',400]] as const){
       expect((await GET(request(query))).status).toBe(status);
     }
+    vi.stubEnv('FEISHU_SIMULATION_ANALYSTS','{}');
+    expect((await GET(request('owner='+owner+'&sections=trades'))).status).toBe(403);
     vi.stubEnv('FEISHU_SIMULATION_INGEST_ENABLED','false');expect((await GET(request('owner='+owner+'&sections=scores'))).status).toBe(404);
     expect(admin).not.toHaveBeenCalled();expect(read).not.toHaveBeenCalled();
   });

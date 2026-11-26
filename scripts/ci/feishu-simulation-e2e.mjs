@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as sdk from '@larksuiteoapi/node-sdk';
 import { POST } from '../../src/app/api/integrations/feishu/simulation/route.ts';
+import { GET as getOverview } from '../../src/app/api/integrations/feishu/overview/route.ts';
 import { makeFeishuConnector } from '../../integrations/feishu/feishu-connector.mjs';
 import { createLocalFeishuWorkflow } from '../../demos/analyst-replay/feishu-local.mjs';
 import { SCHEMA_BOOTSTRAP_SQL } from '../s4/local-db.ts';
@@ -71,6 +72,43 @@ async function originOf(server) {
   server.listen(0,'127.0.0.1');
   await once(server,'listening');
   return 'http://127.0.0.1:' + server.address().port;
+}
+
+async function checkTradeOverview(formalOrigin) {
+  const peer = randomUUID(), unbound = randomUUID(), self = randomUUID();
+  sql(`with profiles as (
+      insert into public.analyst_profiles(id,user_id,display_name,is_self) values
+        ('${peer}','${owner}','同组分析师',false), ('${unbound}','${owner}','组外分析师',false), ('${self}','${owner}','账户本人',true)
+      returning id,user_id
+    ), calls as (
+      insert into public.recommendations(user_id,analyst_id,ticker,market,action)
+      select user_id,id,'01810.HK','HK','buy' from profiles returning id,user_id,ticker,market,action
+    ), decisions as (
+      insert into public.decisions(user_id,recommendation_id,ticker,market,action,status)
+      select user_id,id,ticker,market,action,'executed' from calls returning id,user_id,ticker
+    )
+    insert into public.trades(user_id,decision_id,ticker,direction,quantity,price,currency)
+      select user_id,id,ticker,'buy',20,30,'HKD' from decisions;`);
+  // Including the self profile deliberately checks the read boundary even if a binding is misconfigured.
+  process.env.FEISHU_SIMULATION_ANALYSTS = JSON.stringify({A:analyst,B:peer,self});
+  for (const key of ['A',null]) {
+    const url = new URL('/api/integrations/feishu/overview',formalOrigin);
+    url.searchParams.set('owner',owner);
+    url.searchParams.set('sections','trades');
+    if (key) url.searchParams.set('analyst',key);
+    const response = await getOverview(new Request(url,{headers:{authorization:'Bearer '+bridgeToken}}));
+    assert.equal(response.status,200);
+    const {text} = await response.json();
+    assert.match(text,/测试分析师 00700\.HK 买入 100 股 × 400 HKD/);
+    assert.doesNotMatch(text,/账户本人|组外分析师/);
+    if (key) {
+      assert.match(text,/模拟成交（共 1 条）/);
+      assert.doesNotMatch(text,/同组分析师/);
+    } else {
+      assert.match(text,/模拟成交（共 2 条）/);
+      assert.match(text,/同组分析师 01810\.HK 买入 20 股 × 30 HKD/);
+    }
+  }
 }
 
 async function demoProcess(directory) {
@@ -196,7 +234,9 @@ async function main() {
         } else if (url?.startsWith('/rest/v1/')) {
           returned = await fetch(restOrigin + url.slice('/rest/v1'.length),{method,headers,body,redirect:'error',signal:AbortSignal.timeout(10000)});
         } else returned = new Response(null,{status:404});
-        response.writeHead(returned.status,{'content-type':returned.headers.get('content-type') || 'application/json'});
+        const contentRange = returned.headers.get('content-range');
+        response.writeHead(returned.status,{'content-type':returned.headers.get('content-type') || 'application/json',
+          ...(contentRange && {'content-range':contentRange})});
         response.end(Buffer.from(await returned.arrayBuffer()));
       } catch (error) { routeError = error; response.writeHead(500).end(); }
     });
@@ -318,9 +358,11 @@ async function main() {
       body:JSON.stringify({...snapshots[0].payload,expectedOwnerId:outsider})});
     assert.equal(badOwner.status,403);
     assert.equal(sql(`select count(*) from public.positions where user_id='${outsider}';`),'0');
+    await checkTradeOverview(formalOrigin);
     console.log(JSON.stringify({scope:'isolated formal PostgreSQL/PostgREST and Demo SQLite; mocked Feishu transport and model',
       migrations:migrations.length,demoScoring:'T+5/T+10 fixture',appBroadcasts:'group score and PM acceptance',
-      formalWrites:1,retry:'same receipt',holding:'100 HKD shares at 400.20 average cost',wrongOwner:'rejected'}));
+      formalWrites:1,retry:'same receipt',holding:'100 HKD shares at 400.20 average cost',wrongOwner:'rejected',
+      formalTradeReads:'1 named, 2 bound, self and unbound excluded'}));
   } finally {
     const cleanup = [];
     try { await connector?.stop(); } catch (error) { cleanup.push(error); }

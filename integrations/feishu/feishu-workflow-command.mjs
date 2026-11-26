@@ -63,6 +63,28 @@ const quotedPriceBound = new RegExp(`${boundPriceLabel}(?:(?:${currencyLiteral})
 const startsWithAmount = new RegExp(`^(?:(?:${currencyLiteral})\\s*)?\\d`,'i');
 const oldPriceLead = /(?:上次|昨天|之前|旧的?|原先|历史)(?:的|模拟|成交|交易|参考价|目标价|止损价|价格|价|每股|按|以|用|为|是|\s)*$/u;
 const currencySuffix = new RegExp(`^\\s*(?:${currencyLiteral})`,'i');
+const cashNumber = `(?:${decimalLiteral}\\s*[百千万亿]?|[零〇一二两三四五六七八九十百千万亿]+)`;
+const cashAmount = new RegExp(`(?:${cashNumber}\\s*(?:${currencyLiteral})|(?:${currencyLiteral})\\s*${cashNumber})`,'iu');
+const namedPrice = new RegExp(`(?:${Object.values(amountEvidence).join('|')}|每股|市值|估值|净资产|总资产|账户余额)${amountJoin}$`,'iu');
+const onlyAdviceEvidence = /(?:只|仅|光).{0,8}(?:建议|观点|看法|登记|记录|记下)|(?:先不|不必|不要|不用|无需|别|暂缓|取消).{0,6}(?:交易|成交|执行|下单)/u;
+
+function hasUnpricedCashOrder(source,action) {
+  if (!['buy','add','trim','sell'].includes(action?.value)) return false;
+  // The model identifies the action. Only inspect funds tied to that clause,
+  // so an unrelated account balance or a labelled price cannot request a fill.
+  return source.split(/[。！？!?；;\n]/u).some(sentence => {
+    if (!sentence.includes(action.evidence)) return false;
+    const clauses = sentence.split(/，|,(?!\d{3}(?:\D|$))/u);
+    return clauses.some((clause,index) => {
+      const cash = cashAmount.exec(clause);
+      if (!cash) return false;
+      const before = clause.slice(0,cash.index).trim();
+      const after = clause.slice(cash.index+cash[0].length).trim();
+      if (namedPrice.test(before) || /^(?:一股|每股|\/股)/u.test(after)) return false;
+      return clause.includes(action.evidence) || (index > 0 && clauses[index-1].includes(action.evidence) && !before && !after);
+    });
+  });
+}
 
 function invalid(message) {
   throw Object.assign(new Error(message), {status:400});
@@ -73,8 +95,13 @@ export function isAdviceOnlyCommand(text) {
 }
 
 export function modelExecutionMode(text, interpretation) {
-  const field = modelField(comparable(text),interpretation,'executionMode');
-  return ['simulate','advice_only'].includes(field?.value) ? field.value : undefined;
+  const source = comparable(text);
+  const field = modelField(source,interpretation,'executionMode');
+  if (field?.value === 'simulate') return 'simulate';
+  if (field?.value === 'advice_only' && (!cashAmount.test(source) || onlyAdviceEvidence.test(field.evidence))) return 'advice_only';
+  // Missing or ungrounded disposition on a sized order must go back to its
+  // author for shares and price (or an explicit advice-only choice) before PM.
+  return hasUnpricedCashOrder(source,modelField(source,interpretation,'action')) ? 'simulate' : undefined;
 }
 
 function moneyEvidence(key, evidence, allowPlain) {

@@ -117,8 +117,56 @@ test('a read-only PM inbox question never confirms; an explicit group scope is s
   h.receive('同意',{parentId:'out1',directedToBot:false});
   h.responders.set('全组在方向判断上的战果拿给我瞧瞧',modelReport('all',['scores']));
   await h.ask('全组在方向判断上的战果拿给我瞧瞧');
-  assert.deepEqual(h.queries,[{expectedOwnerId:owner,analystKey:null,sections:['scores']}]);
+  assert.deepEqual(h.queries,[{expectedOwnerId:owner,analystKey:null,analystKeys:['analystA','analystB','analystC'],sections:['scores']}]);
   assert.equal(h.flow.view().proposals.length,0);assert.deepEqual(h.writes,[]);
+});
+
+test('PM scope answers continue the same trade query after restart, independent of the model and roster intent',async t=>{
+  const h=fixture(t);
+  const question='哪些建议已经完成了模拟成交';
+  h.responders.set(question,modelReport('context',['trades']));
+  h.responders.set('全组',{read:'analyst_roster'});
+  assert.match((await h.ask(question)).text,/你想看哪位分析师/);
+  assert.equal(h.queries.length,0);
+  h.restart();
+  await h.ask('全组');
+  assert.deepEqual(h.queries,[{expectedOwnerId:owner,analystKey:null,analystKeys:['analystA','analystB','analystC'],sections:['trades']}]);
+  assert.equal(h.calls.length,1);
+  await h.ask('示例分析师乙',{parentId:'out1',directedToBot:false});
+  assert.deepEqual(h.queries.at(-1),{expectedOwnerId:owner,analystKey:'analystB',sections:['trades']});
+  await h.ask('全组',{senderId:'guest',parentId:'out1'});
+  assert.equal(h.queries.length,2);
+  assert.deepEqual(h.writes,[]);
+});
+
+test('a longer scope reply gives the model the pending report sections, including a fresh PM self-query',async t=>{
+  const h=fixture(t);
+  assert.match((await h.ask('查我的模拟成交')).text,/指定分析师/);
+  const text='全组的情况都帮我过一遍';
+  h.responders.set(text,modelReport('all',['trades']));
+  await h.ask(text);
+  assert.deepEqual(h.calls.at(-1).readContext,{source:'report_scope_question',sections:['trades']});
+  assert.deepEqual(h.queries,[{expectedOwnerId:owner,analystKey:null,analystKeys:['analystA','analystB','analystC'],sections:['trades']}]);
+});
+
+test('membership changes or legacy group reports invalidate chat history and model-selected report jobs',async t=>{
+  const h=fixture(t);
+  h.responders.set('全组押中的比例呢',modelReport('all',['scores']));
+  await h.ask('全组押中的比例呢');
+  await h.ask('解释刚才的结果');
+  assert.match(JSON.stringify(h.calls.at(-1).history),/这份正式报表/);
+  h.db.exec('UPDATE feishu_formal_report_scopes SET group_keys=NULL');
+  await h.ask('再解释',{parentId:'out2'});
+  assert.deepEqual(h.calls.at(-1).history,[]);
+  await h.ask('全组押中的比例呢');
+  delete h.config.analystBySender.a;
+  await h.ask('解释一下',{parentId:'out4'});
+  assert.deepEqual(h.calls.at(-1).history,[]);
+  h.receive('全组押中的比例呢');
+  await h.flow.drainChat();
+  delete h.config.analystBySender.c;
+  await h.flow.drain();
+  assert.equal(h.queries.length,2);
 });
 
 test('a model cannot supply arbitrary names or widen scope when a report source is replaced or lost',async t=>{

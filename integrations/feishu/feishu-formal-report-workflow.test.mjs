@@ -4,7 +4,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {openFeishuWorkflow} from './feishu-workflow.mjs';
 import {formalReportIntent} from './feishu-report-intent.mjs';
 
-const account='91000000-0000-4000-8000-00000000000b';
+const account='13d1835d-a871-4ee4-8236-a5beea6ba4c0';
 function configuration() {
   return {chatId:'group',approverIds:['pm'],analystBySender:{a:'analyst_a',b:'analystB',c:'analystC',d:'demo'},
     analystAliasesByRole:{analyst_a:['示例分析师'],analystB:['示例分析师乙'],analystC:['示例分析师丙']},
@@ -46,7 +46,7 @@ test('natural read requests select formal tables, while help, casual chat and in
     ['看看正式系统内分析模块的建议情况、打分情况，以及根据建议已经实现的模拟交易（我的投资模块）',['recommendations','scores','trades']],
     ['查一下正式系统里大家的建议、打分和已经落地的模拟交易',['recommendations','scores','trades']],
     ['查看建议情况和打分情况',['recommendations','scores']],
-    ['查查记到组合里的买卖',['trades']],['哪些建议已经落单',['trades']],
+    ['查查记到组合里的买卖',['trades']],['哪些建议已经落单',['trades']],['哪些建议已经完成了模拟成交',['trades']],
     ['大家的建议准不准',['scores']],['大家的建议表现如何',['scores']],
     ['最近建议及打分',['recommendations','scores']],['看看我的投资模块里由建议产生的成交记录',['trades']],
     ['示例分析师提的建议，打分情况怎么样',['recommendations','scores']],['请报一下 analystC 的评分',['scores']],
@@ -60,17 +60,17 @@ test('natural read requests select formal tables, while help, casual chat and in
     assert.equal(formalReportIntent(text,c),null,text);
   }
   for (const text of ['查王五的评分','查 TSLA 的成交记录','查昨天的评分','查 analystC 和示例分析师乙的模拟交易',
-    '查lina最近 20 笔模拟成交','给我查一下腾讯的建议','查未绑定名字评分','我建议卖出 100 股，顺便看看打分情况','查一下我建议买入 100 股那条建议的评分']) assert.ok(formalReportIntent(text,c)?.error,text);
+    '查analyst_a最近 20 笔模拟成交','给我查一下腾讯的建议','查未绑定名字评分','我建议卖出 100 股，顺便看看打分情况','查一下我建议买入 100 股那条建议的评分']) assert.ok(formalReportIntent(text,c)?.error,text);
 });
 
-test('PM reads account-wide or named formal records; an analyst reads own data; only one tagged reply is emitted per message',async t=>{
+test('PM reads bound analysts together or individually; an analyst reads own data; only one tagged reply is emitted per message',async t=>{
   const h=setup(t);
   assert.equal(h.flow.receive(h.event(1,'查看正式系统建议、评分和模拟成交')).accepted,true);
   assert.equal(h.flow.receive(h.event(1,'查看正式系统建议、评分和模拟成交')).duplicate,true);
   h.flow.receive(h.event(2,'查示例分析师乙的模拟成交')); h.flow.receive(h.event(3,'查我的评分','a'));
   await h.flow.drain();
   assert.deepEqual(h.calls,[
-    {expectedOwnerId:account,analystKey:null,sections:['recommendations','scores','trades']},
+    {expectedOwnerId:account,analystKey:null,analystKeys:['analystB','analystC','analyst_a'],sections:['recommendations','scores','trades']},
     {expectedOwnerId:account,analystKey:'analystB',sections:['trades']},
     {expectedOwnerId:account,analystKey:'analyst_a',sections:['scores']},
   ]);
@@ -86,7 +86,7 @@ test('ambient messages, cross-analyst requests, unknown users, and unconfirmed a
   const h=setup(t);
   assert.equal(h.flow.receive(h.event(1,'查 analyst_a 的评分','pm',{directedToBot:false})).accepted,false);
   assert.equal(h.flow.receive(h.event(2,'查正式系统的建议','pm',{chatId:'other'})).accepted,false);
-  for (const [n,text,sender] of [[3,'查bin的评分','a'],[4,'查看大家的评分','a'],[5,'查模拟成交','guest'],
+  for (const [n,text,sender] of [[3,'查analystB的评分','a'],[4,'查看大家的评分','a'],[5,'查模拟成交','guest'],
     [6,'查我的建议','d'],[7,'查王五的评分','pm'],[8,'查我的评分','pm']]) h.flow.receive(h.event(n,text,sender));
   await h.flow.drain();
   assert.equal(h.calls.length,0);
@@ -147,4 +147,21 @@ test('queued report cannot be sent through the app when formal reporting is disa
   const disabled=h.open({queryFormal:undefined,sendMessage:()=>assert.fail('inactive report must never fall back to app')});
   await disabled.drain();
   assert.deepEqual({...h.db.prepare('SELECT status,text FROM feishu_workflow_messages').get()},{status:'blocked',text:''});
+});
+
+test('whole-group reads freeze the non-Demo role set before fetch and recheck it again before delivery',async t=>{
+  const changed=setup(t,{query:(_request,settings)=>{delete settings.analystBySender.a;return '过期的汇总';}});
+  changed.flow.receive(changed.event(1,'看所有已完成的模拟成交'));
+  await changed.flow.drain();
+  assert.deepEqual(changed.calls[0].analystKeys,['analystB','analystC','analyst_a']);
+  assert.deepEqual(changed.sent,[]);
+
+  const retry=setup(t,{send:()=>{throw Object.assign(Error(),{retriable:true});}});
+  retry.flow.receive(retry.event(1,'查全组模拟成交'));
+  await retry.flow.drain();
+  retry.config.demoOnlyRoles.push('analystB');
+  retry.advance(60_000);
+  await retry.open().drain();
+  assert.equal(retry.sent.length,1);
+  assert.equal(retry.db.prepare("SELECT status FROM feishu_workflow_messages WHERE kind='formal_report'").get().status,'blocked');
 });

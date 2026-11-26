@@ -55,12 +55,25 @@ const explicitGroup = /全(?:部|体|组|群|账户)|所有|大家|每(?:个|位
 const personReference = /[他她]|刚才|上(?:一个|一位|面)|那(?:位|个|名)|这(?:位|个|名)|第\s*[一二三四五六七八九十\d]+/u;
 export function isContextualReportQuestion(text) { return personReference.test(text); }
 
-// Generic legacy lookups imply the whole account for a PM. Only keep that shortcut for an
+// Only use this shorthand when replying to a delivered formal-report scope question.
+export function reportScopeAnswer(text,config) {
+  const choice=text.normalize('NFKC').trim().replace(/[。！!.，,？?\s]+$/u,'')
+    .replace(/^(?:(?:我想|我要|我选|那就|就|只|请|帮我)?(?:查(?:询)?|看(?:看)?|选)(?:一下)?|就)/u,'').trim()
+    .replace(/(?:的|吧|好了|就行)$/u,'').trim();
+  if (/^(?:全(?:组|群|部|体|员)|所有(?:人|成员|分析师)?|大家|整个(?:组|群)|(?:全组|全群|本群|全体)(?:的)?(?:所有)?分析师)$/u.test(choice)) return {everyone:true};
+  if (/^(?:我|本人|自己)$/u.test(choice)) return {self:true};
+  const exactRole=Object.values(config.analystBySender ?? {}).find(role=>typeof role==='string' && role.toLowerCase()===choice.toLowerCase());
+  if (exactRole) return {analystKey:exactRole};
+  const {matched,residual}=rolesIn(choice,config);
+  return matched.length===1 && /^(?:分析师)?$/u.test(residual.trim()) ? {analystKey:matched[0]} : null;
+}
+
+// Generic legacy lookups imply the bound analysts for a PM. Only keep that shortcut for an
 // explicit, self-contained command. Let the model ground the subject of conversational requests.
 export function directFormalRead(text,intent) {
   if (intent.error) return intent.error!==nameHelp;
   if (intent.analystKey || intent.self || intent.everyone) return true;
-  return /^(?:(?:请|帮我)?(?:查(?:询|一下)?|查看|看看)\s*)?(?:(?:正式系统|正式账户|近期|历史)的?\s*)?(?:(?:分析建议|建议|评分|得分|打分|命中率|模拟交易|模拟成交|成交记录)(?:[、，,和及与\s]+|$|[？?。]$))+[？?。]?$/u.test(text.trim());
+  return /^(?:(?:请|帮我|我想)?(?:查(?:询|看|一下)?|看(?:看|一下)?)\s*)?(?:(?:正式系统|正式账户|近期|历史|所有|全部|已(?:经)?(?:完成|登记|执行))的?\s*)*(?:(?:分析建议|建议|评分|得分|打分|命中率|模拟交易|模拟成交|成交记录)(?:[、，,和及与\s]+|$|[？?。]$))+[？?。]?$/u.test(text.trim());
 }
 
 function unsupportedReportFilters(text,residual) {
@@ -92,9 +105,9 @@ function rosterSelection(text,source,config) {
 export function groundFormalRead(tool,text,config,{ownRole,source,history=[],proposal}) {
   const {matched,residual} = rolesIn(text.normalize('NFKC'),config);
   if (unsupportedReportFilters(text,residual)) return {error:filterHelp};
-  if (matched.length > 1) return {error:nameHelp};
+  if (matched.length > 1) return {error:nameHelp,scopeQuestion:true};
   const scoped = analystKey => ({analystKey,sections:tool.sections});
-  const unclear = {error:'你想看哪位分析师的记录？可以说出名字，或明确说要看全组。'};
+  const unclear = {error:'你想看哪位分析师的记录？可以说出名字，或明确说要看全组。',scopeQuestion:true};
   if (tool.scope === 'all') {
     return explicitGroup.test(text) && !matched.length && !formalReportIntent(text,config)?.error
       ? {...scoped(null),everyone:true} : unclear;
@@ -110,7 +123,7 @@ export function groundFormalRead(tool,text,config,{ownRole,source,history=[],pro
   if (!selected) {
     // An explicit unbound name must not silently select the analyst in the previous report.
     const existingIntent=formalReportIntent(text,config);
-    if (existingIntent?.error && !personReference.test(text)) return {error:existingIntent.error};
+    if (existingIntent?.error && !personReference.test(text)) return {error:existingIntent.error,scopeQuestion:existingIntent.error===nameHelp};
     selected=source?.analyst_key ?? proposal?.role;
     if (!selected) {
       for (const turn of history.slice().reverse()) {
@@ -128,7 +141,7 @@ export function groundFormalRead(tool,text,config,{ownRole,source,history=[],pro
     if (!labels || !labels.some(label=>typeof label==='string' && label.normalize('NFKC').toLowerCase()===normalized)) return unclear;
   }
   if (selected) return scoped(selected);
-  // A follow-up to a previously authorized whole-account report may retain that exact scope.
+  // A follow-up to an authorized group report may retain that exact scope.
   if (tool.scope==='context' && source?.kind==='formal_report' && source.analyst_key===null &&
       !/[他她]|那(?:一)?位|这(?:一)?位|哪(?:一)?位/u.test(text)) {
     return {...scoped(null),everyone:true};
@@ -148,6 +161,7 @@ export function formalReportIntent(value, config) {
   }
   // “根据建议产生的成交” asks for the linked trades; “建议的评分” asks for scores.
   const scopeText = text.replace(/(?:根据|依据|按照|基于|源自|由|跟随)(?:分析师)?(?:的)?(?:分析)?建议/gu,'')
+    .replace(/(?:分析)?建议(?=(?:已经|已)?(?:完成|实现|执行)(?:了|的)?(?:模拟)?(?:成交|交易))/gu,'')
     .replace(/(?:分析)?建议(?:所)?(?:对应|关联|转化|产生|带来|形成|执行|促成|落地|实现)(?:的|为|成)?/gu,'')
     .replace(/(?:分析)?建议(?:现在|目前|都|又|究竟|里|有|的)*?(?=(?:(?:已经|已|最后|最终|后来)?(?:落了?单|下了?单|成交了)|准不准|有多准|表现(?:怎样|如何|怎么样)))/gu,'')
     .replace(/(?:分析)?建议(?:的)?(?=(?:评分|打分|得分|分数|命中|胜率|成绩))/gu,'');

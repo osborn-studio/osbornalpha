@@ -8,6 +8,39 @@ const parse = (text, draft) => evaluateProposal('A','分析师 A',text,sentAt,[]
 const interpret = (text, fields, draft) => evaluateProposal('A','分析师 A',text,sentAt,[],draft,{intent:'proposal',fields});
 const quote = (value,evidence) => ({value,evidence});
 
+test('a sized order cannot become an advice-only summary when the extractor omits or mislabels its disposition', () => {
+  for (const [text,action,verb,amount,total] of [
+    ['我要购买01810.HK  100万港币用来建仓','buy','购买','100万港币',1000000],
+    ['我要卖出[01810.HK](http://01810.hk/)  50万港币','sell','卖出','50万港币',500000],
+    ['拿八千港元买01810.HK','buy','买','八千港元',8000],
+  ]) {
+    const fields = {ticker:quote('01810.HK','01810.HK'),action:quote(action,verb),
+      price:quote(total,amount),quantity:quote(total,amount)};
+    for (const executionMode of [undefined,quote('advice_only',verb)]) {
+      const pending = interpret(text,{...fields,...(executionMode && {executionMode})});
+      assert.equal(pending.body,null);
+      assert.deepEqual(pending.missing,['模拟成交价','模拟成交股数']);
+      assert.equal(pending.fields.price,undefined);
+      assert.equal(pending.fields.quantity,undefined);
+      const ask = interpret('这次100股，模拟成交价38港元',{
+        quantity:quote(100,'100股'),price:quote(38,'模拟成交价38港元')},pending.fields);
+      assert.equal(ask.body?.simulation?.quantity,100);
+      assert.equal(ask.body.simulation.price,38);
+      assert.equal(ask.body.simulation.direction,action);
+    }
+  }
+});
+
+test('funds in a standalone background statement, labelled prices and an explicit advice-only choice preserve the recommendation', () => {
+  const fields = {ticker:quote('01810.HK','01810.HK'),action:quote('buy','买入')};
+  for (const text of ['建议买入01810.HK。整个账户的预算为100万港币。','我建议买入01810.HK，参考价38港元。',
+    '我建议买入01810.HK，参考价38港元，目标价45港元。','我建议买入01810.HK，该公司市值100亿港元。']) {
+    assert.equal(interpret(text,fields).body?.simulation,null,text);
+  }
+  const text = '我要买入01810.HK 100万港币，但只登记建议。';
+  assert.equal(interpret(text,{...fields,executionMode:quote('advice_only','只登记建议')}).body?.simulation,null);
+});
+
 test('explicit simulated intent asks for parameters and natural advice-only intent drops them', () => {
   const text = '我想模拟买入英伟达';
   const result = interpret(text,{securityName:quote('英伟达','英伟达'),action:quote('buy','买入'),
@@ -98,14 +131,16 @@ test('grounded model contract accepts prices, quantity, date, optional details a
   assert.throws(()=>interpret(text,{...input,recommended_at:quote('2025-06-14T08:30:00Z','建议时间2025 年 6 月 15 日 16:30')}),/日期/);
 });
 
-test('model evidence cannot turn a cash budget into a simulated order or currency conflict', () => {
+test('a budget for a US listing denominated in CNY cannot supply a share count or any per-share price', () => {
   const text = '买20万人民币的英伟达股票';
   const budget = quote(20,'20万人民币');
-  const {body} = interpret(text,{securityName:quote('英伟达','英伟达'),action:quote('buy','买'),
+  const {body,fields,missing} = interpret(text,{securityName:quote('英伟达','英伟达'),action:quote('buy','买'),
     quantity:quote(200000,'20万人民币'),price:budget,reference_price:budget,currency:quote('CNY','人民币')});
-  assert.equal(body.recommendation.ticker,'NVDA');
-  assert.equal(body.recommendation.reference_price,undefined);
-  assert.equal(body.simulation,null);
+  assert.equal(fields.ticker,'NVDA');
+  assert.equal(fields.reference_price,undefined);
+  assert.equal(fields.currency,undefined);
+  assert.deepEqual(missing,['模拟成交价','模拟成交股数']);
+  assert.equal(body,null);
 });
 
 test('grounded follow-ups may fill exactly one missing trade field with a model candidate', () => {

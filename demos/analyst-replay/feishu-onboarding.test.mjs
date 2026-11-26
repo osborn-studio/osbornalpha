@@ -22,7 +22,7 @@ test('only a local persisted self request can create the Demo identity; two stor
   t.after(() => rm(root,{force:true,recursive:true}));
   const demo = join(root,'demo');
   const formal = join(root,'formal');
-  const settings = {chatId:'oc_target',analystBySender:{ou_existing:'A'},approverIds:['ou_pm'],
+  const settings = {chatId:'oc_target',analystBySender:{ou_existing:'A',ou_guest:'demoGuest'},approverIds:['ou_pm'],demoOnlyRoles:['demoGuest'],
     analystNamesByRole:{A:'旧署名'},analystAliasesByRole:{A:['旧别名']}};
   for (const dir of [demo,formal]) {
     await mkdir(dir);
@@ -75,7 +75,7 @@ test('only a local persisted self request can create the Demo identity; two stor
   for (const source of [demo,formal]) {
     const b = loadConnectorBindings(source,demo);
     assert.equal(b.analystBySender.ou_new,first.role);
-    assert.deepEqual(b.demoOnlyRoles,[first.role]);
+    assert.deepEqual(b.demoOnlyRoles,['demoGuest',first.role]);
     assert.equal(b.analystNamesByRole[first.role],'陈晨');
     assert.deepEqual(JSON.parse(await readFile(join(source,'feishu-bindings.json'),'utf8')),settings);
   }
