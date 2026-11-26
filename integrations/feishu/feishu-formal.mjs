@@ -9,6 +9,7 @@ import { openFeishuRuntime, readFeishuBindings } from './feishu-runtime.mjs';
 import { validateAnalystAliases } from './feishu-pairing.mjs';
 import {createPublishedPromptReader} from './feishu-prompt.mjs';
 import {startFeishuModelWarmth} from './feishu-model-warmth.mjs';
+import {createFeishuNavigation} from './feishu-navigation.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../../build/feishu/',import.meta.url));
 
@@ -31,7 +32,7 @@ export function createFormalFeishuWorkflow({sendMessage,wake,env = process.env,e
     console.error('正式查询的群播报配置无效，请重新配置后重启连接器。');
   }
   const queryFormal=reportConfig?.chatId===config.chatId ? createFormalReader(env) : undefined;
-  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,sendMessage:makeReportSender(sendMessage,reportConfig),
+  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,navigation:createFeishuNavigation(env),sendMessage:makeReportSender(sendMessage,reportConfig),
     queryFormal,syncFormal,extractWithModel:extractor,respondToChat:chat,
     ...(searchSecurity && {searchSecurity})});
   const stopWarmth = startFeishuModelWarmth(env);

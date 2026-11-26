@@ -119,3 +119,23 @@ test('rejects contradictory directions, range guesses and malformed explicit num
   }
   assert.deepEqual(extractNatural('买入AAPL持有10天'),{ticker:'AAPL',market:'US',action:'buy',horizon:'10d'});
 });
+
+test('a quoted numeric code can use its adjacent mainland or Hong Kong market identifier', () => {
+  for (const [text,code,ticker,market] of [
+    ['000333 ch 美的集团','000333','000333.SZ','A'],
+    ['600519 CH 贵州茅台','600519','600519.SH','A'],
+    ['300 hk 美的集团','300','00300.HK','HK'],
+  ]) assert.deepEqual(resolveModelSecurity(text,code),{ticker,market,securityName:undefined});
+  assert.deepEqual(resolveModelSecurity('买 300 HK 的供应商','300'),{});
+  assert.deepEqual(resolveModelSecurity('300 HKD','300'),{});
+  assert.throws(()=>resolveModelSecurity('000333 CH','000333',{market:'HK'}),/市场不一致/);
+});
+
+test('numeric model output can use only the entire exchange-qualified token in the original message', () => {
+  assert.equal(resolveModelSecurity('我想买01800.HK 港股 加仓','01800',{market:'HK'}).ticker,'01800.HK');
+  assert.equal(resolveModelSecurity('600519.SH','600519').ticker,'600519.SH');
+  for (const text of ['101800.HK','01800.HKK','01800.HK的供应商','港元 01800.HK']) {
+    assert.equal(resolveModelSecurity(text,'01800').ticker,undefined,text);
+  }
+  assert.throws(() => resolveModelSecurity('01800.HK','01800',{market:'US'}),/市场/);
+});

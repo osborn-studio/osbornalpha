@@ -205,3 +205,32 @@ for (const webhook of [false,true]) {
     assert.deepEqual(h.writes,[]);
   });
 }
+
+test('a group member can discuss another member’s recent public clarification without exposing scoped reads', async t => {
+  const proposal = '我要加仓，请登记';
+  const h = conversation(t,{reply:({text}) => text==='讲讲这个分数' ? '这条是私有报表的解读。' : '听到了。',
+    services:{extractWithModel:async ({text}) => text===proposal ?
+      {intent:'proposal',fields:{action:{value:'add',evidence:'加仓'}}} : {intent:'other',fields:{}}}});
+  const prompt = await h.ask(proposal,{senderId:'a'});
+  assert.match(prompt.text,/标的/);
+  assert.doesNotMatch(prompt.text,/00700\.HK|600519\.SH/);
+  await h.ask('查示例分析师乙的评分');
+  await h.ask('讲讲这个分数');
+  await h.ask('帮我看看 https://example.invalid/private 或 feishu://app/secret-path 页面',{senderId:'guest'});
+  await h.ask('sk-ws-H.fixture.secret-dot-key',{senderId:'guest'});
+  await h.ask('我的密码是 very-private-value',{senderId:'guest'});
+  await h.ask('刚才怎么识别不出标的',{senderId:'b'});
+  const group = h.modelCalls.at(-1).groupContext;
+  assert.ok(group.some(entry => entry.said===proposal.normalize('NFKC') && entry.member==='analystA' && entry.assistant.includes('标的')),JSON.stringify(group));
+  assert.ok(group.some(entry => entry.said.includes('[已隐去]')));
+  assert.doesNotMatch(JSON.stringify(group),/私有报表|得分 84|分数|example\.invalid|secret-path|secret-dot-key|very-private-value/);
+  assert.deepEqual(h.writes,[]);
+
+  h.config.chatId='new-group';
+  await h.ask('刚才讨论了啥',{chatId:'new-group',senderId:'other'});
+  assert.equal(h.modelCalls.at(-1).groupContext,undefined);
+  h.config.chatId='group';
+  h.advance(30*60_000+1);
+  await h.ask('还有刚才的经过吗',{senderId:'b'});
+  assert.equal(h.modelCalls.at(-1).groupContext,undefined);
+});

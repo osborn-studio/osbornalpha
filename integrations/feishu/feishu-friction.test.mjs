@@ -242,3 +242,19 @@ test('timeout feedback reaches the group and only a sanitized failure category r
   assert.match(replies[3],/长度|生成.{0,8}上限/);
   assert.doesNotMatch(JSON.stringify([turns,replies]),/PRIVATE_ERROR_VALUE|private provider error|497/);
 });
+
+test('position corrections retain only a verified report category and reject account-wide or mixed reads',t=>{
+  const h=harness(t);
+  let seq=0;
+  const observe=(action,modelSelected)=>h.collector.observeRead({chatId:config.chatId,senderId:'reader',messageId:'p'+(++seq),
+    text:'我指的是持仓，账户有一笔秘密数量',readAction:action,modelSelected},config);
+  const positions={read:'formal_report',scope:'self',sections:['positions']};
+  for(const invalid of [{...positions,scope:'account'},{...positions,sections:['positions','account_assets']},
+    {...positions,sections:['positions','trades']},{...positions,ownerId:'私人账户'}]){
+    observe('trades',true);observe(invalid,false);
+    assert.deepEqual(h.incidents(),[]);
+  }
+  observe('trades',true);observe(positions,false);
+  assert.deepEqual(h.incidents()[0].turns,[{user:'',outcome:'verified_read_correction',previousRead:'trades',expectedRead:'positions'}]);
+  assert.doesNotMatch(JSON.stringify(h.incidents()),/秘密数量|私人账户|reader/u);
+});

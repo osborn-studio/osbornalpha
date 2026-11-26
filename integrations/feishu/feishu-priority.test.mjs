@@ -9,7 +9,7 @@ function deferred() {
   return {promise,resolve};
 }
 
-function harness(t,{summaryDelivery}={}) {
+function harness(t,{summaryDelivery,...options}={}) {
   const db = new DatabaseSync(':memory:');
   t.after(() => db.close());
   const model = deferred(), write = deferred();
@@ -33,7 +33,7 @@ function harness(t,{summaryDelivery}={}) {
       messages.push({...input,messageId});
       if (summaryDelivery && input.text.includes('待确认提案')) await summaryDelivery.promise;
       return {messageId};
-    },
+    },...options,
   });
   const receive = (id,text,senderId='author',parentId=null) => flow.receive({eventId:'ev_'+id,messageId:'in_'+id,
     chatId:'group',senderId,directedToBot:!parentId,parentId,text});
@@ -54,7 +54,7 @@ test('submission receipt and validated PM decision bypass occupied inference; du
   h.receive(2,'慢消息','second');
   const busy=h.flow.drainPrimary();
   await h.flow.drainReceipts();
-  assert.match(h.messages.at(-1).text,/收到/);
+  assert.ok(h.messages.every(m=>m.replyTo!=='in_2'),'silence while the intent is unknown');
   assert.equal(h.flow.view().proposals.length,1);
   assert.equal(h.receive(3,'同意','pm',summary).duplicate,false);
   assert.equal(h.flow.view().proposals[0].formalStatus,'pending_formal_sync');
@@ -115,4 +115,36 @@ test('a PM reply received before Feishu returns the summary ID is confirmed as s
   await h.flow.drain();
   assert.equal(h.writes.length,1);
   assert.equal(h.flow.view().proposals[0].formalStatus,'registered');
+});
+
+test('only a classified proposal waiting for verification gets one delayed receipt',async t=>{
+  const lookup=deferred(), started=deferred();
+  let clock=Date.now();
+  const h=harness(t,{now:()=>clock,
+    extractWithModel:async()=>({intent:'proposal',fields:{action:{value:'buy',evidence:'买入'},securityName:{value:'示例公司',evidence:'示例公司'}}}),
+    searchSecurity:async()=>{started.resolve();return lookup.promise;}
+  });
+  h.receive(1,'买入示例公司');
+  const processing=h.flow.drainPrimary();
+  await started.promise;
+  await h.flow.drainReceipts();
+  assert.equal(h.messages.length,0);
+  clock+=3001;
+  await h.flow.drainReceipts();
+  await h.flow.drainReceipts();
+  assert.deepEqual(h.messages.map(m=>m.text),['收到建议，正在核对标的。']);
+  lookup.resolve([{ticker:'01999.HK',market:'HK',name:'示例公司'}]);await processing;
+  await h.flow.drainProposalReplies();
+  assert.match(h.messages.at(-1).text,/待确认提案/);
+});
+
+test('analyst chatter and navigation feedback produce a single useful reply each',async t=>{
+  const h=harness(t,{respondToChat:async()=>'我在。',
+    extractWithModel:async({text})=>text==='聊聊' ? {intent:'other',fields:{}} :
+      {intent:'read',fields:{},query:{read:'navigation',target:'context',feedback:true}},
+    navigation:{render:()=>'Osborn Alpha 正式站 https://osbornalpha.com/'}});
+  h.receive(1,'聊聊');await h.flow.drain();
+  h.receive(2,'最好能点进对应网页');await h.flow.drain();
+  assert.deepEqual(h.messages.map(m=>m.text),['我在。','收到这个建议。\nOsborn Alpha 正式站 https://osbornalpha.com/']);
+  assert.equal(h.writes.length,0);
 });

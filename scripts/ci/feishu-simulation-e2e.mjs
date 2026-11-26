@@ -96,19 +96,24 @@ async function checkTradeOverview(formalOrigin) {
   for (const key of ['A',null]) {
     const url = new URL('/api/integrations/feishu/overview',formalOrigin);
     url.searchParams.set('owner',owner);
-    url.searchParams.set('sections','trades');
+    url.searchParams.set('sections','trades,positions');
     if (key) url.searchParams.set('analyst',key);
     const response = await getOverview(new Request(url,{headers:{authorization:'Bearer '+bridgeToken}}));
     assert.equal(response.status,200);
     const {text} = await response.json();
     assert.match(text,/测试分析师 00700\.HK 买入 100 股 × 400 HKD/);
     assert.doesNotMatch(text,/账户本人|组外分析师/);
+    assert.match(text,/分析师持仓（按成本，按币种分别计算）/);
     if (key) {
+      assert.match(text,/正式模拟账户查询（分析师 测试分析师，北京时间）/);
+      assert.match(text,/00700\.HK｜净股数 100｜均价 400.2｜持仓成本 40020 HKD｜已实现盈亏 0 HKD｜占比 100%/);
       assert.match(text,/模拟成交（共 1 条）/);
       assert.doesNotMatch(text,/同组分析师/);
     } else {
       assert.match(text,/模拟成交（共 2 条）/);
       assert.match(text,/同组分析师 01810\.HK 买入 20 股 × 30 HKD/);
+      assert.match(text,/01810\.HK｜净股数 20｜均价 30｜持仓成本 600 HKD｜已实现盈亏 0 HKD｜占比 1.48%/);
+      assert.match(text,/00700\.HK｜净股数 100｜均价 400.2｜持仓成本 40020 HKD｜已实现盈亏 0 HKD｜占比 98.52%/);
     }
   }
   // Exercise the dashboard with the same RLS policies as a signed-in user, including
@@ -139,6 +144,30 @@ async function checkTradeOverview(formalOrigin) {
   assert.equal(report.trades.find(fill=>fill.recommendationId===scored.id).quantity,20);
   const other = await dashboard(outsider);
   assert.deepEqual([other.analysts,other.recommendations,other.trades],[[],[],[]]);
+
+  // A later receipt at the very same execution time must follow the opening lot,
+  // even when its trade UUID sorts first. Exercise the actual PostgREST cast and journal join.
+  sql(`with sale as (
+      insert into public.recommendations(user_id,analyst_id,ticker,market,action)
+      values ('${owner}','${analyst}','00700.HK','HK','trim') returning id
+    ), decision as (
+      insert into public.decisions(user_id,recommendation_id,ticker,market,action,status)
+      select '${owner}',id,'00700.HK','HK','trim','executed' from sale returning id,recommendation_id
+    ), fill as (
+      insert into public.trades(id,user_id,decision_id,ticker,direction,quantity,price,fee,currency,executed_at)
+      select '00000000-0000-4000-8000-000000000001','${owner}',decision.id,'00700.HK','sell',1,420,1,'HKD',opened.executed_at
+      from decision cross join public.trades opened where opened.user_id='${owner}' and opened.ticker='00700.HK'
+      returning id,decision_id
+    )
+    insert into public.feishu_simulation_receipts(owner_id,source_id,payload_hash,recommendation_id,decision_id,trade_id)
+      select '${owner}','tie-order-fixture',repeat('c',64),decision.recommendation_id,decision.id,fill.id
+      from decision join fill on fill.decision_id=decision.id;`);
+  const namedUrl=new URL('/api/integrations/feishu/overview',formalOrigin);
+  namedUrl.search=new URLSearchParams({owner,analyst:'A',sections:'positions'});
+  const tie=await getOverview(new Request(namedUrl,{headers:{authorization:'Bearer '+bridgeToken}}));
+  assert.equal(tie.status,200);
+  assert.ok((await tie.json()).text.split('\n').includes(
+    '00700.HK｜净股数 99｜均价 400.2｜持仓成本 39619.8 HKD｜已实现盈亏 18.8 HKD｜占比 100%'));
 }
 
 async function demoProcess(directory) {
@@ -393,6 +422,7 @@ async function main() {
       migrations:migrations.length,demoScoring:'T+5/T+10 fixture',appBroadcasts:'group score and PM acceptance',
       formalWrites:1,retry:'same receipt',holding:'100 HKD shares at 400.20 average cost',wrongOwner:'rejected',
       formalTradeReads:'1 named, 2 bound, self and unbound excluded',
+      formalPositionReads:'named 100%, bound group 98.52% and 1.48% by HKD cost',
       analystDashboard:'3 recommendations, 2 linked fills; signed-in RLS isolates the owner'}));
   } finally {
     const cleanup = [];

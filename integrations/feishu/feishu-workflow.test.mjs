@@ -1,3 +1,4 @@
+import { createFeishuNavigation } from './feishu-navigation.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -31,7 +32,7 @@ const modelFixtures = new Map([
   [command.replace('加仓','加仓｜卖出'),{intent:'ambiguous',fields:{}}],
   ['我想买入NVDA',packet({ticker:quote('NVDA'),action:quote('buy','买入')})],
   ['我想买01800.HK或者加仓',{intent:'ambiguous',fields:{}}],
-  ['我想买01800.HK 港股 加仓',packet({ticker:quote('01800.HK'),action:quote('add','加仓')})],
+  ['我想买01800.HK 港股 加仓',packet({ticker:quote('01800','01800.HK'),market:quote('HK','01800.HK 港股'),action:quote('add','加仓')})],
   ['00700.HK',packet({ticker:quote('00700.HK')})],
   ['先观望',packet({action:quote('pass','先观望')})],
   ['我建议加仓，参考价 40 港元',packet({action:position.action,reference_price:quote(40,'参考价 40 港元')})],
@@ -177,7 +178,36 @@ test('named listings are checked against the security master and a conflicting f
   workflow.receive(event(3,{text:'港的那只',parentId:'om_sent_2',directedToBot:false}));
   await workflow.drain();
   assert.match(h.messages[2].text,/02631\.HK · HK · 加仓/);
-  assert.deepEqual(queryNames,['天岳先进','天岳先进','天岳先进']);
+  assert.deepEqual(queryNames,['天岳先进','天岳先进','600519.SH','天岳先进']);
+  assert.deepEqual(h.registrations,[]);
+});
+
+test('a mismatched supplementary code identifies its verified issuer and leaves the original draft intact', async t => {
+  const h = harness(t);
+  const proposal = '我想买入英伟达100股';
+  const responses = new Map([
+    [proposal,packet({action:quote('buy','买入'),securityName:quote('英伟达'),quantity:quote(100,'100股')})],
+    ['600519.SH',packet({ticker:quote('600519','600519.SH'),market:quote('A','600519.SH')})],
+    ['模拟成交价150美元',packet({price:quote(150,'模拟成交价150美元')})],
+  ]);
+  const lookups = [];
+  const flow = h.open({extractWithModel:async ({text}) => responses.get(text),
+    searchSecurity:async query => {
+      lookups.push(query);
+      return [{market:'A',name:'贵州茅台',ticker:'600519.SH'}];
+    }});
+  flow.receive(event(1,{text:proposal}));
+  await flow.drain();
+  assert.match(h.messages[0].text,/NVDA/);
+  flow.receive(event(2,{text:'600519.SH',parentId:'om_sent_1',directedToBot:false}));
+  await flow.drain();
+  assert.match(h.messages[1].text,/600519\.SH 是贵州茅台，与原建议的「英伟达」不符/);
+  assert.match(h.messages[1].text,/若要更换标的/);
+  assert.deepEqual(flow.view().proposals,[]);
+  flow.receive(event(3,{text:'模拟成交价150美元',parentId:'om_sent_2',directedToBot:false}));
+  await flow.drain();
+  assert.match(h.messages[2].text,/NVDA/);
+  assert.deepEqual(lookups,['600519.SH']);
   assert.deepEqual(h.registrations,[]);
 });
 
@@ -1241,4 +1271,115 @@ test('an issuer interpreted as an explicit US ticker needs an exact listed symbo
     }
     assert.deepEqual(h.registrations,[]);
   }
+});
+
+test('a receipt and subsequent group navigation replies point to the confirmed stock without submitting another trade',async t=>{
+  const h=harness(t,{simulationAccount:{confirmed:true,id:owner}});
+  const writes=[];
+  const selection={read:'navigation',target:'context'};
+  const flow=h.open({register:undefined,navigation:createFeishuNavigation({}),
+    extractWithModel:async input=>input.text===command ? fixtureModel(input) : {intent:'read',query:selection,fields:{}},
+    respondToChat:async()=>({...selection,ticker:'MSFT'}),
+    syncFormal:async input=>{writes.push(input);return {recommendationId,decisionId,tradeId};}});
+  flow.receive(event(1));
+  await flow.drain();
+  flow.receive(approval(2,flow.view().proposals[0].summaryId));
+  await flow.drain();
+  const receipt=h.messages.at(-1).text;
+  assert.ok(receipt.includes('#'+tradeId.slice(0,8)));
+  assert.match(receipt,/https:\/\/osbornalpha\.com\/analyst\b/);
+  const portfolio='https://osbornalpha.com/portfolio?s=';
+  assert.ok(receipt.includes(portfolio+'01810.HK'));
+  const reply=async (n,text,senderId)=>{
+    flow.receive(event(n,{text,senderId,parentId:'om_sent_'+h.messages.length}));
+    await flow.drain();
+    return h.messages.at(-1).text;
+  };
+  assert.ok((await reply(3,'给个链接打开对应的网页','ou_second')).includes(portfolio+'01810.HK'));
+  const followup=await reply(4,'为什么不能跳转链接','ou_guest');
+  assert.ok(followup.includes(portfolio+'01810.HK'));
+  assert.ok(!followup.includes('MSFT'));
+  assert.ok((await reply(5,'给我 MSFT 的投资页','ou_guest')).includes(portfolio+'MSFT'));
+  assert.equal(writes.length,1);
+});
+
+test('a standalone PM mention saying 同意 reads actual pending summaries without approving one',async t => {
+  const h = harness(t);
+  const flow = h.open({respondToChat:async()=>assert.fail('pending proposals come from the workflow')});
+  flow.receive(event(1));
+  await flow.drain();
+  const proposal = flow.view().proposals[0];
+  flow.receive(event(2,{text:'同意',senderId:approver}));
+  await flow.drain();
+  assert.match(h.messages.at(-1).text,/本群待确认 1 条/);
+  assert.ok(h.messages.at(-1).text.includes(proposal.id));
+  assert.match(h.messages.at(-1).text,/在对应的最新摘要下回复/);
+  assert.deepEqual(h.registrations,[]);
+  flow.receive(approval(3,proposal.summaryId));
+  await flow.drain();
+  assert.equal(h.registrations.length,1);
+});
+
+test('analystA can clarify 美的 with 000333 ch 美的集团 and supply only the outstanding execution price', async t => {
+  const h = harness(t,{analystNamesByRole:{A:'analystA'},simulationAccount:{confirmed:true,id:owner}});
+  const buy = '我想买入美的 100股';
+  const listing = '000333 ch 美的集团';
+  const price = '每股模拟成交价70元';
+  const replies = new Map([
+    [buy,packet({securityName:quote('美的'),action:quote('buy','买入'),quantity:quote(100,'100股')})],
+    [listing,packet({securityName:quote('美的集团'),ticker:quote('000333.SZ','000333 ch'),market:quote('A','ch')})],
+    [price,packet({price:quote(70,'模拟成交价70元')})],
+  ]);
+  const groupListings = [
+    {ticker:'000333.SZ',market:'A',name:'美的集团'},
+    {ticker:'00300.HK',market:'HK',name:'美的集团'},
+  ];
+  const writes = [];
+  const workflow = h.open({register:undefined,
+    extractWithModel:async ({text}) => replies.get(text),
+    searchSecurity:async (query,{includeSuggestions} = {}) => {
+      if (query === '美的' && includeSuggestions) {
+        return [...groupListings,{ticker:'03990.HK',market:'HK',name:'美的置业'}]
+          .map(item => ({...item,suggestionOnly:true}));
+      }
+      if (query === '美的集团') return groupListings;
+      if (['000333','000333.SZ'].includes(query)) return [groupListings[0]];
+      return [];
+    },
+    syncFormal:async request => { writes.push(request); return {recommendationId,decisionId,tradeId}; },
+  });
+
+  workflow.receive(event(1,{text:buy}));
+  await workflow.drain();
+  const choices = h.messages.at(-1).text;
+  assert.match(choices,/美的集团/);
+  assert.match(choices,/000333\.SZ/);
+  assert.match(choices,/00300\.HK/);
+  assert.match(choices,/美的置业/);
+  assert.match(choices,/模拟成交价/);
+  assert.doesNotMatch(choices,/模拟成交股数|请按本次拟成交的股数/);
+  assert.deepEqual(workflow.view().proposals,[]);
+
+  workflow.receive(event(2,{text:listing,parentId:'om_sent_1'}));
+  await workflow.drain();
+  const pendingPrice = h.messages.at(-1).text;
+  assert.match(pendingPrice,/000333\.SZ/);
+  assert.match(pendingPrice,/模拟成交价/);
+  assert.doesNotMatch(pendingPrice,/补充交易市场|请回复它的上市市场|模拟成交股数|请按本次拟成交的股数/);
+  assert.deepEqual(workflow.view().proposals,[]);
+  assert.deepEqual(writes,[]);
+
+  workflow.receive(event(3,{text:price,parentId:'om_sent_2'}));
+  await workflow.drain();
+  const proposal = workflow.view().proposals[0];
+  assert.match(h.messages.at(-1).text,/正式系统模拟成交申请 买入 100 股 × 70 CNY/);
+  assert.match(h.messages.at(-1).text,/000333\.SZ · A · 买入/);
+  assert.deepEqual(writes,[]);
+  workflow.receive(approval(4,proposal.summaryId));
+  await workflow.drain();
+  workflow.receive(approval(5,proposal.summaryId));
+  await workflow.drain();
+  assert.deepEqual(writes.map(row=>[row.recommendation.ticker,row.execution.quantity,row.execution.price]),[
+    ['000333.SZ',100,70],
+  ]);
 });

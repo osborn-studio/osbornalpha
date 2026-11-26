@@ -131,7 +131,8 @@ test('the formal connector persists and replays a PM-approved fill without a Dem
   assert.equal(registered.decisionId,decisionId);
   assert.equal(registered.tradeId,tradeId);
   assert.equal(registered.demoId,null);
-  assert.match(messages.at(-1).text,RegExp(tradeId));
+  assert.ok(messages.at(-1).text.includes('#'+tradeId.slice(0,8)));
+  assert.ok(!messages.at(-1).text.includes(tradeId));
   assert.equal(workflow.receive(pmReply).duplicate,true);
   workflow.receive(approval(7,pending.summaryId));
   await workflow.drain();
