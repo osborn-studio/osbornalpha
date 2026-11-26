@@ -1,5 +1,5 @@
 // Registrations use the production parser, exchange calendar convention, forward scorer and paper book.
-import { beijingDate, beijingDateTime, beijingInputValue, beijingInputToISO, marketCalendarLabel } from './public/beijing-time.mjs';
+import { beijingDate, beijingDateTime, beijingInputValue, beijingInputToISO, marketCalendarLabel } from '../../integrations/feishu/beijing-time.mjs';
 import { parseRecommendationInput } from '../../src/lib/analyst/validate.ts';
 import { buildBook } from '../../src/lib/analyst/book.ts';
 import { exchangeDate, callDirection } from '../../src/lib/scoring/forward.ts';

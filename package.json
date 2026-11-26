@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "next dev",
     "demo:analyst": "node --env-file-if-exists=.env.local --import tsx demos/analyst-replay/server.mjs",
-    "demo:feishu": "node --env-file-if-exists=build/analyst-replay/feishu-app.env --import tsx demos/analyst-replay/feishu-connector.mjs",
+    "feishu:formal": "node --env-file-if-exists=build/feishu/feishu-app.env --import tsx integrations/feishu/start.mjs",
+    "demo:feishu": "node --env-file-if-exists=build/analyst-replay/feishu-app.env --import tsx demos/analyst-replay/feishu-demo-start.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",

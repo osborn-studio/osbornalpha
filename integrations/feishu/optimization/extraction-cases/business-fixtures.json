@@ -1,0 +1,314 @@
+{
+  "catalogues": {
+    "京东集团-SW": [
+      {
+        "market": "HK",
+        "ticker": "09618.HK"
+      }
+    ],
+    "可口可乐": [
+      {
+        "market": "US",
+        "ticker": "KO"
+      }
+    ],
+    "KO": [
+      {
+        "market": "US",
+        "ticker": "KO"
+      }
+    ],
+    "格力电器": [
+      {
+        "market": "A",
+        "ticker": "000651.SZ"
+      }
+    ],
+    "快手-W": [
+      {
+        "market": "HK",
+        "ticker": "01024.HK"
+      }
+    ],
+    "迪士尼": [
+      {
+        "market": "US",
+        "ticker": "DIS"
+      }
+    ],
+    "中国联通": [
+      {
+        "market": "A",
+        "ticker": "600050.SH"
+      },
+      {
+        "market": "HK",
+        "ticker": "00762.HK"
+      }
+    ],
+    "泡泡玛特": [
+      {
+        "market": "HK",
+        "ticker": "09992.HK"
+      }
+    ],
+    "英特尔": [
+      {
+        "market": "US",
+        "ticker": "INTC"
+      }
+    ],
+    "微软": [
+      {
+        "market": "US",
+        "ticker": "MSFT"
+      }
+    ],
+    "长江电力": [
+      {
+        "market": "A",
+        "ticker": "600900.SH"
+      }
+    ],
+    "海尔智家": [
+      {
+        "market": "A",
+        "ticker": "600690.SH"
+      },
+      {
+        "market": "HK",
+        "ticker": "06690.HK"
+      }
+    ],
+    "中国石油": [
+      {
+        "market": "A",
+        "ticker": "601857.SH"
+      },
+      {
+        "market": "HK",
+        "ticker": "00857.HK"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "independent-r2-01",
+      "sha256": "6f2ba386fafd3be3a26f4c2ea8a710bab2ccd185c01545a63a7bf4c7dac0d23d",
+      "expected": {
+        "route": "pm_advice",
+        "fields": {
+          "market": "HK",
+          "ticker": "09618.HK",
+          "action": "add"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-02",
+      "sha256": "af22cda5d2ed2b2f8a701fd6194bae132de0230e406a6ff3e7e349dd1a7d4a10",
+      "expected": {
+        "route": "request_details",
+        "missing": [
+          "quantity",
+          "price"
+        ],
+        "fields": {
+          "ticker": "KO",
+          "market": "US",
+          "action": "buy"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-03",
+      "sha256": "2208cb7728e3adc23d78ed67438c7fe50af9e478241a3cf2e7333f6942763321",
+      "expected": {
+        "route": "pm_advice",
+        "fields": {
+          "market": "A",
+          "ticker": "000651.SZ",
+          "action": "trim",
+          "reference_price": 42.8,
+          "stop_loss": 39
+        }
+      }
+    },
+    {
+      "id": "independent-r2-04",
+      "sha256": "8819ab600f0d0c7f686b4df8baa434cef685ab1d7830c38cf09f45407194e006",
+      "expected": {
+        "route": "pm_advice",
+        "fields": {
+          "market": "HK",
+          "ticker": "01024.HK",
+          "action": "hold"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-05",
+      "sha256": "d9529f905d513e9de6efeea32d78073de6ae81d9c4f7b769ea1aa66357af9e76",
+      "expected": {
+        "route": "pm_advice",
+        "fields": {
+          "market": "US",
+          "ticker": "DIS",
+          "action": "sell"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-06",
+      "sha256": "0febfe14d6cc55a0b6fad358e933110d1edac91cd20d456c5cc8282d8b81ab7f",
+      "expected": {
+        "route": "pm_advice",
+        "fields": {
+          "market": "A",
+          "ticker": "600050.SH",
+          "action": "pass"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-07",
+      "sha256": "f490a7f5d9990b04588dc9aae4f2a3558c0318add2a6bbb41e3a836c497a3524",
+      "expected": {
+        "route": "request_details",
+        "missing": [
+          "action"
+        ],
+        "fields": {
+          "securityName": "泡泡玛特",
+          "ticker": "09992.HK",
+          "market": "HK"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-08",
+      "sha256": "df19ef8b67daec9ffb8bbc0d9a7dc9f865288ff68283f6ecabc83fbed54330d5",
+      "expected": {
+        "route": "pm_simulation",
+        "fields": {
+          "market": "US",
+          "ticker": "INTC",
+          "action": "add"
+        },
+        "simulation": {
+          "direction": "buy",
+          "quantity": 12,
+          "price": 24.6,
+          "fee": 0
+        }
+      }
+    },
+    {
+      "id": "independent-r2-09",
+      "sha256": "be7deaa32f48d473e1c6aa22daca3f19295596b72b8b399fcee2864354975d44",
+      "expected": {
+        "route": "pm_simulation",
+        "fields": {
+          "market": "US",
+          "ticker": "MSFT",
+          "action": "buy"
+        },
+        "simulation": {
+          "direction": "buy",
+          "quantity": 35,
+          "price": 410,
+          "fee": 0
+        }
+      }
+    },
+    {
+      "id": "independent-r2-10",
+      "sha256": "9eb85ada641f795577134dd82195e0b1f6b95c0bb37ebd8cdf7f5449e38f3a01",
+      "expected": {
+        "route": "pm_simulation",
+        "fields": {
+          "market": "A",
+          "ticker": "600900.SH",
+          "action": "buy",
+          "reference_price": 46.2
+        },
+        "simulation": {
+          "direction": "buy",
+          "quantity": 200,
+          "price": 45.8,
+          "fee": 0
+        }
+      }
+    },
+    {
+      "id": "independent-r2-11",
+      "sha256": "98a2aae6e1346ff0b158c3248cbecb7f93b33bc966a076ce52d2942aecef2eeb",
+      "expected": {
+        "route": "request_details",
+        "missing": [
+          "ticker"
+        ],
+        "fields": {
+          "securityName": "海尔智家",
+          "action": "sell",
+          "quantity": 150,
+          "price": 26.1
+        }
+      }
+    },
+    {
+      "id": "independent-r2-12",
+      "sha256": "8fe954ca809f2d03b63ec4c22ad59f8a3fe76543e89952baea14829f4b493200",
+      "expected": {
+        "route": "pm_advice",
+        "fields": {
+          "market": "HK",
+          "ticker": "00857.HK",
+          "action": "hold"
+        }
+      }
+    },
+    {
+      "id": "independent-r2-13",
+      "sha256": "0fb33d900499015caa87fa058b73127293f7b8f0f2b611f0536731801e9cb33b",
+      "expected": {
+        "route": "no_proposal"
+      }
+    },
+    {
+      "id": "independent-r2-14",
+      "sha256": "38f10f7087e2d2d10ca3424b13439cbef617fc2b8481e0e3885cec4361180e72",
+      "expected": {
+        "route": "no_proposal"
+      }
+    },
+    {
+      "id": "independent-r2-15",
+      "sha256": "3f310abca859c047f4928b227c41f42d0c5530b19e060b8af765e6f608f7579f",
+      "expected": {
+        "route": "no_proposal"
+      }
+    },
+    {
+      "id": "independent-r2-16",
+      "sha256": "d40e2c174fecd3760ae1a6bb04e0f1d19b3c7826c4df4917a95a114572b4c46a",
+      "expected": {
+        "route": "no_proposal"
+      }
+    },
+    {
+      "id": "independent-r2-17",
+      "sha256": "2878f53fab73d3fee3424ef83f1c9a277695fa4fdcce4fedc1dc456639bcb7a1",
+      "expected": {
+        "route": "no_proposal"
+      }
+    },
+    {
+      "id": "independent-r2-18",
+      "sha256": "e2aa43ee8a19c9eaff67ea94b6dc72beb0a4cb88a13ce91d780f9ed9a469fdb8",
+      "expected": {
+        "route": "no_proposal"
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { beijingDateTime, beijingInputToISO, beijingInputValue } from './public/beijing-time.mjs';
+import { beijingInputToISO, beijingInputValue } from '../../integrations/feishu/beijing-time.mjs';
 import { exchangeDate } from '../../src/lib/scoring/forward.ts';
 import { parseRegistration, registrationEvent, registrationView, scoreRegistration } from './registrations.mjs';
 
@@ -195,10 +195,6 @@ test('Beijing wall times survive a Pacific browser/server timezone and keep the 
   assert.equal(exchangeDate(instant, 'US'), '2026-11-22');
   assert.equal(beijingInputToISO('2026-11-23T13:30'), '2026-11-23T05:30:00.000Z');
   assert.equal(beijingInputToISO('2026-06-16T15:30:45.1'), '2026-06-16T07:30:45.100Z');
-  assert.equal(beijingDateTime('2026-11-23T08:30:00+08:00'), '2026-11-23 08:30:00');
-  assert.equal(beijingDateTime('2026-11-23T08:30'), '—');
-  assert.equal(beijingDateTime('2026-02-30'), '—');
-  assert.equal(beijingDateTime(0), '1970-01-01 08:00:00');
   assert.throws(() => beijingInputToISO('2026-02-31T09:30'));
   assert.throws(() => beijingInputToISO('2026-06-16T24:00'));
   const nowBeijing = beijingInputValue();

@@ -335,7 +335,7 @@ function priceCell(value, date) {
 }
 
 function showTime(at) {
-  return at == null ? '' : beijingDateTime(at) + ' 北京时间';
+  return at ? beijingDateTime(at) + ' 北京时间' : '';
 }
 
 function registeredEvidence(row) {

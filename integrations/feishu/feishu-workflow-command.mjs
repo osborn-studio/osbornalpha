@@ -1,8 +1,9 @@
 import { inferCoreMarket, normalizeSecurityTicker } from '../../src/lib/securities/ticker.ts';
 import { currencyCodeOfMarket } from '../../src/lib/utils.ts';
-import { parseRegistration } from './registrations.mjs';
-import { beijingInputValue } from './public/beijing-time.mjs';
-import { extractNatural, nonActionableSuggestion, resolveModelSecurity, resolveNamedSecurity, validateModelDate, withoutCompletedTradeNotes } from './feishu-natural.mjs';
+import { parseRecommendationInput } from '../../src/lib/analyst/validate.ts';
+import { beijingInputValue } from './beijing-time.mjs';
+import { draftAwaitsQuantity, matchesShareQuantity } from './feishu-share-quantity.mjs';
+import { extractNatural, isKnownChineseSecurityName, resolveModelSecurity, resolveNamedSecurity, validateModelDate } from './feishu-natural.mjs';
 
 const actions = {buy:'买入', add:'加仓', hold:'持有', pass:'观望', trim:'减仓', sell:'卖出'};
 const actionByLabel = Object.fromEntries(Object.entries(actions).map(([key,value]) => [value,key]));
@@ -18,22 +19,15 @@ const aliases = {
 };
 const knownFields = new Set(Object.values(aliases));
 const horizonLabels = {short:'短期',mid:'中期',long:'长期','5d':'5日','10d':'10日'};
-const currencyNames = {港元:'HKD',港币:'HKD',人民币:'CNY',美元:'USD',美金:'USD'};
-const amountPattern = /^(\d+(?:\.\d+)?)\s*(港元|港币|人民币|美元|美金|元|HKD|USD|CNY)?$/i;
+const currencyNames = {港元:'HKD',港币:'HKD',人民币:'CNY',元人民币:'CNY',美元:'USD',美金:'USD'};
+const amountPattern = /^(\d+(?:\.\d+)?)\s*(元人民币|港元|港币|人民币|美元|美金|元|HKD|USD|CNY)?$/i;
 const prefix = /^\/?(?:建议|提案)(?:\s+|[|｜]|$)/;
 const adviceOnlyCommand = /^(仅登记建议|只登记建议|只记建议|取消模拟成交)[。！! ]*$/;
-const actionEvidence = {
-  buy:/买|购入|建仓|开仓|做多/,
-  add:/加仓|增持|补仓|加码|增配|多配|(?:仓位|持仓|头寸|配置|占比|权重)(?:再|稍微|稍作|小幅)?(?:往上调|上调|调高|提高|抬高|抬一点)/,
-  sell:/卖|清仓|退出持仓|出掉|离场/,
-  trim:/减仓|减持|减配|少配|挪出(?:去)?(?:一半|部分)|(?:仓位|持仓|头寸|配置|占比|权重)(?:再|稍微|稍作|小幅)?(?:往下调|下调|调低|降低)/,
-  hold:/持|留|维持|不动|照旧|原样/,
-  pass:/观望|暂缓|再看|等待|等等|不参与|不操作|先不动/,
-};
-const excludedActionContext = /(?:不(?:要|再|想|建议|打算|计划|准备|应|会|可|能)|别|禁止|避免|取消|尚未|没有|早已|已经|曾经)[^，,。.!！?？;；\n]{0,24}$/;
+// The server resolves the real profile from the authenticated Feishu role. The shared parser requires a UUID for shape validation.
+const validationProfile = '00000000-0000-4000-8000-000000000000';
 const marketEvidence = {
   A:/(?:A股|沪市|深市|北交所|上交所|深交所|^A$)/i,
-  HK:/(?:港股|港交所|香港|H股|^HK$)/i,
+  HK:/(?:港股|港交所|香港|H股|^HK$|^港(?:的|市)?那只[。！？!?]?$)/i,
   US:/(?:美股|纳斯达克|纽交所|NASDAQ|NYSE|^US$)/i,
 };
 const horizonEvidence = {
@@ -44,22 +38,31 @@ const horizonEvidence = {
   '10d':/(?:^|[^\d])(?:10|十)\s*(?:个\s*)?(?:交易日|日|天)/,
 };
 const decimalLiteral = String.raw`(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?`;
-const currencyLiteral = String.raw`港元|港币|人民币|美元|美金|HKD|USD|CNY|RMB|HK\$|US\$|¥|\$|元`;
+const currencyLiteral = String.raw`元人民币|港元|港币|人民币|美元|美金|HKD|USD|CNY|RMB|HK\$|US\$|¥|\$|元`;
 const numericAmount = `(?<prefix>${currencyLiteral})?\\s*(?<number>${decimalLiteral})\\s*(?<unit>${currencyLiteral})?`;
 const amountEvidence = {
-  reference_price:'参考(?:价格|价位|价)?|现价|当前(?:价格|价)|基准价|入场(?:价格|价位|价)|建议价',
+  reference_price:'参考(?:价格|价位|价)?|现价|当前(?:价格|价)|(?:目前|当前)(?=\\s*每股)|基准价|入场(?:价格|价位|价)|建议价',
   target_price:'目标(?:价格|价位|位|价)?|止盈(?:价格|价位|位|点|价)?|(?:预计|预期|看好)(?:会)?(?:上涨|涨|升|下跌|跌)(?:到|至)|看高到|看到',
   stop_loss:'止损(?:价格|价位|点位|位|点|线|价)?',
   fee:'手续费',
-  price:'(?:模拟)?成交(?:价格|均价|单价|价位|价)|模拟(?:买价|卖价|价格|价)|每股成交(?:价格|价)',
+  price:'(?:模拟)?成交(?:价格|均价|单价|价位|价)|模拟(?:买价|卖价|价格|价)|模拟(?:成交|交易)(?=\\s*(?:按|以|用)\\s*每股)|每股成交(?:价格|价)',
 };
+const postfixLabels = {
+  reference_price:'参考(?:价格|价位|价)|基准价', target_price:'目标(?:价格|价位|价)|止盈价',
+  stop_loss:'止损(?:价格|价位|价)', price:'(?:模拟)?成交(?:均价|单价|价格|价)',
+};
+const postfixJoin = String.raw`\s*(?:是|为|作为|用作)\s*(?:本次的?\s*)?`;
 const amountJoin = String.raw`\s*(?:(?:调整为|调整到|放在|设在|设为|定在|定为|约为|大约|大概|每股|按|以|用|为|是|在|到|约|[:=])\s*)*`;
-const unsupportedAmountSuffix = /^\s*(?:[.．]\d|[-–—~～至到]\s*\d|万|亿|[%股手])/u;
+const unsupportedAmountSuffix = /^\s*(?:[.．]\d|[-–~～至到]\s*\d|万|亿|[%股手])/u;
 const plainAmountEvidence = new RegExp('^'+numericAmount+'$','i');
+const perShareAmount = new RegExp(`^${numericAmount}\\s*(?:一股|每股|/\\s*股)$`,'i');
+const amountPerShare = new RegExp(`^每股\\s*${numericAmount}$`,'i');
+const boundPriceLabel = String.raw`(?:最多|至多|至少|不(?:得|能)?超过|不高于|不低于|上限(?:为|是)?|封顶)\s*(?:按\s*)?(?:每股\s*)?`;
+const precedingPriceBound = new RegExp(`${boundPriceLabel}$`,'u');
+const quotedPriceBound = new RegExp(`${boundPriceLabel}(?:(?:${currencyLiteral})\\s*)?\\d`,'iu');
 const startsWithAmount = new RegExp(`^(?:(?:${currencyLiteral})\\s*)?\\d`,'i');
+const oldPriceLead = /(?:上次|昨天|之前|旧的?|原先|历史)(?:的|模拟|成交|交易|参考价|目标价|止损价|价格|价|每股|按|以|用|为|是|\s)*$/u;
 const currencySuffix = new RegExp(`^\\s*(?:${currencyLiteral})`,'i');
-const shareEvidence = new RegExp('(?<![\\d\\w.\\-−~～])('+decimalLiteral+')\\s*(万)?\\s*(?:股(?!票)|shares?\\b)','gi');
-const plainShareEvidence = new RegExp('^'+decimalLiteral+'$');
 
 function invalid(message) {
   throw Object.assign(new Error(message), {status:400});
@@ -69,18 +72,27 @@ export function isAdviceOnlyCommand(text) {
   return adviceOnlyCommand.test(text.trim());
 }
 
-function moneyEvidence(key, evidence, allowPlain, allowCurrentPrice) {
+export function modelExecutionMode(text, interpretation) {
+  const field = modelField(comparable(text),interpretation,'executionMode');
+  return ['simulate','advice_only'].includes(field?.value) ? field.value : undefined;
+}
+
+function moneyEvidence(key, evidence, allowPlain) {
   const amountAfterLabel = new RegExp(`(?:${amountEvidence[key]})${amountJoin}${numericAmount}`,'gi');
   const amountBeforeLabel = {
     stop_loss:new RegExp(`(?:跌破|低于|下破|上破|超过)\\s*${numericAmount}\\s*(?:则|就|时|后|立即)?\\s*止损`, 'gi'),
     price:new RegExp(`模拟(?:交易|成交)?(?:按|以|用)${amountJoin}${numericAmount}(?=\\s*(?:买入|买进|卖出|成交))`, 'gi'),
   }[key];
   const matches = [...evidence.matchAll(amountAfterLabel), ...(amountBeforeLabel ? evidence.matchAll(amountBeforeLabel) : [])];
-  if (!matches.length && allowCurrentPrice) {
-    matches.push(...evidence.matchAll(new RegExp(`每股\\s*${numericAmount}`, 'gi')));
+  if (key === 'price') {
+    matches.push(...evidence.matchAll(new RegExp(`每股\\s*${numericAmount}(?=\\s*(?:模拟)?成交(?!价|总额))`,'gi')));
+  }
+  if (postfixLabels[key]) {
+    const postfix = new RegExp(`^${numericAmount}${postfixJoin}(?:${postfixLabels[key]})$`,'i').exec(evidence);
+    if (postfix) matches.push(postfix);
   }
   if (!matches.length && allowPlain) {
-    const plain = plainAmountEvidence.exec(evidence);
+    const plain = plainAmountEvidence.exec(evidence) ?? perShareAmount.exec(evidence) ?? amountPerShare.exec(evidence);
     if (plain) matches.push(plain);
   }
   let result;
@@ -100,97 +112,152 @@ function moneyEvidence(key, evidence, allowPlain, allowCurrentPrice) {
   return result;
 }
 
-function quotedShareCount(evidence, allowPlain) {
-  if (allowPlain && plainShareEvidence.test(evidence)) return Number(evidence.replaceAll(',',''));
-  if (/\d\s*(?:-|–|—|至|到|~|～)\s*\d/.test(evidence)) return null;
-  const values = mentionedShareCounts(evidence);
-  return values.size === 1 ? [...values][0] : null;
-}
-
-function mentionedShareCounts(text) {
-  return new Set([...text.matchAll(shareEvidence)].map(([,number,wan])=>Number(number.replaceAll(',',''))*(wan?10000:1)));
-}
-
 const comparable = value => value.normalize('NFKC').trim();
 
-function boundedNumericEvidence(source, evidence, includeCurrency = false) {
+function modelField(source, interpretation, key) {
+  const field = interpretation?.fields?.[key];
+  if (typeof field?.evidence !== 'string') return null;
+  const evidence = comparable(field.evidence);
+  return evidence && source.includes(evidence) ? {...field,evidence} : null;
+}
+
+function modelName(source, interpretation) {
+  const candidate = modelField(source,interpretation,'securityName');
+  if (typeof candidate?.value !== 'string') return null;
+  const name = comparable(candidate.value).replace(/(?:的)?(?:股票|个股|这只票)$/u,'');
+  if (!/^[\p{Script=Han}A-Za-z0-9][\p{Script=Han}A-Za-z0-9 .&-]{1,49}$/u.test(name)) return null;
+  const at = candidate.evidence.toUpperCase().indexOf(name.toUpperCase());
+  if (at < 0) return null;
+  const isRelated = /^(?:\s*的)?\s*(?:(?:股票|个股)\s*)?(?:供应商|供应链|产业链|客户|相关|概念|子公司|期权|基金|ETF)/i;
+  const grounded = isKnownChineseSecurityName(name) ? resolveModelSecurity(source,candidate.evidence,{},name) : null;
+  if (grounded && !grounded.ticker && !grounded.securityName) return null;
+  for (let start = source.indexOf(candidate.evidence); start !== -1; start = source.indexOf(candidate.evidence,start+1)) {
+    if (!isRelated.test(source.slice(start+at+name.length))) return {name,evidence:candidate.evidence};
+  }
+  return null;
+}
+
+function localModelListing(source, {name,evidence}, options) {
+  const result = resolveModelSecurity(source,evidence,options,name);
+  if (result.ticker || result.securityName || !/-(?:W|SW|S)$/i.test(name)) return result;
+  const ordinary = resolveModelSecurity(source,evidence,options,name.replace(/-(?:W|SW|S)$/i,''));
+  return ordinary.market === 'HK' ? ordinary : result;
+}
+
+export function proposalSecurityQuery(text, interpretation, priorFields = {}) {
+  const source = comparable(text);
+  const ticker = modelField(source,interpretation,'ticker');
+  if (ticker?.requiresListing) return (!priorFields.ticker && priorFields.securityName) || ticker.value;
+  const name = modelName(source,interpretation);
+  if (!name) return priorFields.ticker ? null : priorFields.securityName ?? null;
+  if (localModelListing(source,name,{}).ticker) return null;
+  return name.name;
+}
+
+function boundedPriceEvidence(source, evidence) {
   // Reject a model quote that clips a sign, decimal digit, scale suffix or range endpoint.
   for (let index = source.indexOf(evidence); index !== -1; index = source.indexOf(evidence,index+1)) {
     const before = source.slice(0,index);
     const after = source.slice(index+evidence.length);
-    if (startsWithAmount.test(evidence) && /(?:[\d.]|[-+−–—~～]\s*|\d+\s*(?:至|到)\s*)$/.test(before)) continue;
+    const lead = before + evidence.slice(0,evidence.search(/\d/u));
+    if (oldPriceLead.test(lead) || precedingPriceBound.test(before) || quotedPriceBound.test(evidence) ||
+        /^\s*(?:以内|以下|以上|上限|下限|区间|吗|么|[?？])/u.test(after)) continue;
+    if (startsWithAmount.test(evidence) && /(?:[\d.]|[-+−]\s*|\d+\s*(?:至|到)\s*)$/.test(before)) continue;
     if (/\d$/.test(evidence) && /^\d/.test(after)) continue;
     if (unsupportedAmountSuffix.test(after)) continue;
-    const currency = includeCurrency && /\d$/.test(evidence) ? currencySuffix.exec(after)?.[0] ?? '' : '';
-    if (currency && unsupportedAmountSuffix.test(after.slice(currency.length))) continue;
+    let currency = '';
+    if (/\d$/.test(evidence)) currency = currencySuffix.exec(after)?.[0] ?? '';
+    else if (/\d\s*元$/u.test(evidence) && after.startsWith('人民币')) currency = '人民币';
+    if (currencySuffix.test(after.slice(currency.length)) || (currency && unsupportedAmountSuffix.test(after.slice(currency.length)))) continue;
     return evidence + currency;
   }
   return null;
 }
 
-function supportsModelAction(source, evidence, action) {
-  const match = actionEvidence[action].exec(evidence);
-  if (!match) return false;
-  for (let index = source.indexOf(evidence); index !== -1; index = source.indexOf(evidence, index + evidence.length)) {
-    if (!excludedActionContext.test(source.slice(0,index + match.index))) return true;
+function includeAmountLabel(source, evidence, key) {
+  if (!plainAmountEvidence.test(evidence) && !amountPerShare.test(evidence)) return evidence;
+  const label = new RegExp(`(?:${amountEvidence[key]})${amountJoin}$`,'i');
+  const postfix = postfixLabels[key] && new RegExp(`^${postfixJoin}(?:${postfixLabels[key]})`,'i');
+  for (let index = source.indexOf(evidence); index !== -1; index = source.indexOf(evidence,index+1)) {
+    const prefix = label.exec(source.slice(0,index));
+    if (prefix) return prefix[0] + evidence;
+    const suffix = postfix && postfix.exec(source.slice(index+evidence.length));
+    if (suffix) return evidence + suffix[0];
   }
-  return false;
+  return evidence;
 }
 
-function interpretedFields(text, interpretation, priorFields, receivedAt) {
+function interpretedFields(text, interpretation, priorFields, receivedAt, catalogue) {
   if (interpretation.intent !== 'proposal') return {};
-  const source = withoutCompletedTradeNotes(comparable(text));
-  if (nonActionableSuggestion(source)) return {};
-  const field = key => {
-    const result = interpretation.fields?.[key];
-    if (!result || typeof result.evidence !== 'string') return null;
-    const evidence = comparable(result.evidence);
-    return evidence && source.includes(evidence) ? {...result,evidence} : null;
-  };
+  const source = comparable(text);
+  const field = key => modelField(source,interpretation,key);
   // The model chooses the candidates. The application checks only their evidence and constraints.
   const extracted = {};
+  const executionMode = modelExecutionMode(text,interpretation);
+  if (executionMode) extracted.executionMode = executionMode;
   const market = field('market');
   if (market && Object.hasOwn(marketEvidence,market.value) && marketEvidence[market.value].test(market.evidence)) {
     extracted.market = market.value;
   }
-  const options = {market:extracted.market ?? priorFields.market,receivedAt};
+  const marketHint = extracted.market ?? (!priorFields.ticker ? priorFields.market : undefined);
+  const options = {market:marketHint,receivedAt};
   const action = field('action');
-  if (action && Object.hasOwn(actions,action.value) &&
-      supportsModelAction(source,action.evidence,action.value)) extracted.action = action.value;
+  if (action && Object.hasOwn(actions,action.value)) extracted.action = action.value;
   for (const key of ['rationale','thesis_ref','analyst']) {
     const result = field(key);
     if (typeof result?.value === 'string' && result.value.trim() &&
         result.evidence.includes(comparable(result.value))) extracted[key] = result.value.trim();
   }
   const listings = [];
-  for (const key of ['ticker','securityName']) {
-    const security = field(key);
-    if (typeof security?.value !== 'string') continue;
-    const verified = resolveModelSecurity(source,security.evidence,options,
-      key === 'securityName' ? comparable(security.value) : undefined);
-    if (verified.securityName) extracted.securityName = verified.securityName;
-    if (verified.market && verified.ticker &&
-        (key === 'securityName' || verified.ticker === normalizeSecurityTicker(security.value,verified.market))) {
-      listings.push(verified);
-    }
+  const name = modelName(source,interpretation);
+  const security = field('ticker');
+  const priorName = !priorFields.ticker ? priorFields.securityName : null;
+  const nameValue = name?.name ?? priorName;
+  const local = name ? localModelListing(source,name,options) :
+    priorName && extracted.market ? resolveNamedSecurity(priorName,extracted.market) : {};
+  const remote = (catalogue ?? []).filter(item => !marketHint || item.market === marketHint);
+  if (nameValue) extracted.securityName = nameValue;
+  // With a queried security master, only use a listing it actually verified for this issuer.
+  if (!security?.requiresListing && local.ticker && (!catalogue || (remote.length === 1 && remote[0].ticker === local.ticker))) listings.push(local);
+  if (security?.requiresListing) {
+    const verified = remote.find(item=>item.market === 'US' && item.ticker === security.value);
+    if (verified) listings.push(verified);
+  } else if (typeof security?.value === 'string') {
+    // Verify the model's selected code, rather than searching its whole evidence for a different code.
+    const value = comparable(security.value);
+    const evidence = security.evidence.toUpperCase();
+    const explicit = /[A-Z\d]/i.test(value) && evidence.includes(value.toUpperCase()) ?
+      resolveModelSecurity(source,value,options) : resolveModelSecurity(source,security.evidence,options);
+    if (explicit.ticker && explicit.ticker === normalizeSecurityTicker(value,explicit.market)) listings.push(explicit);
+    const exact = remote.find(item => normalizeSecurityTicker(value,item.market) === item.ticker);
+    if (exact && /^\d{1,5}$/.test(value) && (evidence === value || evidence.includes(`(${value})`))) listings.push(exact);
   }
-  if (!listings.length && extracted.market && priorFields.securityName && !field('securityName') && !field('ticker')) {
-    const verified = resolveNamedSecurity(priorFields.securityName,extracted.market);
-    if (verified.ticker) listings.push(verified);
+  if (!security?.requiresListing && !listings.length && remote.length === 1 && (marketHint || !resolveNamedSecurity(nameValue ?? '').securityName)) listings.push(remote[0]);
+  if (new Set(listings.map(item=>item.ticker)).size > 1 ||
+      (name && !priorName && catalogue?.length && listings.some(item=>!remote.some(row=>row.ticker === item.ticker)))) {
+    invalid('证券名称和代码指向不同的标的，请明确其中一只。');
   }
-  if (new Set(listings.map(item=>item.ticker)).size > 1) invalid('证券名称和代码指向不同的标的，请明确其中一只。');
+  if (priorName && (nameValue !== priorName || (listings.length &&
+      resolveNamedSecurity(priorName,listings[0].market).ticker !== listings[0].ticker &&
+      !catalogue?.some(item => item.ticker === listings[0].ticker) && (!name || catalogue?.length)))) {
+    invalid(`你前面提到的是「${priorName}」。请回复它的上市市场，或把公司名和完整代码一起发来。如果要换成另一只，请另发一条完整建议。`);
+  }
   if (listings.length) ({ticker:extracted.ticker,market:extracted.market} = listings[0]);
 
   const pending = missingFields(priorFields);
   for (const key of Object.keys(amountEvidence)) {
     const result = field(key);
     if (!Number.isFinite(result?.value)) continue;
-    const evidence = boundedNumericEvidence(source,result.evidence,true);
+    const evidence = boundedPriceEvidence(source,includeAmountLabel(source,result.evidence,key));
     if (!evidence) continue;
-    const allowPlain = pending.length === 1 && pending[0] === key && evidence === source;
-    const allowCurrentPrice = key === 'reference_price' &&
-      /(?:目前|当前|现在|当下)\s*$/.test(source.slice(0,source.indexOf(result.evidence)));
-    const verified = moneyEvidence(key,evidence,allowPlain,allowCurrentPrice);
+    const soleMissing = pending.length === 1 && pending[0] === key;
+    const start = source.indexOf(evidence);
+    const perShareFill = key === 'price' && (perShareAmount.test(evidence) || amountPerShare.test(evidence)) &&
+      (/^\s*(?:模拟)?成交/.test(source.slice(start+evidence.length)) ||
+       /模拟(?:成交|交易|买入|卖出)?(?:按|以|用|价[:：]?)\s*$/.test(source.slice(0,start)));
+    const currentPerShare = key === 'reference_price' && amountPerShare.test(evidence) &&
+      /(?:目前|当前)\s*$/u.test(source.slice(0,start));
+    const verified = moneyEvidence(key,evidence,perShareFill || currentPerShare || (soleMissing && evidence === source));
     if (verified?.amount === result.value) {
       extracted[key] = result.value;
       if (verified.currency && extracted.currency && verified.currency !== extracted.currency) invalid('金额币种不一致，请核对。');
@@ -198,9 +265,9 @@ function interpretedFields(text, interpretation, priorFields, receivedAt) {
     }
   }
   const quantity = field('quantity');
-  if (Number.isFinite(quantity?.value) && mentionedShareCounts(source).size <= 1 &&
-      boundedNumericEvidence(source,quantity.evidence) &&
-      quotedShareCount(quantity.evidence,pending.length === 1 && pending[0] === 'quantity' && quantity.evidence === source) === quantity.value) {
+  const quantityDraft = priorName && !security && !name && extracted.ticker && remote.length === 1 ?
+    {...priorFields,ticker:extracted.ticker} : priorFields;
+  if (quantity && matchesShareQuantity(source,quantity.evidence,quantity.value,draftAwaitsQuantity(quantityDraft))) {
     extracted.quantity = quantity.value;
   }
   const confidence = field('confidence');
@@ -216,9 +283,7 @@ function interpretedFields(text, interpretation, priorFields, receivedAt) {
   const date = field('recommended_at');
   if (typeof date?.value === 'string') {
     const valid = validateModelDate(date.evidence,date.value,receivedAt);
-    if (!valid || !validateModelDate(source,date.value,receivedAt)) {
-      invalid('请确认建议日期和时间，例如 2026-06-16 16:30（北京时间）。');
-    }
+    if (!valid) invalid('请确认建议日期和时间，例如 2026-06-16 16:30（北京时间）。');
     extracted.recommended_at = valid;
   }
   return extracted;
@@ -277,13 +342,19 @@ function structuredFields(command) {
   return fields;
 }
 
-function missingFields(fields) {
+export function missingFields(fields) {
   const missing = Object.keys(required).filter(key => fields[key] == null);
-  if (['quantity','fee','price'].some(key => fields[key] != null)) {
+  if (fields.executionMode === 'simulate' || ['quantity','fee','price'].some(key => fields[key] != null)) {
     if (fields.price == null) missing.push('price');
     if (fields.quantity == null) missing.push('quantity');
   }
   return missing;
+}
+
+export function missingLabels(fields) {
+  return missingFields(fields).map(key =>
+    key === 'ticker' && fields.securityName && !fields.market ? '交易市场或标的代码' :
+      required[key] ?? priceLabels[key] ?? '模拟成交股数');
 }
 
 function validateFields(fields, signatures) {
@@ -305,10 +376,13 @@ function validateFields(fields, signatures) {
   if (fields.fee != null && (!Number.isFinite(fields.fee) || fields.fee < 0)) invalid('手续费须为不小于 0 的金额。');
   if (fields.confidence != null && (!Number.isInteger(fields.confidence) || fields.confidence < 0 || fields.confidence > 100)) invalid('信心须为 0 至 100 的整数。');
   if (fields.horizon != null && !Object.hasOwn(horizonLabels,fields.horizon)) invalid('请明确建议期限，例如 5 日、10 日、短期、中期或长期。');
-  if (['hold','pass'].includes(fields.action) && ['quantity','price','fee'].some(key => fields[key] != null)) invalid('持有和观望提案不能附带模拟成交。');
+  if (['hold','pass'].includes(fields.action) && (fields.executionMode === 'simulate' ||
+      ['quantity','price','fee'].some(key => fields[key] != null))) invalid('持有和观望提案不能附带模拟成交。');
 }
 
-export function evaluateProposal(role, analystName, command, receivedAt, analystAliases = [], priorFields = {}, interpretation) {
+const buyDirection = action => action === 'buy' || action === 'add';
+
+export function evaluateProposal(role, analystName, command, receivedAt, analystAliases = [], priorFields = {}, interpretation, catalogue) {
   const text = command.trim();
   const adviceOnly = isAdviceOnlyCommand(text) || (!interpretation &&
     /(?:仅|只)(?:登记|记录|提交|录入|记|录)(?:分析)?建议|(?:不做|不录入|不登记|取消)(?:模拟)?成交/.test(text));
@@ -317,7 +391,7 @@ export function evaluateProposal(role, analystName, command, receivedAt, analyst
   if (adviceOnlyCommand.test(text)) {
     update = {};
   } else if (interpretation) {
-    update = interpretedFields(text,interpretation,priorFields,receivedAt);
+    update = interpretedFields(text,interpretation,priorFields,receivedAt,catalogue);
   } else if (pending.length === 1 && Object.hasOwn(priceLabels,pending[0]) && amountPattern.test(text)) {
     update = amountFields(pending[0],text);
   } else if (pending.length === 1 && pending[0] === 'quantity' && /^\d+(?:\.\d+)?\s*股?$/.test(text)) {
@@ -326,25 +400,40 @@ export function evaluateProposal(role, analystName, command, receivedAt, analyst
     const options = {market:priorFields.market,securityName:priorFields.securityName,receivedAt};
     update = /[|｜]/.test(text) ? structuredFields(text) : extractNatural(text,options);
   }
-  if (priorFields.currency && update.currency && priorFields.currency !== update.currency) invalid('补充价格的币种与原提案不同，请核对。');
+  const candidate = interpretation?.fields?.ticker;
+  if (candidate?.requiresListing && priorFields.ticker && priorFields.ticker !== candidate.value && !update.ticker) {
+    invalid(`原提案是 ${priorFields.ticker}。未能从证券主表核实新代码 ${candidate.value}，请核对标的后重发。`);
+  }
+  if (priorFields.ticker && update.ticker && priorFields.ticker !== update.ticker) {
+    invalid(`原提案的标的是 ${priorFields.ticker}。如果要换成 ${update.ticker}，请另发一条完整建议。`);
+  }
   const fields = {...priorFields,...update};
-  if (adviceOnly) {
+  if (adviceOnly || fields.executionMode === 'advice_only') {
     delete fields.price;
     delete fields.quantity;
     delete fields.fee;
+    fields.executionMode = 'advice_only';
+  } else {
+    if (priorFields.currency && update.currency && priorFields.currency !== update.currency) invalid('补充价格的币种与原提案不同，请核对。');
+    if (priorFields.action && update.action && buyDirection(priorFields.action) !== buyDirection(update.action) &&
+        ['quantity','price','fee'].some(key => priorFields[key] != null && update[key] == null)) {
+      invalid('成交方向变了，请重新说明本次成交的股数和每股价，或回复「仅登记建议」。');
+    }
   }
   validateFields(fields,[role,analystName,...analystAliases]);
-  const missing = missingFields(fields).map(key =>
-    key === 'ticker' && fields.securityName && !fields.market ? '交易市场或标的代码' :
-      required[key] ?? priceLabels[key] ?? '模拟成交股数');
+  const missing = missingLabels(fields);
   if (missing.length) return {fields,missing,body:null};
 
-  const {analyst,currency,securityName,quantity,fee,price,...input} = fields;
-  const parsed = parseRegistration(role,{...input,confidence:input.confidence ?? 70,recommended_at:input.recommended_at ?? receivedAt});
-  if (Date.parse(parsed.recommended_at) > Date.parse(receivedAt)) invalid('建议时间不得晚于原提案的飞书发送时间。');
-  const {analyst_id,role:ignoredRole,source_type,...recommendation} = parsed;
+  const {analyst,currency,securityName,quantity,fee,price,executionMode,...input} = fields;
+  const replayHorizon = ['5d','10d'].includes(input.horizon) ? input.horizon : null;
+  const result = parseRecommendationInput({...input,analyst_id:validationProfile,source_type:'manual',source_ref:undefined,
+    horizon:replayHorizon ? undefined : input.horizon,confidence:input.confidence ?? 70,recommended_at:input.recommended_at ?? receivedAt});
+  if (!result.ok) invalid('建议登记未通过校验：' + result.error);
+  if (Date.parse(result.value.recommended_at) > Date.parse(receivedAt)) invalid('建议时间不得晚于原提案的飞书发送时间。');
+  const {analyst_id,source_type,...recommendation} = result.value;
+  if (replayHorizon) recommendation.horizon = replayHorizon;
   const simulation = quantity == null ? null : {
-    direction:['buy','add'].includes(input.action) ? 'buy' : 'sell',price,quantity,fee:fee ?? 0,
+    direction:buyDirection(input.action) ? 'buy' : 'sell',price,quantity,fee:fee ?? 0,
   };
   return {fields,missing,body:{recommendation,simulation,defaultConfidence:input.confidence == null}};
 }

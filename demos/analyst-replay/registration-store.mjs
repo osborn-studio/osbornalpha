@@ -188,7 +188,7 @@ export function openRegistrationDesk(db, transaction, loadWindow, listProfiles =
       return result;
     });
   }
-  async function refresh(role, id) {
+  async function refresh(role, id, {forRecap = false} = {}) {
     if (typeof id !== 'string' || !uuid.test(id)) fail(400,'建议编号无效。');
     const read = () => {
       const row = db.prepare('SELECT entry FROM registrations WHERE id=?').get(id);
@@ -219,7 +219,7 @@ export function openRegistrationDesk(db, transaction, loadWindow, listProfiles =
         updated.recommendation.fill_date = current.recommendation.fill_date;
       }
       db.prepare('UPDATE registrations SET entry=? WHERE id=?').run(JSON.stringify(updated),id);
-      if (hasCheckpointUpdate(current, updated)) {
+      if (!forRecap && hasCheckpointUpdate(current, updated)) {
         enqueueNotice('UPDATE-' + id + '-' + updated.evidence.snapshotId,
           registrationEvent(entries(),updated,true,context()));
       }

@@ -1,5 +1,4 @@
 import * as Lark from '@larksuiteoapi/node-sdk';
-import { pathToFileURL } from 'node:url';
 
 const ignore = () => {};
 // SDK diagnostics can include complete event bodies, endpoint URLs and request headers.
@@ -7,6 +6,9 @@ const sdkLogger = { trace: ignore, debug: ignore, info: ignore, warn: ignore, er
 const isId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value);
 const isOpenId = value => typeof value === 'string' && /^ou_[A-Za-z0-9_-]{1,156}$/.test(value);
 const hasCredentials = (id, secret) => /^cli_[0-9a-fA-F]{16}$/.test(id || '') && Boolean(secret?.trim());
+// Feishu encodes text links as markup in plain-text events. Only their label is visible to the sender.
+const textLink = /(?<![!\\])\[([^\[\]\r\n]+)\]\(https?:\/\/(?:[^()\s]|\([^()\s]*\))+\)/gi;
+const fullWidthMarketText = /[Ａ-Ｚａ-ｚ０-９（）－．]/g;
 
 function postText(content, mentionKeys) {
   // Received posts normally have title/content at the top level. Some clients wrap the Chinese version.
@@ -51,6 +53,7 @@ export function normalizeGroupMessage(data, appId, botOpenId) {
     return null;
   }
   if (typeof text !== 'string') return null;
+  if (message.message_type === 'text') text = text.replace(textLink, '$1');
   text = text.trim();
   let directedToBot = false;
   if (isOpenId(botOpenId)) {
@@ -62,16 +65,19 @@ export function normalizeGroupMessage(data, appId, botOpenId) {
     }).trim();
   } else {
     // Until the identity lookup succeeds retain compatibility with existing prefixed commands.
+    const unverified = text;
     while (true) {
       const key = text.match(/^@_user_\d+(?!\d)/)?.[0];
       if (!key || !mentions.has(key)) break;
       text = text.slice(key.length).trimStart();
     }
+    if (text === '同意') text = unverified;
   }
-  if (!text) return null;
+  if (!text && !directedToBot) return null;
   return {
     eventId: data.event_id, messageId: message.message_id, chatId: message.chat_id,
-    senderId, text, ...(directedToBot ? {directedToBot:true} : {}), createdAt: new Date(Number(message.create_time)).toISOString(),
+    senderId, text: text.replace(fullWidthMarketText, character => character.normalize('NFKC')),
+    ...(directedToBot ? {directedToBot:true} : {}), createdAt: new Date(Number(message.create_time)).toISOString(),
     parentId: isId(message.parent_id) ? message.parent_id : null,
     rootId: isId(message.root_id) ? message.root_id : null,
   };
@@ -112,7 +118,7 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
   const options = { appId, appSecret, logger: sdkLogger, domain: sdk.Domain.Feishu };
   const client = new sdk.Client(options);
   const workflow = createWorkflow({ sendMessage: makeFeishuSender(client) });
-  let timer, activeDrain, stopping, lastState;
+  let timer, activeDrain, backgroundDrain, stopping, lastState;
   let botOpenId, botLookup, nextBotLookupAt = 0;
   let finish;
   const done = new Promise(resolve => { finish = resolve; });
@@ -130,11 +136,18 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
       }).catch(ignore).finally(() => { botLookup = undefined; });
   }
   function pump() {
-    if (stopping || activeDrain) return;
+    if (stopping) return;
     resolveBotIdentity();
-    activeDrain = Promise.resolve().then(() => workflow.drain())
-      .catch(() => log('飞书工作队列本轮处理失败，将继续轮询。'))
-      .finally(() => { activeDrain = undefined; });
+    if (!activeDrain) {
+      activeDrain = Promise.resolve().then(() => workflow.drainPrimary ? workflow.drainPrimary() : workflow.drain())
+        .catch(() => log('飞书工作队列本轮处理失败，将继续轮询。'))
+        .finally(() => { activeDrain = undefined; });
+    }
+    if (!backgroundDrain && workflow.drainBackground) {
+      backgroundDrain = Promise.resolve().then(() => workflow.drainBackground())
+        .catch(() => log('Demo 后台队列本轮处理失败，将继续轮询。'))
+        .finally(() => { backgroundDrain = undefined; });
+    }
   }
   const dispatcher = new sdk.EventDispatcher({ logger: sdkLogger }).register({
     'im.message.receive_v1': data => {
@@ -164,7 +177,7 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
     clearInterval(timer);
     try {
       ws.close({ force: true });
-      await activeDrain;
+      await Promise.all([activeDrain,backgroundDrain]);
       await workflow.close();
     } catch {
       exitCode = 1;
@@ -189,18 +202,17 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
   return { start, stop, done, getStatus: () => ws.getConnectionStatus().state };
 }
 
-async function main() {
+export async function runFeishuConnector(createWorkflow) {
   const { FEISHU_APP_ID: appId, FEISHU_APP_SECRET: appSecret } = process.env;
   if (!hasCredentials(appId, appSecret)) {
-    console.error('请在 build/analyst-replay/feishu-app.env 或进程环境中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。');
+    console.error('请在连接器环境中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET。');
     return 1;
   }
   // This standalone connector owns its HTTP client process. Bound both the token
   // exchange and message calls, including during a graceful shutdown.
   Lark.defaultHttpInstance.defaults.timeout = 15000;
   Lark.defaultHttpInstance.defaults.maxRedirects = 0;
-  const { createLocalFeishuWorkflow } = await import('./feishu-local.mjs');
-  const connector = makeFeishuConnector({ appId, appSecret, createWorkflow: createLocalFeishuWorkflow });
+  const connector = makeFeishuConnector({ appId, appSecret, createWorkflow });
   const stop = () => { void connector.stop(); };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -211,11 +223,4 @@ async function main() {
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);
   }
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().then(code => { process.exitCode = code; }).catch(() => {
-    console.error('飞书接收器初始化失败，请检查本地数据目录、实例占用和依赖。');
-    process.exitCode = 1;
-  });
 }

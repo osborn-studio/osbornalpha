@@ -37,12 +37,12 @@ export function fillExample() {
   validateTicker();
 }
 
-function setBeijingTimeToNow() {
+function setCurrentBeijingTime() {
   useCurrentTime = true;
   field('recommended_at').value = beijingInputValue();
 }
 
-el('rec-use-now').addEventListener('click', setBeijingTimeToNow);
+el('rec-use-now').addEventListener('click', setCurrentBeijingTime);
 field('recommended_at').addEventListener('input', () => { useCurrentTime = false; });
 
 function inferMarket(value) {
@@ -119,7 +119,7 @@ export function registrationSaved(s, entry) {
   for (const name of ['ticker','rationale','reference_price','target_price','stop_loss','thesis_ref']) field(name).value = '';
   field('horizon').value = '';
   marketTouched = false;
-  setBeijingTimeToNow();
+  setCurrentBeijingTime();
   validateTicker();
   const score = entry.score;
   const outcome = entry.evidence?.mode === 'unavailable' ? '已登记，行情暂缺，可刷新。' :
@@ -294,7 +294,7 @@ export function renderRegistrations(s) {
     resetDesk();
     field('analyst').options[0].text = s.names[s.role];
     field('analyst').options[0].value = s.role;
-    setBeijingTimeToNow();
+    setCurrentBeijingTime();
     validateTicker();
   } else if (useCurrentTime && document.activeElement !== field('recommended_at')) {
     field('recommended_at').value = beijingInputValue();

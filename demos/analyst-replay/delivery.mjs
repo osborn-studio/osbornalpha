@@ -1,8 +1,8 @@
 // Replay delivery. All database changes here are synchronous;
 // enqueue can therefore participate in the same SQLite transaction as the replay event.
-import { createHash, createHmac } from 'node:crypto';
+import { createHash } from 'node:crypto';
+import { signWebhook, validFeishuWebhook } from '../../integrations/feishu/feishu-webhook.mjs';
 
-const REMOTE_HOOK = /^https:\/\/(?:open\.feishu\.cn|open\.larksuite\.com)\/open-apis\/bot\/v2\/hook\/[a-zA-Z0-9_-]{8,150}$/;
 const LOCAL_PATH = '/internal/mock-feishu';
 const inflight = new WeakMap();
 const appInflight = new WeakMap();
@@ -52,7 +52,7 @@ export function configureWebhook(db, { url, secret = '' }) {
   if (typeof url !== 'string' || typeof secret !== 'string') throw requestError('请填写有效的机器人地址和签名密钥。');
   const target = url.trim();
   const key = secret.trim();
-  if (target && !REMOTE_HOOK.test(target)) throw requestError('请填写飞书或 Lark 官方自定义机器人 HTTPS webhook 地址。');
+  if (target && !validFeishuWebhook(target)) throw requestError('请填写飞书或 Lark 官方自定义机器人 HTTPS webhook 地址。');
   if (key.length > 256 || /[\r\n]/.test(key)) throw requestError('签名密钥格式错误。');
   if (!target && key) throw requestError('填写签名密钥时需要同时填写 webhook 地址。');
   db.prepare(`UPDATE replay_hook_settings SET url=?, secret=?, app_chat_id='', generation=generation+1
@@ -151,13 +151,6 @@ function safeLocalTarget(localUrl, localToken) {
   return url;
 }
 
-// Feishu signs an empty message using "timestamp\nsecret" as the HMAC key.
-function sign(payload, secret) {
-  if (!secret) return payload;
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  return { ...payload, timestamp, sign: createHmac('sha256', timestamp + '\n' + secret).digest('base64') };
-}
-
 async function deliverOne(db, row, options) {
   const { url, secret, app_chat_id } = db.prepare('SELECT url,secret,app_chat_id FROM replay_hook_settings WHERE id=1').get();
   if (row.mode === 'app') {
@@ -178,7 +171,7 @@ async function deliverOne(db, row, options) {
   const target = isLocal ? safeLocalTarget(options.localUrl, options.localToken) : url;
   const headers = { 'content-type': 'application/json' };
   if (isLocal) headers['x-demo-mock-token'] = options.localToken;
-  const payload = sign(cardFor(row, options.publicUrl), isLocal ? '' : secret);
+  const payload = signWebhook(cardFor(row, options.publicUrl), isLocal ? '' : secret);
   const fetchImpl = options.fetchImpl ?? fetch;
   let response;
   try {
