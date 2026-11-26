@@ -53,6 +53,12 @@ describe('auth callback destinations', () => {
     ['/intel/industries?scheme=sic&level=1&next=//evil.example&code=secret&view=bad#token',
       '/intel/industries?scheme=sic&level=1'],
     ['/portfolio?code=secret#access_token=secret', '/portfolio'],
+    ['/portfolio?s=00300.HK&code=secret#private', '/portfolio?s=00300.HK'],
+    ['/en/portfolio?s=000333.sz', '/portfolio?s=000333.SZ'],
+    ['/portfolio?s=BRK.B', '/portfolio?s=BRK.B'],
+    ['/portfolio?s=00300.HK&s=NVDA', '/portfolio'],
+    ['/portfolio?s=invalid%20symbol', '/portfolio'],
+    ['/portfolio/decisions?s=00300.HK', '/portfolio/decisions'],
     ['/reset-password', '/reset-password'], ['/en/reset-password', '/en/reset-password'],
   ])('preserves safe destination %j as %s', async (next, path) => {
     const response = await callback(next);

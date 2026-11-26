@@ -3,9 +3,9 @@ import {create, type ReactTestRenderer} from 'react-test-renderer';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {NextRequest} from 'next/server';
 
-const auth = vi.hoisted(() => ({signIn: vi.fn(), getUser: vi.fn()}));
+const auth = vi.hoisted(() => ({signIn: vi.fn(), oauth: vi.fn(), getUser: vi.fn()}));
 vi.mock('@supabase/ssr', () => ({createServerClient: () => ({auth: {getUser: auth.getUser}})}));
-vi.mock('@/lib/supabase/client', () => ({isSupabaseConfigured: () => true, getBrowserSupabase: () => ({auth: {signInWithPassword: auth.signIn}})}));
+vi.mock('@/lib/supabase/client', () => ({isSupabaseConfigured: () => true, getBrowserSupabase: () => ({auth: {signInWithPassword: auth.signIn, signInWithOAuth: auth.oauth}})}));
 vi.mock('next/link', () => ({default: ({children}: {children: React.ReactNode}) => children}));
 vi.mock('next-intl', () => ({useTranslations: () => (key: string) => key}));
 vi.mock('@/components/Toast', () => ({useToast: () => ({show: vi.fn()})}));
@@ -42,8 +42,7 @@ async function login(search: string) {
 }
 
 describe('password login return flow', () => {
-  it('returns from the actual anonymous middleware redirect to the requested US SIC list', async () => {
-    const target = '/intel/industries?scheme=sic&metric=member_count';
+  it.each(['/intel/industries?scheme=sic&metric=member_count', '/portfolio?s=00300.HK'])('returns from the anonymous middleware redirect to %s', async target => {
     const response = await middleware(new NextRequest(`https://alpha.example${target}`));
     expect(response.status).toBe(307);
     const loginUrl = new URL(response.headers.get('location')!);
@@ -70,5 +69,19 @@ describe('password login return flow', () => {
   it('does not navigate when authentication fails', async () => {
     auth.signIn.mockResolvedValue({error: {message: 'Invalid login credentials', status: 400}});
     expect(await login('?next=/portfolio')).toBe('https://alpha.example/login?next=/portfolio');
+  });
+});
+
+it('passes the requested portfolio ticker to OAuth through the application callback', async () => {
+  const response = await middleware(new NextRequest('https://alpha.example/portfolio?s=00300.HK&code=discard'));
+  vi.stubGlobal('window', {location: new URL(response.headers.get('location')!)});
+  vi.stubEnv('NEXT_PUBLIC_AUTH_OAUTH_PROVIDERS', 'google');
+  auth.oauth.mockResolvedValue({error: null});
+  await act(async () => {root = create(createElement(AuthForm, {mode: 'login'}));});
+  await act(async () => {
+    await root!.root.findAllByType('button').find(b => b.children.includes('form.providerGoogle'))!.props.onClick();
+  });
+  expect(auth.oauth).toHaveBeenCalledWith({
+    provider: 'google', options: {redirectTo: 'https://alpha.example/auth/callback?next=%2Fportfolio%3Fs%3D00300.HK'},
   });
 });
