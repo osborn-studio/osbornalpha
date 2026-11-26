@@ -233,7 +233,7 @@ test('group chat sends bounded history as untrusted text and returns a plain rep
     assert.equal(captured.history[1].content.length,1200);
     assert.ok(captured.history[1].content.endsWith('…'));
     assert.equal(captured.history[2].content,'请看这个追问');
-    assert.doesNotMatch(options.body,/省略|前面的密钥|ou_example/);
+    assert.doesNotMatch(request.messages[1].content,/省略|前面的密钥|ou_example/);
     return completion('<think>private reasoning</think>可以**直接回复追问**。参见[说明](https://example.com)。');
   }});
   const history = [
@@ -280,6 +280,89 @@ test('only a complete standalone roster control can request a read',async()=>{
   assert.equal(await getReply('<think><read_analyst_roster></think>我在。'),'我在。');
   await assert.rejects(getReply('<approve_proposal>'),{code:'MODEL_OUTPUT'});
   await assert.rejects(getReply('<think>unfinished private reasoning'),{code:'MODEL_OUTPUT'});
+});
+
+test('local conversation and formal extraction accept the same strict read-only queries', async () => {
+  const queries=[
+    {read:'pending'},{read:'analyst_roster'},
+    {read:'formal_report',scope:'named',subject:'陈晨',sections:['recommendations','trades']},
+    {read:'formal_report',scope:'context',sections:['scores']},{read:'formal_report',scope:'self',sections:['trades']},
+    {read:'formal_report',scope:'all',sections:['scores','trades']},
+  ];
+  for (const query of queries) {
+    const chat=createFeishuChatResponder(local,{fetchImpl:async()=>completion(JSON.stringify(query))});
+    assert.deepEqual(await chat({text:'查一下我刚才说的那项'}),query);
+    const packet={intent:'read',query,fields:{}};
+    const extract=createFeishuLlmExtractor(local,{formalTrades:true,fetchImpl:async()=>completion(JSON.stringify(packet))});
+    assert.deepEqual(await extract(input),packet);
+  }
+  const invalid=[
+    {read:'approve'},{read:'pending',approved:true},{read:'formal_report',scope:'all',accountId:'untrusted',sections:['trades']},
+    {read:'formal_report',scope:'all',subject:'陈晨',sections:['scores']},
+    {read:'formal_report',scope:'named',subject:'ou_private',sections:['scores']},
+    {read:'formal_report',scope:'context',sections:[]},{read:'formal_report',scope:'all',sections:['write']},
+  ];
+  for (const query of invalid) {
+    const chat=createFeishuChatResponder(local,{fetchImpl:async()=>completion(JSON.stringify(query))});
+    await assert.rejects(chat({text:'测试'}),{code:'MODEL_OUTPUT'});
+  }
+  for (const packet of [{intent:'read',query:queries[1],fields:{action:'approve'}},{intent:'read',query:invalid[0],fields:{}}]) {
+    const extract=createFeishuLlmExtractor(local,{formalTrades:true,fetchImpl:async()=>completion(JSON.stringify(packet))});
+    await assert.rejects(extract(input));
+  }
+});
+
+test('read decision caching requires identical prompt, roles, question and history and never caches an ordinary answer',async t=>{
+  let guidance='initial',calls=0,now=1_000_000;
+  t.mock.method(Date,'now',()=>now);
+  const chat=createFeishuChatResponder(local,{readPrompt:()=>({chat:guidance}),fetchImpl:async(_url,options)=>{
+    calls++;
+    const {messages}=JSON.parse(options.body);
+    return completion(JSON.parse(messages[1].content).text==='你好'?'你好。':'{"read":"pending"}');
+  }});
+  const input={text:'现在有等我处理的事项吗？',isApprover:true};
+  const first=await chat(input);
+  first.read='changed';
+  assert.deepEqual(await chat(input),{read:'pending'});
+  assert.equal(calls,1);
+  await chat({...input,history:[{role:'user',content:'刚才那份待办'}]});
+  await chat({...input,isApprover:false});
+  guidance='published update';await chat(input);
+  assert.equal(calls,4);
+  now+=301_000;await chat(input);
+  await chat({text:'你好'});await chat({text:'你好'});
+  assert.equal(calls,7);
+});
+
+test('only verified public report context reaches local models, including when a report had no rows',async()=>{
+  const readContext={source:'formal_report',scope:'named',analyst:'小周（zhou）',sections:['scores'],
+    account:'private-account',analystId:'ou_sensitive',records:'private-rows'};
+  const safe={source:'formal_report',scope:'named',analyst:'小周（zhou）',sections:['scores']};
+  const inputs=[];
+  const query={read:'formal_report',scope:'context',sections:['trades']};
+  const mock=(extract=false)=>async(_url,options)=>{
+    inputs.push(JSON.parse(JSON.parse(options.body).messages[1].content));
+    return completion(JSON.stringify(extract?{intent:'read',fields:{},query}:query));
+  };
+  const chat=createFeishuChatResponder(local,{fetchImpl:mock()});
+  const followup={text:'那她说的有几笔真的成交过？',readContext};
+  await chat({...followup,isApprover:true});
+  await chat(followup);
+  await chat({...followup,isAnalyst:true,readContext:{...readContext,analyst:'ou_sensitive'}});
+  await chat({...followup,isAnalyst:true,readContext:{...readContext,scope:'all'}});
+  const extract=createFeishuLlmExtractor(local,{formalTrades:true,fetchImpl:mock(true)});
+  await extract({...input,...followup});
+  const remote=createFeishuLlmExtractor({...local,FEISHU_LLM_BASE_URL:'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    FEISHU_LLM_API_KEY:'synthetic-key'},{formalTrades:true,fetchImpl:async(_url,options)=>{
+    inputs.push(JSON.parse(JSON.parse(options.body).messages[1].content));
+    return completion('{"intent":"help","fields":{}}');
+  }});
+  await remote({...input,...followup});
+  assert.deepEqual(inputs.map(payload=>payload.readContext),[
+    safe,undefined,{source:'formal_report',scope:'named',sections:['scores']},
+    {source:'formal_report',scope:'all',sections:['scores']},safe,undefined,
+  ]);
+  assert.doesNotMatch(JSON.stringify(inputs),/private-account|ou_sensitive|private-rows/);
 });
 
 test('group chat receives only bounded public facts from a proposal thread', async () => {

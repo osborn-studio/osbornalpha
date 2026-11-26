@@ -1360,5 +1360,10 @@
       "avoid": [],
       "maxChars": 190
     }
-  }
+  },
+  {"id": "read-suite-team-dev", "group": "read-suite-team-dev", "kind": "chat", "split": "train", "input": {"text": "给我翻出群里做分析的成员名册。", "isApprover": true}, "expect": {"tool": {"read": "analyst_roster"}}},
+  {"id": "read-suite-hit-dev", "group": "read-suite-hit-dev", "kind": "chat", "split": "train", "input": {"text": "这位的判断命中率怎样？", "isApprover": true, "history": [{"role": "user", "content": "先查苏安的建议。"}, {"role": "assistant", "content": "这里是苏安的建议。"}]}, "expect": {"tool": {"read": "formal_report", "sections": ["scores"], "scope": "context"}}},
+  {"id": "read-suite-my-trades", "group": "read-suite-my-trades", "kind": "chat", "split": "train", "input": {"text": "我自己的提议有哪些进入了模拟组合？", "isAnalyst": true}, "expect": {"tool": {"read": "formal_report", "sections": ["trades"], "scope": "self"}}},
+  {"id": "read-suite-scope-val", "group": "read-suite-scope-val", "kind": "chat", "split": "validation", "input": {"text": "我想一起看邓晴的建议原文以及之后给出的评分。", "isApprover": true}, "expect": {"tool": {"read": "formal_report", "sections": ["recommendations", "scores"], "scope": "named", "subject": "邓晴"}}},
+  {"id": "read-suite-pending-val", "group": "read-suite-pending-val", "kind": "chat", "split": "validation", "input": {"text": "还有多少份提案需要我点确认？", "isApprover": true}, "expect": {"tool": {"read": "pending"}}}
 ]

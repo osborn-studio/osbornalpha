@@ -8,10 +8,11 @@ import { createFormalSync } from './feishu-formal-api.mjs';
 import { openFeishuRuntime, readFeishuBindings } from './feishu-runtime.mjs';
 import { validateAnalystAliases } from './feishu-pairing.mjs';
 import {createPublishedPromptReader} from './feishu-prompt.mjs';
+import {startFeishuModelWarmth} from './feishu-model-warmth.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../../build/feishu/',import.meta.url));
 
-export function createFormalFeishuWorkflow({sendMessage,env = process.env,extractWithModel,respondToChat,searchSecurity} = {}) {
+export function createFormalFeishuWorkflow({sendMessage,wake,env = process.env,extractWithModel,respondToChat,searchSecurity} = {}) {
   const directory = resolve(env.FEISHU_DATA_DIR || defaultDirectory);
   const config = readFeishuBindings(directory);
   const syncFormal = createFormalSync(env);
@@ -29,13 +30,16 @@ export function createFormalFeishuWorkflow({sendMessage,env = process.env,extrac
     console.error('正式查询的群播报配置无效，请重新配置后重启连接器。');
   }
   const queryFormal=reportConfig?.chatId===config.chatId ? createFormalReader(env) : undefined;
-  const workflow = openFeishuRuntime(directory,{assistantEnv:env,sendMessage:makeReportSender(sendMessage,reportConfig),
+  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,sendMessage:makeReportSender(sendMessage,reportConfig),
     queryFormal,syncFormal,extractWithModel:extractor,respondToChat:chat,
     ...(searchSecurity && {searchSecurity})});
+  const stopWarmth = startFeishuModelWarmth(env);
+  const close = () => { stopWarmth(); return workflow.close(); };
+  if (wake) return {...workflow,close,drainBackground:workflow.tickRecaps};
   if (env.OSBORN_FEISHU_LOCAL_ASSISTANT === 'true') {
-    return {...workflow,async drainBackground() {
+    return {...workflow,close,async drainBackground() {
       await Promise.all([workflow.drainChat(),workflow.drainDemo(),workflow.drainMembership(),workflow.tickRecaps()]);
     }};
   }
-  return {...workflow,...(chat && {drainBackground:workflow.drainChat})};
+  return {...workflow,close,...(chat && {drainBackground:workflow.drainChat})};
 }

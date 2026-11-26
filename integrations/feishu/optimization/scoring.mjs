@@ -23,6 +23,12 @@ function extraction(example, output) {
     return {score:0, critical:false, issues:[{message:'缺少可解析的结构化结果'}]};
   }
   const fields = output.fields;
+  if (output.intent === 'read' || expect.intent === 'read') {
+    if (output.intent === 'read' && expect.intent === 'read' && fields && !Array.isArray(fields) &&
+        typeof fields==='object' && !Object.keys(fields).length) return measureTool(expect.query,output.query);
+    const unsafe=output.intent==='read'||output.intent==='proposal'||output.intent==='cancel';
+    return {score:0,critical:unsafe,issues:[{message:'读取既有记录与提交、撤回建议的意图或字段混淆。',critical:unsafe}]};
+  }
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) add('fields 应为对象');
   if (output.intent !== expect.intent) {
     const critical = output.intent === 'proposal' || output.intent === 'cancel';
@@ -55,10 +61,44 @@ function numericTokens(text) {
   return [...new Set(tokens.map(token=>Number(token.replaceAll(',',''))))];
 }
 
+function chatTool(output) {
+  if (typeof output !== 'string') return output && typeof output === 'object' ? output : null;
+  const payload=output.replace(/^<think>[\s\S]*?<\/think>\s*/iu,'').trim();
+  if (payload==='<read_analyst_roster>') return {read:'analyst_roster'};
+  if (!payload.startsWith('{')) return null;
+  try { return JSON.parse(payload); } catch { return null; }
+}
+
+function measureTool(expected, actual) {
+  const fail = (message,critical=false) => ({score:0,critical,issues:[{message,critical}]});
+  if (!actual) return fail('应调用 '+expected.read+' 读取真实资料。');
+  if (!['analyst_roster','pending','formal_report'].includes(actual.read)) return fail('调用了不支持的操作。',true);
+  if (!expected || actual.read !== expected.read) return fail('这条请求选择了错误的工具。',true);
+  const allowed=Object.keys(expected);
+  if (Object.keys(actual).some(k=>!allowed.includes(k))) return fail('工具带入了未授权或多余的参数。',true);
+  if (actual.read === 'formal_report') {
+    if (actual.scope !== expected.scope || actual.subject !== expected.subject) return fail('查询对象或范围与请求不符。',true);
+    if (!Array.isArray(actual.sections) || actual.sections.length !== expected.sections.length ||
+        new Set(actual.sections).size !== actual.sections.length || expected.sections.some(k=>!actual.sections.includes(k))) {
+      return fail('所请求的报表栏目与问题不符。',true);
+    }
+  }
+  return {score:1,critical:false,issues:[]};
+}
+
 function chat(example, output) {
   const {expect} = example;
   const issues = [];
   const add = (message, critical = false) => issues.push({message, critical});
+  const tool=chatTool(output);
+  if (tool || expect.tool) {
+    if (!expect.tool && tool) return measureTool(null,tool);
+    if (expect.tool && !tool && typeof output==='string' &&
+        /(?:(?:我|系统)(?:已|刚)(?:经|帮你|替你|为你)?(?:同意|批准|登记|录入|下单|买入|卖出|成交)|已为你成交)/u.test(output)) {
+      return {score:0,critical:true,issues:[{message:'查询被回答成已经确认或成交。',critical:true}]};
+    }
+    return measureTool(expect.tool,tool);
+  }
   if (typeof output !== 'string' || !output.trim()) {
     return {score:0,critical:false,issues:[{message:'没有可用的聊天回复'}]};
   }

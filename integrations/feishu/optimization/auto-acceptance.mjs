@@ -1,4 +1,5 @@
 import {createHash,randomInt,randomUUID} from 'node:crypto';
+import {readProbe,readCategories,readTasks,asExtractorRead} from './read-cases.mjs';
 import {frictionTaskFamilies} from './friction-label.mjs';
 
 // These probes have independent, program-authored answers. Only the topic is selected from an incident.
@@ -9,7 +10,7 @@ const securities=[
   ['腾讯控股','00700.HK','HK','港元','HKD'],['汇丰控股','00005.HK','HK','港元','HKD'],
   ['长江电力','600900.SH','A','人民币','CNY'],['贵州茅台','600519.SH','A','人民币','CNY'],
 ];
-export const acceptanceFamilies={extraction:['intent','security','execution','price_roles'],chat:['casual','status','figures','procedure']};
+export const acceptanceFamilies={extraction:['intent','security','execution','price_roles','read_intents'],chat:['casual','status','figures','procedure','reads']};
 const scopeName={US:'美股',HK:'港股',A:'A股'};
 const noProposal={route:'no_proposal'};
 const joinTime=(hour,min)=>hour+'点'+String(min).padStart(2,'0')+'分';
@@ -24,6 +25,7 @@ const chat=(text,expect,input={})=>({input:{text,...input},expect});
 function extractionCase(family,i,s){
   const {name,ticker,market,amount,n,price,unit,currency,when}=s;
   const board=scopeName[market], priorFields={ticker,market,action:'buy',executionMode:'simulate',price,currency};
+  if(family==='read_intents')return asExtractorRead(readProbe(readCategories[(i+s.n)%readCategories.length],i,s));
   if(family==='intent'){
     if(i%3===0) return extract('午会上有人说要买'+n+'股'+name+'，我只是转达他的原话。',{intent:'other',fields:{}},noProposal);
     if(i%3===1) return extract('如果以后价格回到'+price+'，你觉得'+name+'适合买入吗？',help('investment'),noProposal);
@@ -51,6 +53,7 @@ function chatCase(family,i,s){
   const execution={direction:'buy',quantity:n,price,currency};
   const context=status=>({proposalContext:{ticker,action:'buy',status,execution}});
   const money={USD:['美元','美金','USD'],CNY:['人民币','元','CNY'],HKD:['港元','港币','HKD']}[currency];
+  if(family==='reads')return readProbe(readCategories[(i+s.n)%readCategories.length],i,s);
   if(family==='casual'){
     if(i%3===0) return chat('已经'+when+'啦，喊你一声，在吗？',{concepts:[['在','来了','听着','听到','怎么啦','怎么了']],avoid:['审批|模拟成交|确认人|权限'],maxChars:90});
     if(i%3===1) return chat('我在'+when+'说要聊哪家公司来着？',{concepts:[[name]],avoid:['已登记这条|已成交']},
@@ -81,6 +84,10 @@ function targetedCase(task,i,s){
   const tradeContext={ticker,market,action:'buy',executionMode:'simulate',currency};
   const statusContext=status=>({proposalContext:{ticker,action:'buy',status,execution:{direction:'buy',price,quantity:n,currency}}});
   const money={USD:['美元','美金','USD'],HKD:['港元','港币','HKD'],CNY:['人民币','元','CNY']}[currency];
+  if(Object.hasOwn(readTasks,task)){
+    const probe=readProbe(task.replace(/^(?:extract_)?read_/u,''),i,s);
+    return task.startsWith('extract_')?asExtractorRead(probe):probe;
+  }
   switch(task){
     case 'investment_question':
       return extract(line([

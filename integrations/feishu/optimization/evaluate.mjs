@@ -108,8 +108,11 @@ export function pairedSummary(rows,baselinePrompt,candidatePrompt,onlyKind) {
     candidate[kind].mean + 1e-9 >= baseline[kind].mean && candidate[kind].passed >= baseline[kind].passed);
   const improves = candidate.all.mean > baseline.all.mean + 1e-9 && candidate.all.passed >= baseline.all.passed;
   const changedGain = changedComponents.some(kind=>candidate[kind].mean > baseline[kind].mean + 1e-9);
-  const latencyWithinBudget = kinds.every(kind=>
-    candidate[kind].p95Ms <= Math.max(baseline[kind].p95Ms * 1.5,baseline[kind].p95Ms + 2000));
+  const latencyWithinBudget = kinds.every(kind=>{
+    const baselineP95=baseline[kind].p95Ms;
+    const jitter=kind==='chat' ? Math.min(500,Math.max(250,baselineP95*0.1)) : Math.max(2000,baselineP95*0.5);
+    return candidate[kind].p95Ms <= baselineP95+jitter;
+  });
   const newRawCritical = [...new Set(rows.filter(row=>row.candidate.rawCritical && !row.baseline.rawCritical)
     .map(row=>row.id))];
   const byCase = new Map();

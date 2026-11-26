@@ -72,3 +72,38 @@ test('only transport failures and temporary HTTP errors trigger offline retry',a
   assert.ok(invalid.error);
   assert.equal(invalid.transportError,undefined);
 });
+
+test('a chat prompt release cannot exchange substantially slower p95 for better scores',()=>{
+  const row={id:'r',kind:'chat',baseline:metrics(0.5,{latencyMs:4000}),candidate:metrics(1,{latencyMs:4600})};
+  assert.equal(pairedSummary([row],null,null,'chat').eligible,false);
+  row.candidate.latencyMs=4200;
+  assert.equal(pairedSummary([row],null,null,'chat').eligible,true);
+});
+
+test('GEPA measures the deployed chat adapter for tool selection without contacting any business service',async()=>{
+  const tool={read:'formal_report',sections:['scores'],scope:'self'};
+  const example={kind:'chat',input:{text:'我自己的建议打得几分？',isAnalyst:true},expect:{tool}};
+  const check=raw=>evaluateExample(example,activePrompt,settings,async()=>Response.json({
+    choices:[{finish_reason:'stop',message:{content:JSON.stringify(raw)}}],
+  }));
+  const right=await check(tool);
+  assert.deepEqual(right.result,tool);
+  assert.equal(right.rawScore,1);
+  assert.equal(right.passed,true);
+  const wider=await check({...tool,scope:'all'});
+  assert.equal(wider.passed,false);
+  assert.equal(wider.rawCritical,true);
+});
+
+test('the analyst extractor read is independently graded for narrowed scope and has no proposal fields',async()=>{
+  const tool={read:'formal_report',sections:['trades'],scope:'self'};
+  const example={kind:'extraction',input:{text:'我之前有哪些模拟单成交？',receivedAt:'2026-04-08T08:00:00+08:00'},
+    expect:{intent:'read',fields:{},query:tool}};
+  const check=query=>evaluateExample(example,activePrompt,settings,async()=>Response.json({
+    choices:[{finish_reason:'stop',message:{content:JSON.stringify({intent:'read',fields:{},query})}}],
+  }));
+  assert.equal((await check(tool)).passed,true);
+  const wrong=await check({...tool,scope:'all'});
+  assert.equal(wrong.rawCritical,true);
+  assert.equal(wrong.critical,true);
+});

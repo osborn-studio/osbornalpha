@@ -27,8 +27,8 @@ function mentionedReport() {
 for(const mode of ['app','webhook']){
   test('a PM mention reads formal advice, scores and linked trades once across a restart using '+mode,async t=>{
     const directory=mkdtempSync(join(tmpdir(),'osborn-formal-read-'));
-    const bindings={chatId,approverIds:[pmId],analystBySender:{ou_fixture_analyst:'analyst_a',ou_second_analyst:'bin'},
-      analystNamesByRole:{analyst_a:'analyst_a',bin:'bin'},analystAliasesByRole:{analyst_a:['示例分析师'],bin:['陈斌']},
+    const bindings={chatId,approverIds:[pmId],analystBySender:{ou_fixture_analyst:'analyst_a',ou_second_analyst:'analystB'},
+      analystNamesByRole:{analyst_a:'analyst_a',analystB:'analystB'},analystAliasesByRole:{analyst_a:['示例分析师'],analystB:['示例分析师乙']},
       simulationAccount:{id:owner,confirmed:true}};
     writeFileSync(join(directory,'feishu-bindings.json'),JSON.stringify(bindings),{mode:0o600});
     writeFileSync(join(directory,'feishu-report-delivery.json'),JSON.stringify({

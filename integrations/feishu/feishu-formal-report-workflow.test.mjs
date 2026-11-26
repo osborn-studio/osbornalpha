@@ -4,10 +4,10 @@ import {DatabaseSync} from 'node:sqlite';
 import {openFeishuWorkflow} from './feishu-workflow.mjs';
 import {formalReportIntent} from './feishu-report-intent.mjs';
 
-const account='13d1835d-a871-4ee4-8236-a5beea6ba4c0';
+const account='91000000-0000-4000-8000-00000000000b';
 function configuration() {
-  return {chatId:'group',approverIds:['pm'],analystBySender:{a:'analyst_a',b:'bin',c:'lin',d:'demo'},
-    analystAliasesByRole:{analyst_a:['示例分析师'],bin:['陈斌'],lin:['林昕岚']},
+  return {chatId:'group',approverIds:['pm'],analystBySender:{a:'analyst_a',b:'analystB',c:'analystC',d:'demo'},
+    analystAliasesByRole:{analyst_a:['示例分析师'],analystB:['示例分析师乙'],analystC:['示例分析师丙']},
     simulationAccount:{confirmed:true,id:account},demoOnlyRoles:['demo']};
 }
 function setup(t,options={}) {
@@ -49,17 +49,17 @@ test('natural read requests select formal tables, while help, casual chat and in
     ['查查记到组合里的买卖',['trades']],['哪些建议已经落单',['trades']],
     ['大家的建议准不准',['scores']],['大家的建议表现如何',['scores']],
     ['最近建议及打分',['recommendations','scores']],['看看我的投资模块里由建议产生的成交记录',['trades']],
-    ['示例分析师提的建议，打分情况怎么样',['recommendations','scores']],['请报一下 lin 的评分',['scores']],
+    ['示例分析师提的建议，打分情况怎么样',['recommendations','scores']],['请报一下 analystC 的评分',['scores']],
     ['查 analyst_a 的建议、命中率和模拟成交',['recommendations','scores','trades']],
   ];
   for (const [text,sections] of samples) assert.deepEqual(formalReportIntent(text,c)?.sections,sections,text);
-  assert.equal(formalReportIntent('请报一下 lin 的评分',c).analystKey,'lin');
+  assert.equal(formalReportIntent('请报一下 analystC 的评分',c).analystKey,'analystC');
   assert.equal(formalReportIntent('示例分析师提的建议，打分情况怎么样',c).analystKey,'analyst_a');
   for (const text of ['你能解释打分规则吗','怎么查我的评分','这款手表准不准','你看我应该下单吗？','建议买入 100 股英伟达',
     '帮我登记一条加仓建议','已明白怎么查询','你有什么选股建议？','这笔成交了吗？']) {
     assert.equal(formalReportIntent(text,c),null,text);
   }
-  for (const text of ['查王五的评分','查 TSLA 的成交记录','查昨天的评分','查 lin 和陈斌的模拟交易',
+  for (const text of ['查王五的评分','查 TSLA 的成交记录','查昨天的评分','查 analystC 和示例分析师乙的模拟交易',
     '查lina最近 20 笔模拟成交','给我查一下腾讯的建议','查未绑定名字评分','我建议卖出 100 股，顺便看看打分情况','查一下我建议买入 100 股那条建议的评分']) assert.ok(formalReportIntent(text,c)?.error,text);
 });
 
@@ -67,11 +67,11 @@ test('PM reads account-wide or named formal records; an analyst reads own data; 
   const h=setup(t);
   assert.equal(h.flow.receive(h.event(1,'查看正式系统建议、评分和模拟成交')).accepted,true);
   assert.equal(h.flow.receive(h.event(1,'查看正式系统建议、评分和模拟成交')).duplicate,true);
-  h.flow.receive(h.event(2,'查陈斌的模拟成交')); h.flow.receive(h.event(3,'查我的评分','a'));
+  h.flow.receive(h.event(2,'查示例分析师乙的模拟成交')); h.flow.receive(h.event(3,'查我的评分','a'));
   await h.flow.drain();
   assert.deepEqual(h.calls,[
     {expectedOwnerId:account,analystKey:null,sections:['recommendations','scores','trades']},
-    {expectedOwnerId:account,analystKey:'bin',sections:['trades']},
+    {expectedOwnerId:account,analystKey:'analystB',sections:['trades']},
     {expectedOwnerId:account,analystKey:'analyst_a',sections:['scores']},
   ]);
   assert.deepEqual(h.sent.map(m=>[m.replyTo,m.text,m.formalReport]),[['in1','正式报表的结果',true],['in2','正式报表的结果',true],['in3','正式报表的结果',true]]);

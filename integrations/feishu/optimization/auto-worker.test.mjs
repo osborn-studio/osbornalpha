@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
+import {openFrictionMonitor} from '../feishu-friction.mjs';
 import {workerStatus,workerTick} from './auto-worker.mjs';
 import {labelIncident} from './friction-label.mjs';
 
@@ -130,7 +131,7 @@ test('different causes within one family have their own training batch and indep
   const cycle=async batch=>{
     const targets=batch.holdout.filter(row=>batch.targetIds.includes(row.id));
     assert.equal(targets.length,6);
-    assert.equal(batch.holdout.length,14);
+    assert.equal(batch.holdout.length,16);
     const task=batch.targetIds[0].split('-').at(-2);
     assert.ok(targets.every(row=>row.id.includes('-'+task+'-')));
     const newGroups=new Set(batch.development.filter(row=>row.group.startsWith('feedback-')).map(row=>row.group));
@@ -141,4 +142,64 @@ test('different causes within one family have their own training batch and indep
   assert.equal((await h.tick({cycle})).incidentCount,1);
   assert.equal((await h.tick({cycle})).incidentCount,1);
   assert.deepEqual(tasks,['cash_budget','share_count']);
+});
+
+test('a confirmed tool correction becomes synthetic chat development and separately sealed tool probes',async t=>{
+  const h=harness(t);
+  h.config.monitorPath=join(h.root,'actual-monitor.sqlite');
+  const monitor=openFrictionMonitor(h.config.monitorPath,{now:h.now});
+  t.after(()=>monitor.close());
+  const group={chatId:'oc_synthetic'};
+  const event={chatId:group.chatId,senderId:'ou_fixture_only',threadId:'om_parent'};
+  const report=section=>({read:'formal_report',scope:'named',subject:'训练中不可出现的人名',sections:[section]});
+  monitor.observeRead({...event,messageId:'first',text:'随口问一下',modelSelected:true,readAction:report('trades')},group);
+  monitor.observeRead({...event,messageId:'second',text:'我说的是评分。',modelSelected:false,readAction:report('scores')},group);
+  const out=await h.tick({cycle:async batch=>{
+    assert.equal(batch.component,'chat');
+    assert.doesNotMatch(JSON.stringify(batch),/训练中不可出现的人名|随口问一下|ou_fixture_only|我说的是评分/);
+    assert.ok(batch.development.some(r=>r.expect.tool?.sections?.includes('scores')));
+    assert.ok(batch.development.some(r=>r.expect.tool?.sections?.includes('trades')));
+    const probes=batch.holdout.filter(r=>batch.targetIds.includes(r.id));
+    assert.equal(probes.length,6);
+    assert.deepEqual(new Set(probes.map(r=>r.expect.tool.scope)),new Set(['named','self','context','all']));
+    assert.ok(probes.every(r=>r.expect.tool.sections.join() === 'scores'));
+    const trainingTexts=new Set(batch.development.map(r=>r.input.text));
+    assert.ok(batch.holdout.every(r=>!trainingTexts.has(r.input.text)));
+    return {status:'rejected'};
+  }});
+  assert.equal(out.state,'rejected');
+  assert.equal(out.family,'reads');
+});
+
+test('foreground traffic interrupts a running search and its incident remains eligible for the next idle poll',async t=>{
+  const h=harness(t);
+  h.insert('priority-incident');
+  let busy=false;
+  const run=h.tick({queueBusy:()=>busy,cycle:async (_batch,{signal})=>{
+    busy=true;
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(Error('expected priority cancellation')),1500);
+      signal.addEventListener('abort',()=>{clearTimeout(timer);resolve();},{once:true});
+    });
+    throw signal.reason;
+  }});
+  assert.equal((await run).state,'deferring_to_group');
+  assert.equal(h.status().counts.eligible,1);
+  assert.equal(h.status().lastRuns[0].status,'deferred');
+});
+
+test('an analyst extractor read correction trains that component and includes independent business expectations',async t=>{
+  const h=harness(t);
+  h.insert('analyst-read','extraction','read_correction',{version:1,turns:[
+    {user:'',outcome:'verified_read_correction',previousRead:'scores',expectedRead:'trades'},
+  ]});
+  const outcome=await h.tick({cycle:async batch=>{
+    assert.equal(batch.component,'extraction');
+    assert.ok(batch.development.some(r=>r.expect.intent==='read' && r.expect.query.sections.includes('trades')));
+    const probes=batch.holdout.filter(r=>batch.targetIds.includes(r.id));
+    assert.ok(probes.every(r=>r.expect.intent==='read' && r.expect.query.sections.join()==='trades'));
+    assert.ok(batch.businessFixtures.cases.filter(r=>batch.targetIds.includes(r.id)).every(r=>r.expected.route==='read_only'));
+    return {status:'no_challenger'};
+  }});
+  assert.equal(outcome.family,'read_intents');
 });

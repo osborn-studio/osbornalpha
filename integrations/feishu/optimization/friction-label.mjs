@@ -1,10 +1,11 @@
 // The local interpreter can propose a scenario, but only observable facts can label it.
 // Development examples below use program-owned language and fictional quantities.
 import {createHash} from 'node:crypto';
+import {readCategories,readTasks,readTraining,asExtractorRead} from './read-cases.mjs';
 import {scoreExample} from './scoring.mjs';
 
 const components=new Set(['chat','extraction']);
-const signals=new Set(['repeated_clarification','member_correction','negative_feedback','misrouted_proposal','model_failure','conversation_review']);
+const signals=new Set(['repeated_clarification','member_correction','negative_feedback','misrouted_proposal','model_failure','conversation_review','read_correction']);
 const workflowRoutes=new Set(['awaiting_details','pm_summary']);
 const chatter=new Set(['chat','routed_chat']);
 const statuses={
@@ -14,6 +15,7 @@ const statuses={
   withdrawn:['已.{0,4}(撤回|撤销)','撤回了','撤销了'],
 };
 const family={
+  ...readTasks,
   investment_question:'intent',quoted_view:'intent',missed_owned:'intent',conditional_stop:'price_roles',swapped_prices:'price_roles',stock_name:'security',
   share_count:'execution',cash_budget:'execution',social:'casual',forgot_context:'casual',approval_method:'procedure',
   summary_price:'figures',summary_quantity:'figures',summary_status:'status',
@@ -64,7 +66,7 @@ function localInterpreter(env,fetchImpl) {
       const content=JSON.parse(raw)?.choices?.[0]?.message?.content;
       if(typeof content!=='string'||content.length>2000)return null;
       const packet=JSON.parse(content);
-      if(!packet||typeof packet!=='object'||!Object.hasOwn(family,packet.task)||packet.task==='share_count')return null;
+      if(!packet||typeof packet!=='object'||!Object.hasOwn(family,packet.task)||(packet.task==='share_count'||Object.hasOwn(readTasks,packet.task)))return null;
       const quotes=[strip(packet.previousQuote),strip(packet.feedbackQuote)];
       if(quotes.some(q=>q.length<2||q.length>120))return null;
       const pairs=message.slice(0,-1).map((entry,i)=>entry.member.includes(quotes[0])&&message[i+1].member.includes(quotes[1])?i:-1)
@@ -270,6 +272,23 @@ export async function labelIncident(incident,{env=process.env,fetchImpl=fetch}={
   const diagnose=reason=>asResult('diagnostic',reason,component);
   if(!['string','number'].includes(typeof incident?.id)||!String(incident.id).length||!components.has(component)||
      !signals.has(signal)||episode?.version!==1||!Array.isArray(episode.turns)||!episode.turns.length)return reject('invalid_episode');
+  if(signal==='read_correction'){
+    const [turn]=episode.turns;
+    if(episode.turns.length!==1||turn?.outcome!=='verified_read_correction'||
+        !readCategories.includes(turn.expectedRead)||!['chat',...readCategories].includes(turn.previousRead)||
+        turn.previousRead===turn.expectedRead)return reject('unverified_read');
+    const readTask='read_'+turn.expectedRead;
+    const task=component==='chat'?readTask:'extract_'+readTask;
+    const group='read-'+createHash('sha256').update(String(incident.id)).digest('hex').slice(0,16);
+    let rows=readTraining(readTask,turn.previousRead);
+    if(component==='extraction'){
+      rows=rows.filter(row=>row.expect.tool).map(asExtractorRead);
+      rows.push({input:{text:'我的建议是持有 MSFT。',receivedAt:'2026-04-08T08:00:00+08:00'},
+        expect:{intent:'proposal',fields:{ticker:'MSFT',action:'hold'}}});
+    }
+    const examples=rows.map(({input,expect},i)=>({id:group+'-'+i,group,kind:component,split:'train',input,expect}));
+    return asResult('eligible',task,component,task,examples);
+  }
   const turns=episode.turns.slice(-4).filter(t=>t&&typeof t==='object'&&typeof t.user==='string');
   if(!turns.length)return reject('missing_turn');
   const latest=turns.at(-1);

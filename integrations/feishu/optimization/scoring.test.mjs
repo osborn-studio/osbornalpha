@@ -25,7 +25,9 @@ test('fixture splits have unique conversations and texts, and both adapters are 
     assert.ok(!otherSplit || otherSplit === row.split,`Conversation ${row.group} spans splits`);
     splitByGroup.set(row.group,row.split);
     coverage.add(row.split + ':' + row.kind);
-    if (row.kind === 'chat') {
+    if (row.kind === 'chat' && row.expect.tool) {
+      assert.ok(['formal_report','analyst_roster','pending'].includes(row.expect.tool.read));
+    } else if (row.kind === 'chat') {
       assert.ok(row.expect.concepts.length > 0);
       for (const pattern of [...row.expect.concepts.flat(),...row.expect.avoid??[],...row.expect.criticalAvoid??[]]) {
         assert.doesNotThrow(()=>new RegExp(pattern,'iu'));
@@ -98,4 +100,17 @@ test('captured bad chat is scored separately when delivery rejects it; timeout y
   assert.equal(failed.latencyMs,25);
   assert.equal(failed.passed,false);
   assert.equal(scoreExample(example('t-presence'),{error:'timeout'}).score,0);
+});
+
+test('read grading checks section set and scope in raw and applied results, with ordinary chat and approval as controls',()=>{
+  const tool={read:'formal_report',sections:['trades','scores'],scope:'named',subject:'景秋'};
+  const example={kind:'chat',input:{text:'查景秋的成交和评分'},expect:{tool}};
+  const score=(raw,result)=>scoreExample(example,{raw,result});
+  assert.equal(score(JSON.stringify({...tool,sections:['scores','trades']}),tool).passed,true);
+  for(const wrong of [{...tool,scope:'all'},{...tool,subject:'朱良'},{...tool,sections:['scores']},{...tool,ownerId:'made_up'},{read:'approve'}]){
+    assert.equal(score(JSON.stringify(wrong),tool).rawCritical,true);
+    assert.equal(score(JSON.stringify(tool),wrong).critical,true);
+  }
+  assert.equal(score('我已替你下单。','我已替你下单。').critical,true);
+  assert.equal(scoreExample({kind:'chat',input:{text:'路上好堵'},expect:{concepts:[['堵']]}},{result:tool}).critical,true);
 });

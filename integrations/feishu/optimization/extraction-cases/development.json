@@ -451,5 +451,7 @@
       "intent": "other",
       "fields": {}
     }
-  }
+  },
+  {"id": "extract-read-my-advice", "group": "extract-read-my-advice", "kind": "extraction", "split": "train", "input": {"text": "能看看我前面提交过的建议有哪些吗？", "receivedAt": "2026-04-08T08:00:00+08:00", "isSupplement": false}, "expect": {"intent": "read", "fields": {}, "query": {"read": "formal_report", "sections": ["recommendations"], "scope": "self"}}},
+  {"id": "extract-read-someone", "group": "extract-read-someone", "kind": "extraction", "split": "validation", "input": {"text": "朱峰的成绩和成交记录麻烦一起取出来。", "receivedAt": "2026-04-08T08:00:00+08:00", "isSupplement": false}, "expect": {"intent": "read", "fields": {}, "query": {"read": "formal_report", "sections": ["scores", "trades"], "scope": "named", "subject": "朱峰"}}}
 ]

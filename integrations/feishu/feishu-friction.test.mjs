@@ -28,6 +28,28 @@ function harness(t) {
   return { db, collector, now, observe, incidents, advance: ms => { time += ms; } };
 }
 
+test('read correction learning requires independent evidence and retains only categorical outcomes',t=>{
+  const h=harness(t);
+  const observe=(id,readAction,modelSelected,text,patch={})=>h.collector.observeRead({
+    chatId:config.chatId,senderId:'ou_one',threadId:'topic',messageId:'msg'+id,text,readAction,modelSelected,...patch
+  },config);
+  const scores={read:'formal_report',sections:['scores'],scope:'named',subject:'private name'};
+  observe(1,{read:'pending'},true,'还有多少件？');
+  observe(2,scores,false,'换个话题查评分');
+  assert.deepEqual(h.incidents(),[]);
+  observe(3,{read:'pending'},true,'还有多少件？');
+  observe(4,scores,true,'我指的是某位的评分');
+  assert.deepEqual(h.incidents(),[]);
+  observe(5,{read:'pending'},true,'还有多少件？',{modelComponent:'extraction'});
+  observe(6,scores,false,'我指的是 private name 的评分');
+  observe(6,scores,false,'我指的是 private name 的评分');
+  const incidents=h.incidents();
+  assert.equal(incidents.length,1);
+  assert.equal(incidents[0].component,'extraction');
+  assert.deepEqual(incidents[0].turns,[{user:'',outcome:'verified_read_correction',previousRead:'pending',expectedRead:'scores'}]);
+  assert.doesNotMatch(JSON.stringify(incidents),/private name|我指的是|还有多少件|ou_one/);
+});
+
 test('monitor receives the actual adapter and workflow outcomes; a normal initial clarification stays in memory', async t => {
   const h = harness(t);
   const business = new DatabaseSync(':memory:');

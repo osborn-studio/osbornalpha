@@ -22,20 +22,24 @@ function publicName(value, identifiers) {
 }
 
 // Only names associated with an assigned group role are part of this roster.
-export function analystRosterText(config) {
+export function publicAnalystDirectory(config) {
   const mapping = config.analystBySender ?? {};
   const identifiers = new Set([...Object.keys(mapping), ...(config.approverIds ?? []), config.chatId, config.simulationAccount?.id]);
   const roles = new Set(Object.values(mapping).filter(role => typeof role === 'string' && role.trim()));
-  const lines = [];
+  const directory = [];
   for (const role of roles) {
     const aliases = config.analystAliasesByRole?.[role] ?? [];
     const alias = aliases.map(value => publicName(value, identifiers)).find(Boolean);
     const namedRole = /^[\p{L}][\p{L}\p{N} .-]{0,59}$/u.test(role) && !/^analyst-/iu.test(role);
     const display = publicName(config.analystNamesByRole?.[role], identifiers) || (namedRole ? publicName(role, identifiers) : '');
     const label = alias && display && alias.toLowerCase() !== display.toLowerCase() ? alias + '（' + display + '）' : alias || display;
-    const demo = config.demoOnlyRoles?.includes(role);
-    lines.push((label || '尚未配置公开署名') + (demo ? ' · 仅 Demo' : ''));
+    directory.push({role,label:label || null,demo:Boolean(config.demoOnlyRoles?.includes(role))});
   }
+  return directory;
+}
+
+export function analystRosterText(config) {
+  const lines=publicAnalystDirectory(config).map(({label,demo})=>(label || '尚未配置公开署名') + (demo ? ' · 仅 Demo' : ''));
   const heading = lines.length ? '本群目前可核实的分析师有 ' + lines.length + ' 位。' : '当前可核实的绑定中还没有分析师。';
   if (config.demoMembershipUnavailable) lines.push('Demo 自助绑定名单暂时无法核对。');
   return [heading, ...lines].join('\n');

@@ -371,5 +371,8 @@
       "intent": "other",
       "fields": {}
     }
-  }
+  },
+  {"id": "extract-read-trades-vs-buy", "group": "extract-read-trades-vs-buy", "kind": "extraction", "split": "holdout", "input": {"text": "我这几次建议里，有哪些是已经模拟买入或卖出的？", "receivedAt": "2026-04-08T08:00:00+08:00", "isSupplement": false}, "expect": {"intent": "read", "fields": {}, "query": {"read": "formal_report", "sections": ["trades"], "scope": "self"}}},
+  {"id": "extract-read-advice-score", "group": "extract-read-advice-score", "kind": "extraction", "split": "holdout", "input": {"text": "把戴芸留下的建议和对应命中率给我一起看看。", "receivedAt": "2026-04-08T08:00:00+08:00", "isSupplement": false}, "expect": {"intent": "read", "fields": {}, "query": {"read": "formal_report", "sections": ["recommendations", "scores"], "scope": "named", "subject": "戴芸"}}},
+  {"id": "extract-read-same-person", "group": "extract-read-same-person", "kind": "extraction", "split": "holdout", "input": {"text": "那接着核对同一位的得分。", "receivedAt": "2026-04-08T08:00:00+08:00", "isSupplement": false, "conversation": [{"role": "user", "content": "先给我顾秋的建议列表。"}, {"role": "assistant", "content": "刚才是顾秋的记录。"}]}, "expect": {"intent": "read", "fields": {}, "query": {"read": "formal_report", "sections": ["scores"], "scope": "context"}}}
 ]

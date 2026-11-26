@@ -8,7 +8,7 @@ export function connectorHasPriority(path,now=Date.now(),quietMs=6000) {
   try {
     return Boolean(db.prepare(`SELECT 1 FROM feishu_workflow_events
       WHERE (received_at>=? OR (status='pending' AND received_at>=?))
-      AND kind IN ('chat','proposal_ai','proposal_followup','supplement') LIMIT 1`)
+      AND kind IN ('chat','proposal','approval','assistant_command','formal_report','analyst_roster','proposal_ai','proposal_followup','supplement') LIMIT 1`)
       .get(new Date(now-quietMs).toISOString(),new Date(now-300000).toISOString()));
   } finally {db.close();}
 }
