@@ -1,11 +1,11 @@
 // src/lib/industry/facts-scope.ts
 // Industry fact universe for the CN facts scope (spec §4.10, V3/V4; owner decision E). It is NOT a separate
 // upsert job: src/lib/facts/scope.ts::desiredCn merges industryCnUniverse into the authoritative CN desired set
-// inside its `// INDUSTRY` block, only when FACTS_CN_INDUSTRY_UNIVERSE=1 (otherwise the cohort and CSI 300 define scope).
+// inside its `// INDUSTRY` block, only when FACTS_CN_INDUSTRY_UNIVERSE=1 (otherwise the cohort and index universes (CSI 300, STAR 50) define scope).
 // Universe = issuers resolved from CURRENT industry_source_memberships rows (issuer_id not null; historical
 // members included, so delisted issuers too; unresolved rows stay out — they are counted in n_unresolved)
 // ∪ issuers currently owning an active `a_stock` universe ticker. Reasons per issuer: 'universe:sw2021' and/or
-// 'universe:a_stock'; mergeDesired unions them with cohort and CSI 300 reasons per issuer (sorted), so
+// 'universe:a_stock'; mergeDesired unions them with cohort and index universe reasons per issuer (sorted), so
 // reconcile_fact_sync_scope (which REPLACES reasons) receives the union and retires only issuers outside it.
 // fetch_key: the current A-share ticker (landed chooseCnTicker); an issuer without one (historical member)
 // takes the ticker of its most recently CLOSED A-share window (chooseCnTicker over the rows with the largest
