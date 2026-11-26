@@ -352,6 +352,14 @@
     {
       "file": "20261214090000_industry_vendor_gildata.sql",
       "sha256": "137dbe6277f45617e98ca0655fdfa3107c12316d49952eb713c9d6cc21834bd7"
+    },
+    {
+      "file": "20261215090000_universe_csi300.sql",
+      "sha256": "b82cb43d4c908136c11fe5518e2c19072c198e7d407decbc076eef571203f41f"
+    },
+    {
+      "file": "20261216090000_index_universe_memberships.sql",
+      "sha256": "4ceaaf698393212bd8d70613fed233f1623e33a9942c8da95a2b48033105862b"
     }
   ]
 }
