@@ -9,6 +9,7 @@
     "dev": "next dev",
     "demo:analyst": "node --env-file-if-exists=.env.local --import tsx demos/analyst-replay/server.mjs",
     "feishu:formal": "node --env-file-if-exists=build/feishu/feishu-app.env --import tsx integrations/feishu/start.mjs",
+    "feishu:report": "node --env-file-if-exists=build/feishu/feishu-app.env --import tsx integrations/feishu/generate-report.mjs",
     "demo:feishu": "node --env-file-if-exists=build/analyst-replay/feishu-app.env --import tsx demos/analyst-replay/feishu-demo-start.mjs",
     "build": "next build",
     "start": "next start",

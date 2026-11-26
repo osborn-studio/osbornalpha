@@ -42,6 +42,12 @@ FEISHU_LLM_FALLBACK_TIMEOUT_MS=10000
 - **应用机器人原消息回复。** 执行 `python3 integrations/feishu/configure-report-delivery.py app`。助手沿用现有消息回复 OpenAPI，回复计入相应的飞书调用额度。
 - **关闭群报告。** 执行 `python3 integrations/feishu/configure-report-delivery.py off`。
 
+## 分析报表看板
+
+使用已绑定的正式模拟账户登录，在「分析师」页进入报表看板，或访问 `/analyst/report`。选择全组或一位分析师后，可查看登记、得分、命中样本及建议关联的成交。从成交点开来源建议可核对原始记录。点击生成报告可阅读并导出当前范围的分析。
+
+在连接器所在 Mac 的项目目录执行 `npm run feishu:report`，可通过现有只读接口生成 `build/reports/osborn-analyst-report.html` 与同名 Markdown 报告。HTML 可离线打开，包含生成时的群数据。快照中的总数覆盖完整历史，每位分析师每类最多列最近五条明细。再次执行命令即可取回最新数据。
+
 ## 本机 OStag 群务
 
 连接器的 `OSBORN_FEISHU_LOCAL_ASSISTANT=true` 启用本机群务。设置 `OSTAG_PROJECT_DIR` 为 OStag 仓库绝对路径、`OSTAG_PYTHON` 为本机 Python 3 解释器。连接器和本机 Demo 使用同一个 `REPLAY_DATA_DIR` 与 `REPLAY_PORT`。在 Demo 服务上设置 `REPLAY_FEISHU_CONNECTOR_DIR` 指向现役连接器的绑定与 SQLite 目录。新成员的绑定和登记保存在本机 Demo，已有正式成员按原绑定登记。OStag 通过本机标准输入读取单条指令，日常对话和建议继续使用连接器的模型。

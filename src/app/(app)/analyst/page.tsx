@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Button, Panel, Tag } from '@/components/ui';
+import { buttonClasses } from '@/components/ui/variants';
 import { formatPct } from '@/lib/utils';
 import { fetchProfiles, refreshScores, type ProfileWithSummary } from '@/lib/hooks/useAnalyst';
 import { AnalystDisclaimer } from '@/components/analyst/AnalystDisclaimer';
@@ -54,7 +55,10 @@ export default function AnalystOverviewPage() {
           <p className="mt-1 max-w-3xl text-sm text-[var(--text-dim)]">{t('subtitle')}</p>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <Button size="sm" variant="secondary" onClick={refresh} disabled={refreshing}>{refreshing ? t('scores.refreshing') : t('scores.refresh')}</Button>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/analyst/report" className={buttonClasses('primary','sm')}>{t('report.title')}</Link>
+            <Button size="sm" variant="secondary" onClick={refresh} disabled={refreshing}>{refreshing ? t('scores.refreshing') : t('scores.refresh')}</Button>
+          </div>
           {refreshMsg && <span className={`text-xs ${refreshMsg.ok ? 'text-[var(--text-dim)]' : 'text-[var(--down)]'}`}>{refreshMsg.text}</span>}
         </div>
       </header>
