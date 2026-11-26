@@ -536,7 +536,7 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
 - 当时的 CN 事实范围 = `research_entity_keys.in_scope` 且已挂接发行人（`issuer_id`），因此还要先跑 `link-research-entities.ts --apply`。在这两步之前，CN cron 运行只会空转。
 - Vercel `TUSHARE_TOKEN`：**已存在**（production，56 字符）；本会话未设置、未改动。
 
-### 10.6a A 股首批范围：沪深 300（<PR>）
+### 10.6a A 股首批范围：沪深 300（#336）
 
 0. 按 10.2 对 `20261215090000_universe_csi300.sql` 做 `begin … rollback` 演练。通过后在同一事务中应用迁移并登记历史行，再部署含本次改动的提交：
 
