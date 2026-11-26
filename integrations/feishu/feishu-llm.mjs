@@ -124,7 +124,15 @@ async function readCompletion(response) {
   let choice;
   try { choice = JSON.parse(body + decoder.decode())?.choices?.[0]; }
   catch { throw new ModelFailure('MODEL_OUTPUT'); }
+  const message=choice?.message;
+  if (choice?.finish_reason === 'content_filter' || message?.refusal) throw new ModelFailure('MODEL_REPLY_BLOCKED');
+  if (message?.tool_calls?.length || message?.function_call) throw new ModelFailure('MODEL_OUTPUT');
   if (choice?.finish_reason === 'length') throw new ModelFailure('MODEL_TRUNCATED');
+  if (choice?.finish_reason === 'stop' && isRecord(message) &&
+      ((typeof message.content === 'string' && !message.content.trim().replace(/^<think>[\s\S]*?<\/think>\s*/i,'')) ||
+       (message.content === null && (typeof message.reasoning_content === 'string' || typeof message.reasoning === 'string')))) {
+    throw new ModelFailure('MODEL_EMPTY');
+  }
   if (!choice || (choice.finish_reason != null && choice.finish_reason !== 'stop') || typeof choice.message?.content !== 'string') {
     throw new ModelFailure('MODEL_OUTPUT');
   }
@@ -186,6 +194,82 @@ function modelSettings(env) {
   return {url,bailian,model,timeoutMs,headers};
 }
 
+function fallbackSettings(env, primary, allowed) {
+  if (allowed !== true || !primary || primary.bailian) return null;
+  try {
+    const backup = modelSettings({
+      FEISHU_LLM_BASE_URL:env.FEISHU_LLM_FALLBACK_BASE_URL,
+      FEISHU_LLM_MODEL:env.FEISHU_LLM_FALLBACK_MODEL,
+      FEISHU_LLM_API_KEY:env.FEISHU_LLM_FALLBACK_API_KEY,
+      FEISHU_LLM_TIMEOUT_MS:env.FEISHU_LLM_FALLBACK_TIMEOUT_MS || '10000',
+    });
+    // Only a specifically configured HTTPS Model Studio origin may receive the backup credential.
+    const afterSetting=env.FEISHU_LLM_FALLBACK_AFTER_MS?.trim();
+    const afterMs=afterSetting ? Number(afterSetting) : primary.timeoutMs;
+    if (!Number.isSafeInteger(afterMs) || afterMs<1 || afterMs>60_000 || !backup?.bailian) return null;
+    return {...backup,afterMs};
+  } catch {
+    // An incomplete/invalid backup configuration cannot prevent the local model from serving.
+    return null;
+  }
+}
+
+const privateCloudInput = /(?:\bsk-[\w.-]{6,}|\b(?:bearer|basic)\s+[^\s]+|(?:api[-_ ]?key|app[-_ ]?secret|access[-_ ]?token|refresh[-_ ]?token|password|密钥|验证码|密码)\s*[:：=]|-----BEGIN [^\n]*PRIVATE KEY-----|https?:\/\/[^\s]*\/open-apis\/bot\/v2\/hook\/)/iu;
+function cloudText(text,primary,backup) {
+  if (!backup || privateCloudInput.test(text)) return null;
+  for (const settings of [primary,backup]) {
+    const credential = settings.headers.Authorization?.slice(7);
+    if (credential && text.includes(credential)) return null;
+  }
+  return withoutFeishuIds(text)
+    .replace(/\bcli_[\w-]+|\b[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}\b/giu,'[标识]')
+    .replace(/[\w.+%-]+@[\w.-]+\.[a-z]{2,}|(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/giu,'[联系方式]');
+}
+
+function cloudReadContext(readContext) {
+  if (!readContext) return {};
+  const {source,scope,sections} = readContext;
+  return {readContext:{source,scope,...(sections && {sections})}};
+}
+
+const cloudContextGuidance = '\n本轮只带当前消息和有限的结构化上下文。此前名单、报表及草稿原值保留在本地。引用之前报表查询新的栏目用 scope=context，需要原文、数值或列表才能解释时只追问缺少的部分，不猜测具体记录。';
+const cloudChatGuidance = '\n整个回答必须是单个 JSON 对象。询问待办、登记过的建议、评分、命中率、成交或名单时只返回对应的 read 工具。' +
+  '例如“我手头还有哪些事得我点头？”返回 {"read":"pending"}；无论有没有待办，你都没拿到记录，只有工具能给出实际结果。' +
+  '普通聊天、流程说明或缺少对象时，返回 {"reply":"一句自然的答复或追问"}。reply 里禁止报告私人业务记录、姓名、数量、分数或状态。';
+
+function mayFailOver(error) {
+  if (!(error instanceof ModelFailure)) return false;
+  if (['MODEL_TIMEOUT','MODEL_TRANSPORT','MODEL_TRUNCATED','MODEL_EMPTY'].includes(error.code)) return true;
+  return error.code === 'MODEL_HTTP' && ([404,408,425,429].includes(error.status) || error.status >= 500);
+}
+
+async function infer(primary, backup, fetchImpl, localRequest, makeCloudRequest, parse, component, onFallback) {
+  if (!makeCloudRequest) return parse(await requestCompletion(primary,fetchImpl,localRequest),false);
+  const reserve = Math.min(backup.timeoutMs,Math.floor(primary.timeoutMs/2));
+  if (!reserve) return parse(await requestCompletion(primary,fetchImpl,localRequest),false);
+  const deadline = performance.now() + primary.timeoutMs;
+  let answer;
+  try {
+    const localMs=Math.min(backup.afterMs,primary.timeoutMs-reserve);
+    answer = await requestCompletion({...primary,timeoutMs:localMs},fetchImpl,localRequest);
+  } catch (error) {
+    const remaining = Math.floor(deadline-performance.now());
+    if (!mayFailOver(error) || remaining < 1) throw error;
+    let success = false;
+    try {
+      const cloudAnswer = await requestCompletion({...backup,timeoutMs:Math.min(remaining,backup.timeoutMs)},
+        fetchImpl,makeCloudRequest());
+      const result = parse(cloudAnswer,true);
+      success = true;
+      return result;
+    } finally {
+      if (onFallback) try { onFallback({component,success,reason:error.code}); } catch { /* Observing cannot retry a request. */ }
+    }
+  }
+  // Validate the model answer outside the transport catch. Rejected actions and evidence are never retried elsewhere.
+  return parse(answer,false);
+}
+
 async function requestCompletion({url,bailian,model,timeoutMs,headers},fetchImpl,options) {
   const signal = AbortSignal.timeout(timeoutMs);
   try {
@@ -206,10 +290,12 @@ async function requestCompletion({url,bailian,model,timeoutMs,headers},fetchImpl
   }
 }
 
-export function createFeishuLlmExtractor(env = process.env, {fetchImpl = fetch,formalTrades = false,promptCandidate = activePrompt,readPrompt = () => promptCandidate} = {}) {
+export function createFeishuLlmExtractor(env = process.env, {fetchImpl = fetch,formalTrades = false,promptCandidate = activePrompt,readPrompt = () => promptCandidate,
+  allowCloudFallback = false,onFallback} = {}) {
   const settings = modelSettings(env);
   if (!settings) return undefined;
   const allowReads=formalTrades && !settings.bailian;
+  const backup=fallbackSettings(env,settings,allowCloudFallback);
   return async ({text, priorFields = {}, pendingFields, receivedAt, isSupplement = false, pendingApproval = false, conversation = [], readContext, onRawPacket}) => {
     if (typeof text !== 'string' || !text.trim() || text.length > 12_000 || !isRecord(priorFields) ||
         typeof receivedAt !== 'string' || !Number.isFinite(Date.parse(receivedAt)) || typeof isSupplement !== 'boolean' ||
@@ -225,14 +311,28 @@ export function createFeishuLlmExtractor(env = process.env, {fetchImpl = fetch,f
       ...(pendingApproval && {pendingApproval:true}),
       ...(isSupplement && pendingFields?.length && {pendingFields})};
     try {
-      const answer = await requestCompletion(settings,fetchImpl,{
+      const instructions=formalTrades ? prompt + formalTradePrompt + (allowReads ? '\n\n' + extractReadInstructions : '') : prompt;
+      const request={
         temperature:0,max_tokens:900,response_format:{type:'json_object'},messages:[
-          {role:'system', content:formalTrades ? withPromptGuidance(prompt + formalTradePrompt +
-            (allowReads ? '\n\n' + extractReadInstructions : ''),readPrompt().extraction) : prompt},
+          {role:'system', content:formalTrades ? withPromptGuidance(instructions,readPrompt().extraction) : instructions},
           {role:'user', content:JSON.stringify(captured)},
         ],
+      };
+      const safeText=cloudText(text,settings,backup);
+      const makeCloudRequest=safeText && (() => {
+        const data={text:safeText,receivedAt:captured.receivedAt,isSupplement,...cloudReadContext(priorRead),
+          ...(pendingApproval && {pendingApproval:true})};
+        if (isSupplement) {
+          data.knownFields=Object.keys(captured.priorFields);
+          data.pendingFields=(pendingFields ?? []).filter(key=>textFields.has(key) || numericFields.has(key));
+        }
+        return {...request,messages:[{role:'system',content:instructions+cloudContextGuidance+
+          '\nknownFields 是草稿中已有非空值的字段名，pendingFields 是仍缺的字段；只提取当前消息的补充。'},
+          {role:'user',content:JSON.stringify(data)}]};
       });
-      return readInterpretation(answer,{text,priorFields,pendingFields,isSupplement,formalTrades,allowReads,onRawPacket});
+      return await infer(settings,backup,fetchImpl,request,makeCloudRequest,(answer,cloud) =>
+        readInterpretation(answer,{text,priorFields,pendingFields,isSupplement,formalTrades,allowReads,
+          onRawPacket:cloud ? undefined : onRawPacket}),'extraction',onFallback);
     } catch {
       // Provider errors can echo credentials and message content.
       throw Error('飞书建议识别模型暂时不可用。');
@@ -304,11 +404,33 @@ function plainChatReply(answer, proposalContext) {
   return characters.length <= limit ? text : characters.slice(0,limit-1).join('') + '…';
 }
 
-export function createFeishuChatResponder(env = process.env, {fetchImpl = fetch,promptCandidate = activePrompt,readPrompt = () => promptCandidate} = {}) {
+const privateRecordWords = /待办|待[你您我他她]?确认|待处理|待审|点头|提案|审批|建议|模拟|成交|持仓|命中|得分|评分|胜率|入账|登记|确认单|订单|账户|组合|股票|均价|股价|报价|分析师|投研|研究员|报表/u;
+const recordNumber = /[\d０-９%％]|[零〇一二两三四五六七八九十百千万亿半]+(?:点[零〇一二两三四五六七八九]+)?\s*(?:[条笔个项位名人成分股手单次元%％]|百分点)|百分之|[几多]笔|[多几若]条/u;
+const recordStatus = /暂无|没有|未查到|未发现|为零|无记录|无待办|空的|都(?:已|没)|(?:已|仍|尚|正在|等待|未|待|需要)(?:经)?(?:登记|提交|成交|执行|采纳|批准|审批|确认)|(?:有|剩|积压|还有)(?:一些|待办|交易|新的|待确认)|(?:记录|报表|回执)显示|(?:本群|群里|账户|组合)(?:中|里)?(?:目前|现在)?(?:有|持有|包括|都是|分别是|为)/u;
+function cloudChatReply(answer,question) {
+  let packet;
+  try { packet=JSON.parse(answer); } catch { throw new ModelFailure('MODEL_OUTPUT'); }
+  const tool=parseFeishuReadTool(packet);
+  if (tool) return tool;
+  if (!isRecord(packet) || Object.keys(packet).length!==1 || typeof packet.reply!=='string') {
+    throw new ModelFailure('MODEL_OUTPUT');
+  }
+  const reply=plainChatReply(packet.reply,null);
+  if (typeof reply!=='string') throw new ModelFailure('MODEL_OUTPUT');
+  // The backup never sees the underlying account records. A prose answer cannot supply their values or status.
+  if (privateRecordWords.test(question+reply) && (recordNumber.test(reply) || recordStatus.test(reply))) {
+    return '你要核对本群待办，还是某位分析师的建议、评分或模拟成交？';
+  }
+  return reply;
+}
+
+export function createFeishuChatResponder(env = process.env, {fetchImpl = fetch,promptCandidate = activePrompt,readPrompt = () => promptCandidate,
+  allowCloudFallback = false,onFallback} = {}) {
   let settings;
   try { settings = modelSettings(env); }
   catch { return undefined; }
   if (!settings || settings.bailian) return undefined;
+  const backup=fallbackSettings(env,settings,allowCloudFallback);
   // Cache only the read decision. The workflow reauthorizes and retrieves fresh data on every request.
   const readDecisions=new Map();
   return async ({text,history = [],isAnalyst = false,isApprover = false,proposalContext = null,readContext,onSentHistory}) => {
@@ -325,16 +447,22 @@ export function createFeishuChatResponder(env = process.env, {fetchImpl = fetch,
       const key=createHash('sha256').update(JSON.stringify(messages)).digest('hex');
       const cached=readDecisions.get(key);
       if (cached && cached.until > Date.now()) return structuredClone(cached.query);
-      const answer = await requestCompletion(settings,fetchImpl,{
-        temperature:0.2,max_tokens:768,messages,
-      });
-      if (onSentHistory) try { onSentHistory(captured.history); } catch { /* Observing must not affect the answer. */ }
-      const result=plainChatReply(answer,captured.proposalContext);
-      if (typeof result === 'object') {
-        if (readDecisions.size >= 128) readDecisions.delete(readDecisions.keys().next().value);
-        readDecisions.set(key,{query:structuredClone(result),until:Date.now()+300_000});
-      }
-      return result;
+      const request={temperature:0.2,max_tokens:768,messages};
+      const safeText=cloudText(captured.text,settings,backup);
+      const makeCloudRequest=safeText && (() => ({...request,response_format:{type:'json_object'},messages:[
+        {role:'system',content:chatPrompt+cloudContextGuidance+cloudChatGuidance},
+        {role:'user',content:JSON.stringify({text:safeText,isAnalyst:captured.isAnalyst,isApprover:captured.isApprover,
+          history:[],proposalContext:null,...cloudReadContext(priorRead)})},
+      ]}));
+      return await infer(settings,backup,fetchImpl,request,makeCloudRequest,(answer,cloud) => {
+        if (onSentHistory) try { onSentHistory(cloud ? [] : captured.history); } catch { /* Observing must not affect the answer. */ }
+        const result=cloud ? cloudChatReply(answer,safeText) : plainChatReply(answer,captured.proposalContext);
+        if (!cloud && typeof result === 'object') {
+          if (readDecisions.size >= 128) readDecisions.delete(readDecisions.keys().next().value);
+          readDecisions.set(key,{query:structuredClone(result),until:Date.now()+300_000});
+        }
+        return result;
+      },'chat',onFallback);
     } catch (error) {
       if (error instanceof ModelFailure) throw error;
       throw new ModelFailure('MODEL_OUTPUT');

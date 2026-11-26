@@ -16,9 +16,10 @@ export function createFormalFeishuWorkflow({sendMessage,wake,env = process.env,e
   const directory = resolve(env.FEISHU_DATA_DIR || defaultDirectory);
   const config = readFeishuBindings(directory);
   const syncFormal = createFormalSync(env);
-  const readPrompt = createPublishedPromptReader();
-  const extractor = extractWithModel ?? createFeishuLlmExtractor(env,{formalTrades:true,readPrompt});
-  const chat = respondToChat ?? createFeishuChatResponder(env,{readPrompt});
+  const modelOptions = {readPrompt:createPublishedPromptReader(),allowCloudFallback:true,
+    onFallback:({component,success,reason}) => console.info('飞书模型备用调用',component,reason,success ? '成功' : '失败')};
+  const extractor = extractWithModel ?? createFeishuLlmExtractor(env,{...modelOptions,formalTrades:true});
+  const chat = respondToChat ?? createFeishuChatResponder(env,modelOptions);
   if (!syncFormal || !extractor || !config.chatId || config.simulationAccount?.confirmed !== true ||
       !isUuid(config.simulationAccount.id) || !Array.isArray(config.approverIds) || !config.approverIds.length ||
       !Object.keys(config.analystBySender ?? {}).length) {

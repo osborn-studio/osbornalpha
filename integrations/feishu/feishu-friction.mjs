@@ -53,7 +53,7 @@ function fieldsOf(values, names, model = false) {
 
 const intents = new Set(['other', 'proposal', 'help', 'ambiguous', 'cancel']);
 const topics = new Set(['missing', 'usage', 'investment']);
-const modelErrorCodes = new Set(['MODEL_TIMEOUT', 'MODEL_TRANSPORT', 'MODEL_HTTP', 'MODEL_OUTPUT', 'MODEL_TRUNCATED', 'MODEL_REPLY_BLOCKED']);
+const modelErrorCodes = new Set(['MODEL_TIMEOUT', 'MODEL_TRANSPORT', 'MODEL_HTTP', 'MODEL_OUTPUT', 'MODEL_EMPTY', 'MODEL_TRUNCATED', 'MODEL_REPLY_BLOCKED']);
 const reportSections = new Set(['recommendations','scores','trades']);
 function readCategory(action) {
   if (action === null) return 'chat';
