@@ -20,6 +20,8 @@ import {existsSync,readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {Pool} from 'pg';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
+import {freshMigratedDatabase} from '../documents/fresh-db';
+import {reconcileScope} from './scope';
 import {pgTableClient} from '../db/pg-table-client';
 import {pgFactsDb} from './pg-facts-db';
 import {memorySnapshotStore} from './snapshot-store';
@@ -126,6 +128,23 @@ describe.skipIf(!enabled)('F2-4 A-share offline replay on real PostgreSQL',()=>{
   await admin?.end();
  });
 
+ it('fails an empty scheduled scope until its CSI 300 member has a current issuer',async()=>{
+  // Reconciliation scans a whole market. Isolate this test from the other suites' active scope rows.
+  const {adminUrl}=JSON.parse(readFileSync(process.env.S4_TEST_STATE!,'utf8'));
+  const fresh=await freshMigratedDatabase(adminUrl);
+  try{
+   const db=pgFactsDb(fresh.pool),tables=pgTableClient(fresh.pool),ticker='777401.SZ',issuer_id=randomUUID();
+   await tables.insert('stocks_universe',{ticker,name:'Invented issuer',market:'A'});
+   await tables.insert('security_universe_memberships',{ticker,universe:'csi300',as_of_date:today(),source:'test',is_active:true});
+   const r=await runFactsSync({...deps,db,tables},{market:'CN',limit:1,dryRun:false,triggeredBy:'cron'});
+   expect(r).toMatchObject({status:'failed',idle:true,errors:[{code:'empty_scope',message:JSON.stringify({market:'CN',skipped:{csi300_unknown_ticker:1}})}]});
+   expect((await tables.select('dq_freshness',{dataset:'facts.cn'}))[0]).toMatchObject({consecutive_errors:1,detail:{empty_scope:true}});
+   await tables.insert('issuers',{issuer_id,canonical_name_zh:'虚构发行人',country_code:'CN'});
+   await tables.insert('issuer_securities',{issuer_id,ticker,share_class:'A',is_primary:true,valid_from:'2020-01-01',source:'test'});
+   expect(await reconcileScope({db,tables},'CN')).toMatchObject({desired:1,skipped:{}});
+   expect((await db.scopeAll('CN'))[0]).toMatchObject({issuer_id,priority:10,fetch_key:ticker,reasons:['universe:csi300']});
+  }finally{await fresh.drop();}
+ },300_000);
  it('publishes ten years of three statements for every fixture issuer (every fixture-backed annual period of a revenue / balance-sheet / cash-flow concept); ambiguous_value parks are quarantined per issuer by policy',async()=>{
   const r=firstRun;
   expect(r.detail).toMatchObject({published:TS_CODES.length,failed:0});

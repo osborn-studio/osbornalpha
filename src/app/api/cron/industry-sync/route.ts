@@ -6,6 +6,7 @@
 // default E: they are not in vercel.json either). A missing code_version refuses the run. The HTTP
 // receipt carries codes and counts only (no error messages). memberships-sic runs daily 02:00 UTC
 // (limit 200; spec §18 #69); aggregate-sic runs weekly Sunday 04:30 UTC with no CN gate (§19).
+// memberships-csi300 loads the latest month-end snapshot on the third of each month at 03:00 UTC.
 import {timingSafeEqual} from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {resolveCodeVersion} from '@/lib/facts/deps';

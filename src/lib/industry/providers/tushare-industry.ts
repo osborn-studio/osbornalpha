@@ -33,7 +33,7 @@ export const DAILY_BASIC_FIELDS=['ts_code','trade_date','close','total_share','f
 /** daily_basic numbers stay canonical decimal strings (spec §6.1; total_share/free_share in 万股, total_mv in 万元; K2: total_share = all classes A+H+B). */
 export const DAILY_BASIC_SCHEMA:NumberSchema={control:[],decimal:['close','total_share','free_share','total_mv']};
 /** Documented single-call row caps (spec §2): index_member_all 2000, daily_basic 6000; stock_basic/index_classify are small. */
-export const PAGE_SIZE:Record<string,number>={stock_basic:5000,index_classify:2000,index_member_all:2000,daily_basic:6000};
+export const PAGE_SIZE:Record<string,number>={stock_basic:5000,index_classify:2000,index_member_all:2000,index_weight:6000,daily_basic:6000};
 export {TUSHARE_MIN_INTERVAL_MS} from '../../sources/tushare-transport';
 const MAX_PAGES=200;
 

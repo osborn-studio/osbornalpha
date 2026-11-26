@@ -77,6 +77,11 @@ describe('facts sync cron',()=>{
   expect(await res.json()).toMatchObject({ok:false,market:'CN',limit:5});
   expect(mocks.run.mock.calls[0][1]).toMatchObject({market:'CN',limit:5});
  });
+ it('returns ok=false and the empty_scope code for an empty scheduled market',async()=>{
+  mocks.run.mockResolvedValue({status:'failed',idle:true,errors:[{code:'empty_scope',message:'internal counts'}],issuers:[]});
+  const res=await GET(req('market=CN',AUTH));
+  expect(await res.json()).toMatchObject({ok:false,receipt:{status:'failed',idle:true,errors:[{code:'empty_scope'}]}});
+ });
  it('repeated limit is invalid_parameter:limit',async()=>{
   const res=await GET(req('market=US&limit=5&limit=6',AUTH));
   expect(res.status).toBe(400);expect((await res.json()).error.code).toBe('invalid_parameter:limit');

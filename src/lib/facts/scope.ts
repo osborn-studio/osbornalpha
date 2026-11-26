@@ -7,8 +7,8 @@
 //      ticker (issuer_securities row current at `today` by the landed predicate of
 //      entities/resolve.ts — a scheduled future end keeps the owner current, round-1 #22) that has
 //      a CIK; fetch_key = 10-digit CIK; priority 10.
-//  CN: research_entity_keys.in_scope and issuer_id is not null → the issuer's current primary
-//      .SH/.SZ/.BJ ticker; reasons ['cohort']; priority 10 (owner decision A).
+//  CN: in-scope cohort issuers and current owners of active CSI 300 tickers, plus the optional
+//      industry universe. Reasons are merged per issuer; a cohort row keeps its A-share fetch key.
 //  Watchlists are never a source (owner decision B).
 // scopeRowFor derives ONE issuer's row the same way for explicit --issuer / replay runs (round-1
 // #13; reasons ['explicit']). Source reads go through TableClient and always page to exhaustion
@@ -22,6 +22,7 @@ import {isCurrentSecurity} from '../entities/resolve';
 import type {FactsDb,Market} from './types';
 
 export const US_UNIVERSES=['sp500','nasdaq_top500','us_china'] as const;
+export const CN_UNIVERSES=['csi300'] as const;
 export const SCOPE_PRIORITY=10;
 const CN_TICKER=/\.(SH|SZ|BJ)$/;
 // B shares trade under A-share-looking codes but are another class (same pattern as entities/link-research.ts, not exported there).
@@ -136,19 +137,41 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
  const keys=await keysetAll(tables,'research_entity_keys',{in_scope:true},{},'entity_id',['user_id','entity_id']);
  const issuerIds=new Set<string>();
  for(const k of keys){const id=str(k.issuer_id);if(id)issuerIds.add(id);else bump(skipped,'no_issuer');}
- const byIssuer=new Map<string,Row[]>();
+ const byIssuer=new Map<string,Row[]>(),ownerByTicker=new Map<string,string>();
  for(const s of await currentSecurities(tables,today)){
   const id=str(s.issuer_id);if(!id)continue;
+  ownerByTicker.set(normTicker(String(s.ticker)),id);
   (byIssuer.get(id)??byIssuer.set(id,[]).get(id)!).push(s);
  }
- const out:DesiredRow[]=[];
+ const desired=new Map<string,DesiredRow>();
  for(const id of [...issuerIds].sort()){
   const c=chooseCnTicker(byIssuer.get(id)??[]);
   if('reason' in c){bump(skipped,c.reason);continue;}
-  out.push({issuer_id:id,reasons:['cohort'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})});
+  desired.set(id,{issuer_id:id,reasons:['cohort'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})});
  }
+ for(const u of CN_UNIVERSES){
+  const members=await selectAll(tables,'security_universe_memberships',{universe:u,is_active:true},'ticker');
+  if(!members.length)continue;
+  const owners=new Set<string>();
+  for(const m of members){
+   const id=ownerByTicker.get(normTicker(String(m.ticker)));
+   if(id)owners.add(id);else bump(skipped,`${u}_unknown_ticker`);
+  }
+  const issuers=await selectAll(tables,'issuers',{},'issuer_id');
+  const status=new Map(issuers.map(i=>[String(i.issuer_id),i.status]));
+  for(const id of owners){
+   if(!status.has(id)){bump(skipped,`${u}_unknown_issuer`);continue;}
+   if(status.get(id)==='merged'){bump(skipped,`${u}_issuer_merged`);continue;}
+   const row=desired.get(id);
+   if(row){row.reasons.push(`universe:${u}`);row.reasons.sort();continue;}
+   const c=chooseCnTicker(byIssuer.get(id)??[]);
+   if('reason' in c){bump(skipped,`${u}_${c.reason}`);continue;}
+   desired.set(id,{issuer_id:id,reasons:[`universe:${u}`],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})});
+  }
+ }
+ const out=[...desired.values()];
  // INDUSTRY:BEGIN — industry fact universe (industry spec §4.10, V3; owner decision E). Only with FACTS_CN_INDUSTRY_UNIVERSE=1;
- // flag off → this block is skipped and desiredCn returns exactly plan 2's cohort set. Dynamic import: no load-time cycle.
+ // The industry rows merge onto cohort and CSI 300. Dynamic import avoids a load-time cycle.
  if(process.env.FACTS_CN_INDUSTRY_UNIVERSE==='1'){
   const {industryCnUniverse,mergeDesired}=await import('../industry/facts-scope');
   return mergeDesired(out,await industryCnUniverse(tables,today,skipped));

@@ -3,7 +3,8 @@
 // fetch → snapshot → parse → read + plan → stage → quarantine → publish → link (CN) →
 // materialize → release. Every write goes through the injected FactsDb (lease-checked SQL
 // functions); a lease_lost stops the issuer without any further database call; budget
-// exhaustion abandons the in-flight run. Pure helpers (plan, rules) decide, this file sequences.
+// exhaustion abandons the in-flight run. An empty scheduled market fails its batch and freshness
+// attempt; an active market with nothing due keeps its idle heartbeat policy.
 import {execFileSync} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import type {TableClient} from '../db/table-client';
@@ -58,7 +59,7 @@ export interface SyncOptions{market:Market;limit:number;issuerIds?:string[];dryR
 export type IssuerOutcomeKind='published'|'planned'|'failed'|'skipped';
 export interface IssuerOutcome{issuerId:string;fetchKey:string;runId:string|null;outcome:IssuerOutcomeKind;code?:string;counts:BatchCounts;errors:BatchError[];warnings:Map<string,string[]>;snapshotSha256:string[];/** step 9b enrichment counters (US, when it ran); separate from counts */acceptance?:BatchCounts}
 export interface SyncDetail{attempted:number;published:number;failed:number;skipped:number;idle:boolean}
-/** detail is the same object recorded on dq_freshness (spec §6.1) so cron receipts and the runbook read one shape. */
+/** Freshness records the receipt detail plus empty_scope:true for a scheduled market without active rows. */
 export interface SyncReceipt{batchId:string|null;status:BatchStatus|'dry_run';counts:BatchCounts;errors:BatchError[];issuers:IssuerOutcome[];idle:boolean;detail:SyncDetail}
 
 const DAY=86_400_000;
@@ -385,6 +386,8 @@ async function selectScopes(deps:SyncDeps,opts:SyncOptions):Promise<Selected[]>{
  return ids.map(id=>{const scope=have.get(id);return scope?{scope}:{unresolved:id};});
 }
 
+const emptyScopeError=(market:Market,skipped:Record<string,number>):BatchError=>({code:'empty_scope',message:JSON.stringify({market,skipped})});
+
 /** Dry run: fetch, parse and plan against the current rows, write nothing (no batch, lease, snapshot or run). Planned issuers report outcome 'planned'. */
 async function dryRun(deps:SyncDeps,opts:SyncOptions,sinceYear:number,gen:number,budget:Budget):Promise<SyncReceipt> {
  const counts=emptyCounts();const errors:BatchError[]=[];const issuers:IssuerOutcome[]=[];
@@ -407,6 +410,7 @@ async function dryRun(deps:SyncDeps,opts:SyncOptions,sinceYear:number,gen:number
   issuers.push(out);for(const k of COUNTERS)counts[k]+=out.counts[k];errors.push(...out.errors);
  }
  const idle=selected.length===0;
+ if(idle&&opts.issuerIds===undefined&&!(await deps.db.scopeAll(opts.market)).some(s=>s.priority>0))errors.push(emptyScopeError(opts.market,{}));
  return {batchId:null,status:'dry_run',counts,errors,issuers,idle,detail:{attempted:selected.length,published:0,failed,skipped:0,idle}};
 }
 
@@ -423,7 +427,7 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
   // Scheduled path (cron): reconcile the scope first (spec §6.1). Explicit issuers (scripts, replay
   // tests) skip it: their scope rows were put there by the caller and must not be retired by sources
   // the caller does not control.
-  if(opts.issuerIds===undefined)await reconcileScope({db:deps.db,tables:deps.tables},market);
+  const reconcile=opts.issuerIds===undefined?await reconcileScope({db:deps.db,tables:deps.tables},market):null;
   const selected=await selectScopes(deps,opts);
   idle=selected.length===0;
   for(let i=0;i<selected.length;i++){
@@ -439,14 +443,15 @@ export async function runFactsSync(deps:SyncDeps,opts:SyncOptions):Promise<SyncR
    if(r.code==='quota_exhausted')quota=true;
   }
   errors.push(...summarizeWarnings(warnings));
+  const active=idle?(await deps.db.scopeAll(market)).filter(s=>s.priority>0):[];
+  const emptyScope=idle&&reconcile!==null&&active.length===0;
+  if(emptyScope)errors.push(emptyScopeError(market,reconcile.skipped));
   const status=await finishBatch(deps.tables,batchId,{counts,errors},deps.now());
-  const ok=idle||published>=Math.max(1,Math.ceil(attempted/2));
+  const ok=!emptyScope&&(idle||published>=Math.max(1,Math.ceil(attempted/2)));
   const detail:SyncDetail={attempted,published,failed,skipped,idle};
-  // An idle run (nothing due) is a heartbeat ONLY while no active scope row (priority > 0) of this market has
-  // last_status 'failed': a healthy quiet week stays fresh, but an issuer that fails on every retry cannot be
-  // masked by the idle runs between its attempts (spec §16 deviation: the spec says idle = always ok).
-  const failingActive=idle&&(await deps.db.scopeAll(market)).some(s=>s.priority>0&&s.last_status==='failed');
-  if(!failingActive)await recordAttempt(deps.tables,dataset,{ok,cadence:inventoryEntry(dataset).cadence,now:deps.now(),detail:{...detail}});
+  // Idle runs between retries leave freshness untouched while an active issuer is failing.
+  const failingActive=active.some(s=>s.last_status==='failed');
+  if(!failingActive)await recordAttempt(deps.tables,dataset,{ok,cadence:inventoryEntry(dataset).cadence,now:deps.now(),detail:emptyScope?{...detail,empty_scope:true}:{...detail}});
   return {batchId,status,counts,errors,issuers,idle,detail};
  }catch(e){
   // Infrastructure failure outside an issuer: close the receipt so no running batch dangles, then rethrow.

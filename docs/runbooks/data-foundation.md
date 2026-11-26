@@ -240,6 +240,8 @@ EDGAR 夹具裁剪到 §3 概念标签与 `end >= 2019-01-01` 的条目，顶层
 
 ### 8.8 运行同步与物化
 
+CN 事实范围按发行人取并集：已挂接发行人的研究队列（`cohort`）、沪深 300 有效成员（`universe:csi300`），以及开启 `FACTS_CN_INDUSTRY_UNIVERSE=1` 后的行业范围（`universe:a_stock`、`universe:sw2021`）。一个发行人可以有多个来源，抓取使用其 A 股代码。
+
 环境：`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`；`EDGAR_USER_AGENT`（SEC 要求带联系方式；缺省 `DEFAULT_USER_AGENT`，生产务必设置真实值）；`TUSHARE_TOKEN`（CN 必需；Vercel 必须配置，否则 CN cron 每次失败）；`CRON_SECRET`（cron；缺失 → 503 `cron_unavailable`）；`FACTS_CN_ENABLED`（缺省开启 CN；设为 `0` 关闭 CN `--apply` 与 CN cron 的开关）；`VERCEL_GIT_COMMIT_SHA`（Vercel 自动注入；cron 路由只认它，缺失 → 503 `code_version_unavailable`；脚本回退到 `git rev-parse HEAD`，脏树加 `-dirty`；取不到则拒绝 `--apply`）。
 
 `sync.ts` 参数：`--market US|CN`（必填）、`--issuer <ticker>`（可重复）、`--cik <cik>`（仅 `--no-db`，可重复）、`--limit n`（1..1000，默认 25；cron 路由另限 1..200）、`--since-year y`（1990..当年；缺省 = 当前 UTC 年 − 10）、`--apply`、`--no-db`。退出码 2（用法/前置错误，未做任何事）：未知参数或缺值、`--market` 非 US/CN、`--limit` 越界、`--since-year` 越界、`--no-db` 的组合不合法（需 `--market US` + `--cik`，排斥 `--apply/--issuer`）、非 `--no-db` 却给了 `--cik`、`--market CN --apply` 而 `FACTS_CN_ENABLED=0`、`--apply` 取不到代码版本、`--issuer` 给了未知票据。退出码 1：运行出错或有发行人 `outcome:'failed'`（含 `scope_unresolved`）。
@@ -256,7 +258,7 @@ node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US
 node --env-file=.env.local --import tsx scripts/facts/materialize.ts --market US --all
 ```
 
-cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`（常量时间比较），`maxDuration=300`，截止 240 s，默认 `limit=25`，范围 1..200，参数重复 → 400；`vercel.json` 登记 `market=US`（`5 */4 * * *`）与 `market=CN`（`35 */4 * * *`，错开 30 分钟）。**每 4 小时的 cron 需要 Vercel Pro**（Hobby 只允许每天一次），见 8.11-1。`FACTS_CN_ENABLED=0` 时 CN 路由返回 403 `cn_disabled`（关闭开关）。HTTP 回执只含码与计数（`market=CN` 且无 `TUSHARE_TOKEN` → 503 `tushare_unconfigured`，在取依赖与建批次之前；批次失败时仍是 HTTP 200 + `ok:false` 的失败回执，看 `receipt.errors`；失败发行人 1 天后重试，成功后 7 天；**空转（无到期发行人）仅当该市场没有 `priority > 0` 且 `last_status='failed'` 的 scope 行时才记 ok 心跳**（健康的安静一周保持 fresh）；有失败中的活跃发行人时空转不写 `dq_freshness`，失败不会被空转掩盖；Tushare 请求间隔 400 ms，即 150 次/分钟；非 parse 类 SyncError 只存错误码，唯一例外是白名单原因 `multi_page_unverified:<api>:rt<n>`，存为该条错误的 message）（不含错误消息、warnings、快照哈希）：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors:[{code,key?}], idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors}]}}`；脚本输出完整的 `SyncReceipt`（含 `runId`、`warnings`、`snapshotSha256`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账且不受 `limit` 约束（每个显式发行人都有 outcome）：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。抓取器抛出的、不在解析白名单内的错误，其消息只存前 200 字符，且抓取器不得把响应体放进消息。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 空转或 `published ≥ max(1, ceil(attempted/2))`。
+cron：`GET|POST /api/cron/facts-sync?market=US|CN[&limit=n]`，Bearer `CRON_SECRET`（常量时间比较），`maxDuration=300`，截止 240 s，默认 `limit=25`，范围 1..200，参数重复 → 400；`vercel.json` 登记 `market=US`（`5 */4 * * *`）与 `market=CN`（`35 */4 * * *`，错开 30 分钟）。**每 4 小时的 cron 需要 Vercel Pro**（Hobby 只允许每天一次），见 8.11-1。`FACTS_CN_ENABLED=0` 时 CN 路由返回 403 `cn_disabled`（关闭开关）。HTTP 回执只含码与计数（`market=CN` 且无 `TUSHARE_TOKEN` → 503 `tushare_unconfigured`，在取依赖与建批次之前；批次失败时仍是 HTTP 200 + `ok:false` 的失败回执，看 `receipt.errors`；失败发行人 1 天后重试，成功后 7 天；**空转（无到期发行人）仅当该市场有活跃 scope 行（`priority > 0`）且这些行均无 `last_status='failed'` 时才记 ok 心跳**（健康的安静一周保持 fresh）；若活跃行数为零，定时批次以 `empty_scope` 失败，保留 `idle:true`，新鲜度记一次失败（连续两次进入 error）；有失败中的活跃发行人时空转不写 `dq_freshness`，失败不会被空转掩盖；Tushare 请求间隔 400 ms，即 150 次/分钟；非 parse 类 SyncError 只存错误码，唯一例外是白名单原因 `multi_page_unverified:<api>:rt<n>`，存为该条错误的 message）（不含错误消息、warnings、快照哈希）：`{ok, market, limit, started_at, receipt:{batchId, status, counts, errors:[{code,key?}], idle, detail:{attempted, published, failed, skipped, idle}, issuers:[{issuerId, fetchKey, outcome:'published'|'planned'|'failed'|'skipped', code?, counts, errors}]}}`；脚本输出完整的 `SyncReceipt`（含 `runId`、`warnings`、`snapshotSha256`）。cron 先 `reconcileScope` 再取到期发行人；脚本 `--issuer` / `--no-db` 直指发行人时不对账且不受 `limit` 约束（每个显式发行人都有 outcome）：scope 行按 id 直取，缺行时 `--apply` 由发行人表算出并补建（`reasons:['explicit']`，下一次 cron 对账若来源表不含该发行人会把它退到 `priority 0`），dry-run 构造只读行；算不出 `fetch_key`（无 CIK / 无 A 股上市）的发行人以 `outcome:'failed', code:'scope_unresolved'` 出现，脚本退出码 1。`errors` 的信息码：`skipped_summary`（含 `<issuer>:parser` 的解析器跳过计数与 `<issuer>:cninfo_link`）、`coverage_summary`（CN，`{"<api>:rt<n>":"<首年>-<末年>:<期末数>"}`）、`rule_warning_summary`、`deadline_hit`。抓取器抛出的、不在解析白名单内的错误，其消息只存前 200 字符，且抓取器不得把响应体放进消息。发布之后的失败（挂接、物化、释放）不撤发布：发行人 outcome 仍 `published`，原错误按自身码记入 `errors`，租约以 `failed` 释放（1 天后重试）。新鲜度 dataset `facts.us` / `facts.cn`，`ok` = 健康空转或 `published ≥ max(1, ceil(attempted/2))`。
 
 ### 8.9 悬空 `running` 批次
 
@@ -531,8 +533,56 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
 ### 10.6 A 股
 
 - 本地 CN dry-run（`node --env-file=<仓库外，含 TUSHARE_TOKEN>`）：`sync.ts --market CN --issuer 600519.SH --issuer 000333.SZ` → 退出码 2 `unknown ticker: 600519.SH`。生产里**还没有 A 股发行人**：它们由行业作业 `load-a-share` 装载。其 dry-run（`scripts/industry/sync.ts --job load-a-share`）：candidates 5578、skipped.delisted 342、skipped.not_in_universe 1、rejected_ts_code 1。未 `--apply`（不在本次简报内，需 owner/指挥确认）。
-- CN 事实范围 = `research_entity_keys.in_scope` 且已挂接发行人（`issuer_id`），因此还要先跑 `link-research-entities.ts --apply`。在这两步之前，CN cron 运行只会空转。
+- 当时的 CN 事实范围 = `research_entity_keys.in_scope` 且已挂接发行人（`issuer_id`），因此还要先跑 `link-research-entities.ts --apply`。在这两步之前，CN cron 运行只会空转。
 - Vercel `TUSHARE_TOKEN`：**已存在**（production，56 字符）；本会话未设置、未改动。
+
+### 10.6a A 股首批范围：沪深 300（<PR>）
+
+0. 按 10.2 对 `20261215090000_universe_csi300.sql` 做 `begin … rollback` 演练。通过后在同一事务中应用迁移并登记历史行，再部署含本次改动的提交：
+
+   ```bash
+   vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)
+   ```
+
+1. 装载发行人和 A 股证券。先预览，再写入；逐行写入耗时较长，让进程跑完，不设超时（见 10.4）。
+
+   ```bash
+   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job load-a-share
+   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job load-a-share --apply
+   ```
+
+2. 预览沪深 300 最新成分快照，预期 `fetched=300`、`unknown=0`。核对日期和计数后写入，后续由每月 3 日 03:00 UTC 的 cron 更新。
+
+   ```bash
+   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job memberships-csi300
+   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job memberships-csi300 --apply
+   ```
+
+3. 每次 CN 定时同步先对账。手工执行下列命令可立即对账，并同步至多一家到期发行人。
+
+   ```bash
+   node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market CN --limit 1 --apply
+   ```
+
+   ```sql
+   select count(*) from fact_sync_scope where market='CN' and priority>0;
+   ```
+
+   首批预计约 300 家；研究队列或行业范围可能带来额外发行人。核对跳过计数：成分快照回执的 `unknown` 表示证券主表缺票；若对账后范围为空，事实批次的 `empty_scope` 消息内有按原因汇总的 `skipped`。
+
+4. 首轮同步至多五家，再由 `35 */4 * * *` 的 CN cron 接续。
+
+   ```bash
+   node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market CN --limit 5 --apply
+   ```
+
+吞吐估算：每家 9 次 Tushare 请求（3 张报表 × `report_type` 1/4/5），按 400 ms 间隔预算至少 3.6 s；2026-11-25 测得抓取约 4.7 s/家。以下为容量估算，生产吞吐量尚待实测。cron 在 240 s 预算剩余不足 90 s 时停止启动下一家，预计每轮 12–20 家，每天 6 轮，300 家约需 15–25 轮（约 3–4 天）。预计先触及截止时间，保留 `vercel.json` 的 `limit=25`。需更快补录时，可在工作站运行无 cron 截止时间的命令：
+
+```bash
+node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market CN --limit 200 --apply
+```
+
+CN 文档同步（`document_sync_scope`，巨潮 cninfo）目前仅取研究队列；将沪深 300 纳入文档范围留待后续 PR。
 
 ### 10.7 Vercel
 
