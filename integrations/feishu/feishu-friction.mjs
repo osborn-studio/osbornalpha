@@ -57,8 +57,8 @@ const modelErrorCodes = new Set(['MODEL_TIMEOUT', 'MODEL_TRANSPORT', 'MODEL_HTTP
 const reportSections = new Set(['recommendations','scores','trades']);
 function readCategory(action) {
   if (action === null) return 'chat';
-  if (action === 'analyst_roster' || action === 'pending' || reportSections.has(action)) return action;
-  if (action?.read === 'analyst_roster' || action?.read === 'pending') return action.read;
+  if (action === 'analyst_roster' || action === 'pending' || action === 'group_report' || reportSections.has(action)) return action;
+  if (action?.read === 'analyst_roster' || action?.read === 'pending' || action?.read === 'group_report') return action.read;
   if (action?.read === 'formal_report' && action.sections?.length === 1 && reportSections.has(action.sections[0])) return action.sections[0];
   return undefined;
 }

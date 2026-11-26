@@ -26,7 +26,7 @@ export function publicFeishuReadContext(value) {
 export function parseFeishuReadTool(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const keys=Object.keys(value);
-  if (value.read === 'pending' || value.read === 'analyst_roster') {
+  if (value.read === 'pending' || value.read === 'analyst_roster' || value.read === 'group_report') {
     return keys.length === 1 ? {read:value.read} : null;
   }
   if (value.read !== 'formal_report' || !scopes.has(value.scope) || !allowedSections(value.sections)) return null;

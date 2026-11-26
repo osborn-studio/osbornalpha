@@ -21,6 +21,7 @@ const textFields = new Set([...contextText, 'analyst', 'rationale', 'thesis_ref'
 const numericFields = new Set(['reference_price', 'target_price', 'stop_loss', 'confidence', 'price', 'quantity', 'fee']);
 const readAnalystRoster = '<read_analyst_roster>';
 const readInstructions = `按语义选择只读工具。群分析师名单用 {"read":"analyst_roster"}。PM 现在要确认哪些提案用 {"read":"pending"}。查正式记录用 {"read":"formal_report","sections":["scores"],"scope":"named","subject":"程舒"}。
+群成员希望助手整理本群建议、命中评分及模拟成交的整体情况，或直接要求「生成一份报告」时，返回 {"read":"group_report"}。普通群成员、分析师和 PM 都可以索取这份群报告，无需追问身份、姓名或范围。实际数字由正式查询返回。点名查个人明细、询问某笔建议的原因、查询某段时间、索取个股研报或讨论写报告的方法，按其具体意图处理。
 sections 只选需要的项目：recommendations 为已经登记的建议，scores 为评分、命中率与样本，trades 为建议产生的模拟成交记录。可以一次选多项。scope 必填：查本人用 self，明确指名用 named 并用 subject 给出原文署名；接着查刚才那人、上一份报表或未说明对象用 context，交给系统核实和追问。明确要求全组用 all，范围是本群已绑定的正式分析师。除 named 外省略 subject，禁止提供账号、ID、任意筛选条件。
 readContext 是系统核实的上一份正式报表的查询对象和项目，即使显示零条也保留对象。接着问那个人的另一种记录时，选择新项目并使用 scope=context，不用询问那个人是谁，不能从一项没有记录推断另一项也没有。用户问已经显示的数值才直接解释。
 readContext.source 为 report_scope_question 时，助手正在等对方选择报表对象。若用户答复查询范围，继续用 formal_report 和原 sections，将用户选择填入 scope。若用户改问别的事情，按新问题回答。
@@ -102,13 +103,15 @@ class ModelFailure extends Error {
   }
 }
 
-async function readCompletion(response,signal) {
-  if (!response.ok) {
+async function readCompletion(response,signal,bailian) {
+  const checkBilling=bailian && response.status===400;
+  const invalidBody=()=>response.ok ? new ModelFailure('MODEL_OUTPUT') : new ModelFailure('MODEL_HTTP',response.status);
+  if (!response.ok && !checkBilling) {
     void response.body?.cancel().catch(()=>{});
     throw new ModelFailure('MODEL_HTTP',response.status);
   }
   const reader = response.body?.getReader();
-  if (!reader) throw new ModelFailure('MODEL_OUTPUT');
+  if (!reader) throw invalidBody();
   const decoder = new TextDecoder();
   let size = 0;
   let body = '';
@@ -120,9 +123,9 @@ async function readCompletion(response,signal) {
       signal.throwIfAborted();
       if (done) break;
       size += value.byteLength;
-      if (size > 256_000) {
+      if (size > (checkBilling ? 4096 : 256_000)) {
         stopReading();
-        throw new ModelFailure('MODEL_OUTPUT');
+        throw invalidBody();
       }
       body += decoder.decode(value,{stream:true});
     }
@@ -130,9 +133,14 @@ async function readCompletion(response,signal) {
     signal.removeEventListener('abort',stopReading);
     reader.releaseLock();
   }
-  let choice;
-  try { choice = JSON.parse(body + decoder.decode())?.choices?.[0]; }
-  catch { throw new ModelFailure('MODEL_OUTPUT'); }
+  let packet;
+  try { packet = JSON.parse(body + decoder.decode()); }
+  catch { throw invalidBody(); }
+  if (checkBilling) {
+    if ((packet?.error?.code ?? packet?.code)==='Arrearage') throw new ModelFailure('MODEL_BILLING_ARREARS',400);
+    throw invalidBody();
+  }
+  const choice=packet?.choices?.[0];
   const message=choice?.message;
   if (choice?.finish_reason === 'content_filter' || message?.refusal) throw new ModelFailure('MODEL_REPLY_BLOCKED');
   if (message?.tool_calls?.length || message?.function_call) throw new ModelFailure('MODEL_OUTPUT');
@@ -203,6 +211,9 @@ function modelSettings(env) {
   return {url,bailian,model,timeoutMs,headers};
 }
 
+// Chat and extraction share the same cooldown for a configured account. A rotated key starts fresh.
+const billingByEnv=new WeakMap();
+const billingCooldownMs=5*60_000;
 function fallbackSettings(env, primary, allowed) {
   if (allowed !== true || !primary || primary.bailian) return null;
   try {
@@ -216,7 +227,13 @@ function fallbackSettings(env, primary, allowed) {
     const afterSetting=env.FEISHU_LLM_FALLBACK_AFTER_MS?.trim();
     const afterMs=afterSetting ? Number(afterSetting) : primary.timeoutMs;
     if (!Number.isSafeInteger(afterMs) || afterMs<1 || afterMs>60_000 || !backup?.bailian) return null;
-    return {...backup,afterMs};
+    const account=createHash('sha256').update(backup.url.href).update('\0').update(backup.headers.Authorization).digest('hex');
+    let billing=billingByEnv.get(env);
+    if (billing?.account!==account) {
+      billing={account,pausedUntil:0};
+      billingByEnv.set(env,billing);
+    }
+    return {...backup,afterMs,billing};
   } catch {
     // An incomplete/invalid backup configuration cannot prevent the local model from serving.
     return null;
@@ -244,7 +261,7 @@ function cloudReadContext(readContext) {
 const cloudContextGuidance = '\n本轮只带当前消息和有限的结构化上下文。此前名单、报表及草稿原值保留在本地。引用之前报表查询新的栏目用 scope=context，需要原文、数值或列表才能解释时只追问缺少的部分，不猜测具体记录。';
 const cloudChatGuidance = '\n整个回答必须是单个 JSON 对象。询问待办、登记过的建议、评分、命中率、成交或名单时只返回对应的 read 工具。' +
   '例如“我手头还有哪些事得我点头？”返回 {"read":"pending"}；无论有没有待办，你都没拿到记录，只有工具能给出实际结果。' +
-  '查询报表缺少对象时返回 scope=context 的 formal_report。普通聊天、流程说明返回 {"reply":"一句自然的答复"}。reply 里禁止报告私人业务记录、姓名、数量、分数或状态。';
+  '索取群报告或未指定对象的整份报告用 {"read":"group_report"}。查询某项具体指标缺少对象时返回 scope=context 的 formal_report。普通聊天、流程说明返回 {"reply":"一句自然的答复"}。reply 里禁止报告私人业务记录、姓名、数量、分数或状态。';
 
 function mayFailOver(error) {
   if (!(error instanceof ModelFailure)) return false;
@@ -253,7 +270,7 @@ function mayFailOver(error) {
 }
 
 async function infer(primary, backup, fetchImpl, localRequest, makeCloudRequest, parse, component, onFallback) {
-  if (!makeCloudRequest) return parse(await requestCompletion(primary,fetchImpl,localRequest),false);
+  if (!makeCloudRequest || backup.billing.pausedUntil>Date.now()) return parse(await requestCompletion(primary,fetchImpl,localRequest),false);
   const reserve = Math.min(backup.timeoutMs,Math.floor(primary.timeoutMs/2));
   if (!reserve) return parse(await requestCompletion(primary,fetchImpl,localRequest),false);
   const deadline = performance.now() + primary.timeoutMs;
@@ -265,14 +282,22 @@ async function infer(primary, backup, fetchImpl, localRequest, makeCloudRequest,
     const remaining = Math.floor(deadline-performance.now());
     if (!mayFailOver(error) || remaining < 1) throw error;
     let success = false;
+    let reason=error.code;
     try {
       const cloudAnswer = await requestCompletion({...backup,timeoutMs:Math.min(remaining,backup.timeoutMs)},
         fetchImpl,makeCloudRequest());
       const result = parse(cloudAnswer,true);
       success = true;
       return result;
+    } catch (cloudError) {
+      if (!(cloudError instanceof ModelFailure) || cloudError.code!=='MODEL_BILLING_ARREARS') throw cloudError;
+      backup.billing.pausedUntil=Date.now()+billingCooldownMs;
+      reason=cloudError.code;
+      const localMs=Math.floor(deadline-performance.now());
+      if (error.code!=='MODEL_TIMEOUT' || localMs<1) throw cloudError;
+      answer=await requestCompletion({...primary,timeoutMs:localMs},fetchImpl,localRequest);
     } finally {
-      if (onFallback) try { onFallback({component,success,reason:error.code}); } catch { /* Observing cannot retry a request. */ }
+      if (onFallback) try { onFallback({component,success,reason}); } catch { /* Observing cannot retry a request. */ }
     }
   }
   // Validate the model answer outside the transport catch. Rejected actions and evidence are never retried elsewhere.
@@ -299,7 +324,7 @@ async function requestCompletion({url,bailian,model,timeoutMs,headers},fetchImpl
         void response.body?.cancel().catch(() => {});
         signal.throwIfAborted();
       }
-      return readCompletion(response,signal);
+      return readCompletion(response,signal,bailian);
     });
     // A transport or body stream can finish after cancellation. Only this race's winner reaches the parser.
     const answer = await Promise.race([completion,deadline]);

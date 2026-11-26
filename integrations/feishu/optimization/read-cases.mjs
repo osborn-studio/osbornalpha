@@ -1,5 +1,5 @@
 // All aliases, values and dialogue turns here are fixtures. The monitor supplies only an enum.
-export const readCategories = ['analyst_roster','pending','recommendations','scores','trades'];
+export const readCategories = ['analyst_roster','pending','recommendations','scores','trades','group_report'];
 export const readTasks = Object.fromEntries(readCategories.flatMap(category => [
   ['read_'+category,'reads'],['extract_read_'+category,'read_intents'],
 ]));
@@ -10,6 +10,7 @@ function report(section, scope, subject) {
 
 const trainingRequests = {
   analyst_roster:'群里哪些同事登记了分析师身份？',
+  group_report:'把大家登记的建议、表现和已执行的模拟成交汇成一份群报告。',
   pending:'麻烦翻翻有哪些提案还在排队等我点头。',
   recommendations:'能翻一下我自己之前提过的投资建议吗？',
   scores:'我自己之前判断对了几回，命中率怎么样？',
@@ -17,8 +18,8 @@ const trainingRequests = {
 };
 export function readTraining(task, previous) {
   const kind=task.slice('read_'.length);
-  const tool=key=>['analyst_roster','pending'].includes(key)?{read:key}:report(key,'self');
-  const inputFor=key=>({text:trainingRequests[key],isApprover:key==='pending',isAnalyst:key!=='pending'});
+  const tool=key=>['analyst_roster','pending','group_report'].includes(key)?{read:key}:report(key,'self');
+  const inputFor=key=>({text:trainingRequests[key],isApprover:key==='pending',isAnalyst:!['pending','group_report'].includes(key)});
   const requests=[{input:inputFor(kind),expect:{tool:tool(kind)}}];
   if (readCategories.includes(previous)) requests.push({input:inputFor(previous),expect:{tool:tool(previous)}});
   if (['recommendations','scores','trades'].includes(kind)) {
@@ -37,6 +38,7 @@ export function readTraining(task, previous) {
 
 const freshRequests = {
   analyst_roster:['这个群有哪些人是以研究员名义给建议的？','我想看看群里正式绑定的分析师名字。','当下哪些同事有分析师身份？'],
+  group_report:['可以给大家出份分析简报吗？','麻烦整理一下群里建议到模拟执行的整体表现。','请在群里发份报告，把建议表现和成交放在一起。'],
   pending:['我作为本群确认人，手头还有什么需要点头？','有多少申请等我去确认？','给我列出等我验收的提案。'],
   recommendations:['想复盘一下SUBJECT之前提过的操作建议。','能列出SUBJECT此前递过的建议吗？','把SUBJECT给系统提交的建议调来看看。'],
   scores:['想看看SUBJECT以往的判断命中率如何。','能给我SUBJECT那些建议的评估成绩么？','查查SUBJECT的评分和命中表现。'],
@@ -45,11 +47,11 @@ const freshRequests = {
 
 export function readProbe(category,index,{when,n}) {
   const alias=['罗康','程舒','苗悦','彭宁'][n%4];
-  const simple=category==='pending'||category==='analyst_roster';
+  const simple=['pending','analyst_roster','group_report'].includes(category);
   const scope=['named','self','context','all'][index%4];
   const subject={named:alias,self:'我自己',context:'刚才那位',all:'全组所有分析师'}[scope];
   const input={text:'现在'+when+'有空了，'+freshRequests[category][index%3].replace('SUBJECT',subject),
-    isApprover:simple||scope!=='self',isAnalyst:!simple&&scope==='self'};
+    isApprover:category!=='group_report'&&(simple||scope!=='self'),isAnalyst:!simple&&scope==='self'};
   if(!simple && scope==='context'){
     input.history=[{role:'user',content:'刚才那位的上份记录呢？'},
       {role:'assistant',content:'这份报表暂时没有符合的记录。'}];

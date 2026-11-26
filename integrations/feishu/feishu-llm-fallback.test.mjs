@@ -102,6 +102,60 @@ test('an unfinished response body is cancelled when its model attempt expires',a
   } finally { clearTimeout(keepAlive); }
 });
 
+test('Bailian arrears recover the timed-out read locally and suspend that account for chat and extraction',async t=>{
+  const settings={...env,FEISHU_LLM_TIMEOUT_MS:'900',FEISHU_LLM_FALLBACK_AFTER_MS:'50'};
+  const billing=()=>Response.json({error:{code:'Arrearage',message:'must not reach chat or logs'}},{status:400});
+  const calls=[],parsed=[];
+  let locals=0,paid=false;
+  const mock=modelStub(async({body})=>{
+    locals++;
+    if (locals===1) {
+      // Even a transport that ignores cancellation cannot parse this late reply.
+      await delay(170);
+      return completion({read:'pending'});
+    }
+    await delay(85);
+    return completion(body.response_format ? proposal : {read:'group_report'});
+  },()=>paid ? completion({reply:'在。'}) : billing());
+  const options={...mock,onFallback:event=>calls.push(event)};
+  const chat=createFeishuChatResponder(settings,options);
+  const extract=createFeishuLlmExtractor(settings,options);
+  assert.deepEqual(await chat({text:'帮群里整理一份报告',onSentHistory:h=>parsed.push(h)}),{read:'group_report'});
+  assert.deepEqual(await extract({text:proposalText,receivedAt}),proposal);
+  assert.deepEqual(parsed,[[]]);
+  assert.deepEqual(calls,[{component:'chat',success:false,reason:'MODEL_BILLING_ARREARS'}]);
+  const origin=call=>new URL(call.url).hostname;
+  assert.deepEqual(mock.calls.map(origin),['127.0.0.1','dashscope.aliyuncs.com','127.0.0.1','127.0.0.1']);
+  paid=true;
+  const now=Date.now();
+  t.mock.method(Date,'now',()=>now+300_001);
+  assert.equal(await chat({text:'在吗？'}),'在。');
+  assert.deepEqual(mock.calls.slice(-2).map(origin),['127.0.0.1','dashscope.aliyuncs.com']);
+});
+
+test('other HTTP 400 errors and raw Arrearage messages never retry inference or open a billing circuit',async()=>{
+  const settings={...env,FEISHU_LLM_TIMEOUT_MS:'500',FEISHU_LLM_FALLBACK_AFTER_MS:'30'};
+  const mock=modelStub(async({options})=>{await delay(300,null,{signal:options.signal});},()=>
+    Response.json({error:{code:'BadRequest',message:'Arrearage'}},{status:400}));
+  const chat=createFeishuChatResponder(settings,mock);
+  for (let i=0;i<2;i++) await assert.rejects(chat({text:'能看到我吗？'}),{code:'MODEL_HTTP',status:400});
+  assert.equal(mock.calls.length,4);
+});
+
+test('a billing-recovery attempt keeps the original deadline, and key rotation can use a healthy backup',async()=>{
+  const settings={...env,FEISHU_LLM_TIMEOUT_MS:'240',FEISHU_LLM_FALLBACK_AFTER_MS:'30'};
+  const timeout=async({options})=>{await delay(700,null,{signal:options.signal});};
+  const mock=modelStub(timeout,({options})=>options.headers.Authorization==='Bearer rotated-fixture-key' ?
+    completion({reply:'收到。'}) : Response.json({code:'Arrearage'},{status:400}));
+  const chat=createFeishuChatResponder(settings,mock);
+  const before=performance.now();
+  await assert.rejects(chat({text:'继续说'}),{code:'MODEL_TIMEOUT'});
+  assert.ok(performance.now()-before<450);
+  settings.FEISHU_LLM_FALLBACK_API_KEY='rotated-fixture-key';
+  assert.equal(await createFeishuChatResponder(settings,mock)({text:'在吗？'}),'收到。');
+  assert.equal(mock.calls.length,5);
+});
+
 test('provider output and model authorization errors fail closed',async()=>{
   for (const [factory,input,unsafe] of [
     [createFeishuChatResponder,{text:'了解了',isApprover:true},'我已经为你登记了这条建议。'],

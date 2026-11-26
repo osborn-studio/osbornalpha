@@ -2,7 +2,7 @@ import {strict as assert} from 'node:assert';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {openFeishuWorkflow} from './feishu-workflow.mjs';
-import {formalReportIntent} from './feishu-report-intent.mjs';
+import {directGroupReport, formalReportIntent} from './feishu-report-intent.mjs';
 
 const account='13d1835d-a871-4ee4-8236-a5beea6ba4c0';
 function configuration() {
@@ -164,4 +164,76 @@ test('whole-group reads freeze the non-Demo role set before fetch and recheck it
   await retry.open().drain();
   assert.equal(retry.sent.length,1);
   assert.equal(retry.db.prepare("SELECT status FROM feishu_workflow_messages WHERE kind='formal_report'").get().status,'blocked');
+});
+
+
+test('an explicit group publication can be requested by any mentioned human, including Demo analysts, across restart',async t=>{
+  const h=setup(t,{webhook:true,send:()=>({deliveredToWebhook:true})});
+  const requests=[],observations=[];
+  const queryGroupReport=async request=>{requests.push(request);return '正式报告：群汇总';};
+  const flow=()=>h.open({queryGroupReport,monitor:{prune(){},observeRead(record){observations.push(record);}}});
+  for (const text of ['生成一份报告','来一份全组分析报告','请帮我整理一下本群报表','给我生成报告','发份群简报']) assert.ok(directGroupReport(text),text);
+  for (const text of ['不用生成报告','怎么生成一份报告','生成关于英伟达的报告','生成一份英伟达研报','生成analyst_a的分析报告','报告我已经发了','同意']) assert.ok(!directGroupReport(text),text);
+  const first=flow();
+  for (const [n,sender] of ['guest','a','d','pm'].entries()) {
+    const event=h.event(n+1,'生成一份报告',sender);
+    assert.equal(first.receive(event).accepted,true);
+    assert.equal(first.receive(event).duplicate,true);
+  }
+  assert.equal(first.receive(h.event(7,'生成一份报告','guest',{chatId:'unconfigured'})).accepted,false);
+  assert.equal(first.receive(h.event(8,'生成一份报告','guest',{directedToBot:false})).accepted,false);
+  assert.equal(first.receive(h.event(9,'同意','guest',{parentId:'old_pm_summary',directedToBot:false})).accepted,false);
+  const resumed=flow(); await resumed.drain(); await resumed.drain();
+  assert.equal(requests.length,4);
+  for (const q of requests) assert.deepEqual(q,{chatId:'group',expectedOwnerId:account,analystKeys:['analystB','analystC','analyst_a']});
+  assert.equal(h.calls.length,0);assert.equal(h.sent.length,4);
+  for (const reply of h.sent) assert.equal(reply.formalReport,true);
+  assert.equal(h.db.prepare("SELECT count(*) n FROM feishu_workflow_messages WHERE kind='group_report' AND status='sent' AND message_id IS NULL AND chat_source_id IS NULL").get().n,4);
+  assert.equal(observations.length,4);
+  assert.ok(observations.every(row=>row.text==='生成一份报告' && row.readAction==='group_report' && !JSON.stringify(row).includes('群汇总')));
+  assert.deepEqual(resumed.view().proposals,[]);
+});
+
+test('an aggregate public job cannot outlive group membership changes, disabled reporting, or an uncertain webhook dispatch',async t=>{
+  const h=setup(t,{webhook:true,send:()=>{throw Object.assign(Error('limit'),{retriable:true});}});
+  let calls=0;
+  const flow=h.open({queryGroupReport:async()=>{calls++;return '正式分组统计';}});
+  flow.receive(h.event(1,'生成报告','visitor'));
+  delete h.config.analystBySender.b;
+  await flow.drain();assert.equal(calls,0);assert.equal(h.sent.length,0);
+  flow.receive(h.event(2,'生成报告','visitor'));
+  const changed=h.open({queryGroupReport:async()=>{h.config.simulationAccount.confirmed=false;return '旧账户报告';}});
+  await changed.drain(); assert.equal(h.sent.length,0);
+  h.config.simulationAccount.confirmed=true;
+  flow.receive(h.event(3,'生成报告','visitor')); await flow.drain(); assert.equal(h.sent.length,1);
+  h.advance(6000);await h.open({queryGroupReport:undefined}).drain();
+  assert.deepEqual({...h.db.prepare("SELECT status,text FROM feishu_workflow_messages WHERE kind='group_report'").get()},{status:'blocked',text:''});
+  flow.receive(h.event(4,'生成报告','visitor'));await flow.drain();assert.equal(h.sent.length,2);
+  h.db.exec("UPDATE feishu_workflow_messages SET status='sending_webhook' WHERE status='pending'");
+  h.advance(60000);await h.open({queryGroupReport:async()=>{throw Error();}}).drain();
+  assert.equal(h.sent.length,2); assert.equal(h.db.prepare("SELECT count(*) n FROM feishu_workflow_messages WHERE status='uncertain'").get().n,1);
+});
+
+test('a model can request the same fixed bulletin for a mentioned visitor or analyst, without opening other tools',async t=>{
+  const h=setup(t);
+  const queries=[],report={read:'group_report'};
+  const paraphrase='能把咱们组那些想法最后有没有落实整理成一段发群里吗';
+  const tools=new Map([[paraphrase,report],['analyst_a私下那份给我看看',report],
+    ['给我看全部详情',{...report,sections:['trades']}],['未审批的有哪些',{read:'pending'}],
+    ['再来点名的',{read:'formal_report',scope:'named',sections:['trades'],subject:'analystB'}],
+    ['这个呢',report],['给我写一份英伟达研报',report]]);
+  const flow=h.open({queryGroupReport:async r=>{queries.push(r);return '正式分组统计';},
+    extractWithModel:async()=>({intent:'read',query:report,fields:{}}),
+    respondToChat:async ({text})=>tools.get(text) ?? '我在。'});
+  for (const [n,text] of [...tools.keys()].filter(text=>text!=='这个呢').entries()) {
+    flow.receive(h.event(n+1,text,'visitor'));await flow.drain();
+  }
+  assert.equal(queries.length,1);assert.equal(h.calls.length,0);
+  flow.receive(h.event(20,'你好','visitor'));await flow.drain();
+  const parentId='reply-'+h.sent.length;
+  flow.receive(h.event(21,'这个呢','visitor',{directedToBot:false,parentId}));await flow.drain();
+  assert.equal(queries.length,1);
+  flow.receive(h.event(22,paraphrase,'a'));await flow.drain();assert.equal(queries.length,2);
+  assert.equal(h.sent.filter(m=>m.text==='正式分组统计').length,2);
+  assert.deepEqual(flow.view().proposals,[]);
 });

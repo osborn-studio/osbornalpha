@@ -55,6 +55,25 @@ const explicitGroup = /全(?:部|体|组|群|账户)|所有|大家|每(?:个|位
 const personReference = /[他她]|刚才|上(?:一个|一位|面)|那(?:位|个|名)|这(?:位|个|名)|第\s*[一二三四五六七八九十\d]+/u;
 export function isContextualReportQuestion(text) { return personReference.test(text); }
 
+// Fast path for self-contained @ requests. Less formulaic language can select the same
+// fixed publication through the model without being able to supply a scope or a field.
+export function directGroupReport(text) {
+  if (typeof text!=='string' || text.length>120) return false;
+  const request=text.normalize('NFKC').replace(/[\s,，。！!？?]/gu,'');
+  const subject=request.replace(/^(?:你好)?(?:麻烦你?|请(?:你)?|能不能|可以)?(?:帮我|给我|给大家|给我们|我想|我要)?/u,'')
+    .replace(/^(?:生成|整理|提供|出具|出|发|做|来|看看|查看|看)(?:一下)?(?:一?[份个版])?/u,'')
+    .replace(/(?:给我|给大家)?(?:看看|一下)?(?:吧|吗|呢)?(?:谢谢)?$/u,'');
+  return /^(?:最新的?|当前的?)?(?:全组的?|本群的?|全群的?|群里的?|群)?(?:分析师的?)?(?:分析|汇总|综合|建议|分析建议)?(?:报告|报表|简报)$/u.test(subject);
+}
+
+export function allowsGroupReportScope(text,config) {
+  const compact=text.normalize('NFKC');
+  return !rolesIn(compact,config).matched.length && !unsupportedDates.test(compact) &&
+    !unsupportedDetails.test(compact) && !writing.test(compact) &&
+    !/(?:不要|不需要|不用|无需|别|如何|怎么|为什么|什么是|能做什么|研报|研究报告|行业报告|财报)/u.test(compact) &&
+    !/(?:本人|自己|我的)(?:的)?(?:建议|评分|命中|模拟|交易|报告)|个人账户|私人|待办|审批/u.test(compact);
+}
+
 // Only use this shorthand when replying to a delivered formal-report scope question.
 export function reportScopeAnswer(text,config) {
   const choice=text.normalize('NFKC').trim().replace(/[。！!.，,？?\s]+$/u,'')

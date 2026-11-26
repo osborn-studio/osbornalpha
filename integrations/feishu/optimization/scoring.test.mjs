@@ -26,7 +26,7 @@ test('fixture splits have unique conversations and texts, and both adapters are 
     splitByGroup.set(row.group,row.split);
     coverage.add(row.split + ':' + row.kind);
     if (row.kind === 'chat' && row.expect.tool) {
-      assert.ok(['formal_report','analyst_roster','pending'].includes(row.expect.tool.read));
+      assert.ok(['formal_report','analyst_roster','pending','group_report'].includes(row.expect.tool.read));
     } else if (row.kind === 'chat') {
       assert.ok(row.expect.concepts.length > 0);
       for (const pattern of [...row.expect.concepts.flat(),...row.expect.avoid??[],...row.expect.criticalAvoid??[]]) {

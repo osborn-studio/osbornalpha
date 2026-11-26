@@ -30,7 +30,7 @@ test('all independent topics generate immutable, group-disjoint holdout with a f
       const key=holdoutTextHash(row.input.text);
       assert.ok(!used.has(key)); used.add(key);
       if(kind==='chat' && row.expect.tool){
-        assert.ok(['formal_report','pending','analyst_roster'].includes(row.expect.tool.read));
+        assert.ok(['formal_report','pending','analyst_roster','group_report'].includes(row.expect.tool.read));
       }else if(kind==='chat'){
         assert.ok(row.expect.concepts.every(alternatives=>alternatives.length>0));
         for(const pattern of [...row.expect.concepts.flat(),...row.expect.criticalAvoid??[],...row.expect.avoid??[]]) {
@@ -61,8 +61,8 @@ test('all independent topics generate immutable, group-disjoint holdout with a f
 
 test('each label targets only independently scored examples of its specific failure; all downstream business gold is executable',()=>{
   const tasks={
-    ...Object.fromEntries(['read_analyst_roster','read_pending','read_recommendations','read_scores','read_trades'].map(t=>[t,['chat','reads']])),
-    ...Object.fromEntries(['analyst_roster','pending','recommendations','scores','trades'].map(t=>['extract_read_'+t,['extraction','read_intents']])),
+    ...Object.fromEntries(['read_analyst_roster','read_pending','read_recommendations','read_scores','read_trades','read_group_report'].map(t=>[t,['chat','reads']])),
+    ...Object.fromEntries(['analyst_roster','pending','recommendations','scores','trades','group_report'].map(t=>['extract_read_'+t,['extraction','read_intents']])),
     investment_question:['extraction','intent'],quoted_view:['extraction','intent'],missed_owned:['extraction','intent'],
     stock_name:['extraction','security'],conditional_stop:['extraction','price_roles'],swapped_prices:['extraction','price_roles'],
     cash_budget:['extraction','execution'],share_count:['extraction','execution'],

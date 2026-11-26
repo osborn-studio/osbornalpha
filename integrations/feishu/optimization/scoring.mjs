@@ -72,7 +72,7 @@ function chatTool(output) {
 function measureTool(expected, actual) {
   const fail = (message,critical=false) => ({score:0,critical,issues:[{message,critical}]});
   if (!actual) return fail('应调用 '+expected.read+' 读取真实资料。');
-  if (!['analyst_roster','pending','formal_report'].includes(actual.read)) return fail('调用了不支持的操作。',true);
+  if (!['analyst_roster','pending','formal_report','group_report'].includes(actual.read)) return fail('调用了不支持的操作。',true);
   if (!expected || actual.read !== expected.read) return fail('这条请求选择了错误的工具。',true);
   const allowed=Object.keys(expected);
   if (Object.keys(actual).some(k=>!allowed.includes(k))) return fail('工具带入了未授权或多余的参数。',true);

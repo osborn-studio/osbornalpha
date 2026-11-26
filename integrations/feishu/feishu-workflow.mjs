@@ -1,6 +1,6 @@
 import { proposalStatus, reviseProposal } from './feishu-proposal-controls.mjs';
 import { analystRosterText, isAnalystRosterQuestion, publicAnalystDirectory } from './feishu-analyst-roster.mjs';
-import { directFormalRead, formalReportIntent, groundFormalRead, isContextualReportQuestion, reportScopeAnswer } from './feishu-report-intent.mjs';
+import { directGroupReport, allowsGroupReportScope, directFormalRead, formalReportIntent, groundFormalRead, isContextualReportQuestion, reportScopeAnswer } from './feishu-report-intent.mjs';
 import { parseFeishuReadTool } from './feishu-read-tool.mjs';
 import { isAssistantCommandCandidate } from './feishu-ostag.mjs';
 import { createHash } from 'node:crypto';
@@ -85,7 +85,7 @@ function demoResult(entry) {
   return ['Demo 建议已登记 ' + entry.id, suggested, status, ...scores, rate, marketNote].filter(Boolean).join('\n');
 }
 
-export function openFeishuWorkflow(db, transaction, {register, sendMessage, syncFormal, queryFormal, extractWithModel, respondToChat, searchSecurity, config, monitor, wake, now = Date.now,
+export function openFeishuWorkflow(db, transaction, {register, sendMessage, syncFormal, queryFormal, queryGroupReport, extractWithModel, respondToChat, searchSecurity, config, monitor, wake, now = Date.now,
   classifyAssistantCommand, provisionAnalyst, registerDemoOnly, trackDemoRecap, reminderAfterMs = 30 * 60_000}) {
   db.exec(`CREATE TABLE IF NOT EXISTS feishu_workflow_events (
     seq INTEGER PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, message_id TEXT NOT NULL UNIQUE,
@@ -144,8 +144,11 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
         db.exec('ALTER TABLE '+table+' ADD COLUMN '+column+' TEXT');
       }
     }
+    if (!db.prepare('PRAGMA table_info(feishu_workflow_events)').all().some(column => column.name === 'directed_to_bot')) {
+      db.exec('ALTER TABLE feishu_workflow_events ADD COLUMN directed_to_bot INTEGER NOT NULL DEFAULT 0');
+    }
     // A custom webhook lacks Feishu's idempotency UUID. A crash after dispatch leaves delivery uncertain.
-    db.prepare("UPDATE feishu_workflow_messages SET status='uncertain',error=? WHERE kind='formal_report' AND status='sending_webhook'")
+    db.prepare("UPDATE feishu_workflow_messages SET status='uncertain',error=? WHERE kind IN ('formal_report','group_report') AND status='sending_webhook'")
       .run('群报表可能已送达，连接恢复后请按需重新查询。');
     const names = new Set(db.prepare('PRAGMA table_info(feishu_workflow_proposals)').all().map(column => column.name));
     const columns = {
@@ -188,12 +191,12 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     return new Date(Number.isFinite(createdAt) && createdAt <= receivedAt + 60_000 ? createdAt : receivedAt).toISOString();
   }
   const saveEvent = db.prepare(`INSERT INTO feishu_workflow_events
-    (event_id,message_id,chat_id,sender_id,parent_id,kind,text,received_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
-  const nextEvent = db.prepare(`SELECT * FROM feishu_workflow_events e WHERE status='pending' AND kind NOT IN ('chat','formal_report')
+    (event_id,message_id,chat_id,sender_id,parent_id,kind,text,received_at,directed_to_bot) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`);
+  const nextEvent = db.prepare(`SELECT * FROM feishu_workflow_events e WHERE status='pending' AND kind NOT IN ('chat','formal_report','group_report')
     AND NOT EXISTS (SELECT 1 FROM feishu_membership_jobs j WHERE j.event_id=e.event_id)
     AND NOT EXISTS (SELECT 1 FROM feishu_event_deferrals d WHERE d.event_id=e.event_id AND d.retry_at>?) ORDER BY seq LIMIT 1`);
   const nextChatEvent = db.prepare("SELECT * FROM feishu_workflow_events WHERE status='pending' AND kind='chat' ORDER BY seq LIMIT 1");
-  const nextReportEvent = db.prepare("SELECT * FROM feishu_workflow_events WHERE status='pending' AND kind='formal_report' ORDER BY seq LIMIT 1");
+  const nextReportEvent = db.prepare("SELECT * FROM feishu_workflow_events WHERE status='pending' AND kind IN ('formal_report','group_report') ORDER BY seq LIMIT 1");
   const saveReportJob = db.prepare('INSERT INTO feishu_model_report_jobs (event_id,owner_id,analyst_key,sections,source_id,model_component,group_keys) VALUES (?,?,?,?,?,?,?)');
   const reportJob = db.prepare('SELECT * FROM feishu_model_report_jobs WHERE event_id=?');
   const finishReportJob = db.prepare('DELETE FROM feishu_model_report_jobs WHERE event_id=?');
@@ -212,9 +215,9 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
   const nextProposalReply = db.prepare(`SELECT * FROM feishu_workflow_messages WHERE status='pending' AND due_at<=?
     AND kind IN ${proposalReplies} ORDER BY seq LIMIT 1`);
   const nextReportReply = db.prepare(`SELECT * FROM feishu_workflow_messages WHERE status='pending' AND due_at<=?
-    AND kind='formal_report' ORDER BY seq LIMIT 1`);
+    AND kind IN ('formal_report','group_report') ORDER BY seq LIMIT 1`);
   const nextDelivery = db.prepare(`SELECT * FROM feishu_workflow_messages WHERE status='pending' AND due_at<=?
-    ${wake ? "AND kind NOT IN ('input_receipt','approval_receipt','formal_report') AND kind NOT IN " + proposalReplies : ''} ORDER BY seq LIMIT 1`);
+    ${wake ? "AND kind NOT IN ('input_receipt','approval_receipt','formal_report','group_report') AND kind NOT IN " + proposalReplies : ''} ORDER BY seq LIMIT 1`);
   const saveReportScope = db.prepare('INSERT INTO feishu_formal_report_scopes (message_id,requester_id,owner_id,analyst_key,sections,group_keys) VALUES (?,?,?,?,?,?)');
   const readReportScope = db.prepare('SELECT * FROM feishu_formal_report_scopes WHERE message_id=?');
   const ownReportAt = db.prepare(`SELECT 1 FROM feishu_workflow_messages m
@@ -318,6 +321,8 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
           kind = 'approval';
           anchor = event.parentId;
         }
+      } else if (event.directedToBot === true && directGroupReport(content)) {
+        kind='group_report';
       } else if (resumedReport) {
         kind='formal_report';
         if (hasParent) anchor=event.parentId;
@@ -372,8 +377,13 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     }
     if (!kind) return {accepted:false};
     return transaction(() => {
-      const result = saveEvent.run(event.eventId,event.messageId,event.chatId,event.senderId,anchor ?? null,kind,content,eventTime(event));
-      if (result.changes && resumedReport) {
+      const result = saveEvent.run(event.eventId,event.messageId,event.chatId,event.senderId,anchor ?? null,kind,content,eventTime(event),Number(event.directedToBot === true));
+      if (result.changes && kind==='group_report') {
+        const stored=inputById.get(event.eventId);
+        const outcome=queuePublishedReport(stored,current);
+        if (outcome!=='report_pending') finishEvent.run(outcome,stored.seq);
+      }
+      else if (result.changes && resumedReport) {
         const stored=inputById.get(event.eventId);
         const auth=reportAuthorization(stored,current,resumedReport.request);
         if (auth.ownerId) persistReportJob(stored,auth,resumedReport.sourceId,null);
@@ -505,12 +515,13 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     observeSafely(()=>{
       if (!monitor.observeRead) return;
       const topic=chatScope(event,now()-chatWindow);
-      const kind=readAction===null?'chat':readAction==='pending'?'assistant_reply':readAction==='analyst_roster'?'analyst_roster':'formal_report';
+      const kind=readAction==='group_report'?'group_report':readAction===null?'chat':readAction==='pending'?'assistant_reply':readAction==='analyst_roster'?'analyst_roster':'formal_report';
       const id=stableId('feishu-reply',event.message_id,kind);
       if (readObservations.size>=256) readObservations.delete(readObservations.keys().next().value);
       readObservations.set(id,{chatId:event.chat_id,senderId:event.sender_id,messageId:event.message_id,
         threadId:readAction===null?topic.session:id,relatedThreadId:event.parent_id ? topic.session : undefined,
-        readAction,modelSelected:Boolean(modelComponent),modelComponent});
+        readAction,modelSelected:Boolean(modelComponent),modelComponent,
+        ...(readAction==='group_report' && {text:event.text.slice(0,1800)})});
     });
   }
 
@@ -536,6 +547,53 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
   function persistReportJob(event,authorized,sourceId,component) {
     saveReportJob.run(event.event_id,authorized.ownerId,authorized.analystKey,JSON.stringify(authorized.sections),
       sourceId ?? null,component,authorized.groupKeys);
+  }
+
+  function queuePublishedReport(event,current,component=null) {
+    if (event.directed_to_bot!==1 || current.chatId!==event.chat_id) {
+      notice(event,'chat','请在本群 @助手生成群分析报告。');
+      return 'responded';
+    }
+    const ownerId=confirmedAccount(current);
+    if (!queryGroupReport || !ownerId) {
+      notice(event,'chat','本群报告暂时无法读取正式数据。');
+      return 'responded';
+    }
+    persistReportJob(event,{ownerId,analystKey:null,sections:['recommendations','scores','trades'],
+      groupKeys:JSON.stringify(formalGroupKeys(current))},null,component);
+    if (event.kind!=='group_report') db.prepare("UPDATE feishu_workflow_events SET kind='group_report' WHERE seq=?").run(event.seq);
+    wake?.();
+    return 'report_pending';
+  }
+
+  function publishedScopeAllowed(current,scope) {
+    return Boolean(queryGroupReport && scope?.owner_id && confirmedAccount(current)===scope.owner_id &&
+      scope.analyst_key===null && scope.group_keys===JSON.stringify(formalGroupKeys(current)));
+  }
+
+  async function publishGroupReport(event,job) {
+    const allowed=current=>event.directed_to_bot===1 && current.chatId===event.chat_id && publishedScopeAllowed(current,job);
+    let text, successful=false;
+    if (allowed(settings())) {
+      try {
+        text=await queryGroupReport({chatId:event.chat_id,expectedOwnerId:job.owner_id,analystKeys:JSON.parse(job.group_keys)});
+        if (typeof text!=='string' || !text.trim() || text.length>10000) throw Error('Invalid group report');
+        successful=true;
+      } catch {
+        text='本次未能生成正式群分析报告，请稍后重新查询。';
+      }
+    }
+    transaction(()=>{
+      const publish=text && allowed(settings());
+      if (publish) {
+        // A fixed public report has no individual lookup or private conversational read scope.
+        const id=notice(event,'group_report',text);
+        saveReportScope.run(id,event.sender_id,job.owner_id,null,job.sections,job.group_keys);
+        if (successful) scheduleReadObservation(event,'group_report',job.model_component);
+      }
+      finishEvent.run(publish?'responded':'ignored',event.seq);
+      finishReportJob.run(event.event_id);
+    });
   }
 
   function askReportScope(event,current,message,sections,sourceId) {
@@ -835,6 +893,10 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       return 'responded';
     };
     if (!tool) return clarify('请说明要查看哪项记录。');
+    if (tool.read==='group_report') {
+      if (!allowsGroupReportScope(event.text,current)) return clarify('群分析报告汇总本群已绑定分析师的建议、评分和关联成交。需要全组报告时请 @助手生成群分析报告。');
+      return queuePublishedReport(event,current,event.kind==='chat'?'chat':'extraction');
+    }
     if (tool.read==='analyst_roster') {
       readNotice(event,'analyst_roster','');
       if (isApprover(current,event.sender_id) || roleFor(current,event.sender_id)) scheduleReadObservation(event,tool.read,event.kind==='chat'?'chat':'extraction');
@@ -1137,12 +1199,14 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       message.text=isApprover(current,sender) ? pendingList(current,sender,message.chat_question) : '只有当前群的确认人可以查看 PM 待办。';
       db.prepare('UPDATE feishu_workflow_messages SET text=? WHERE seq=?').run(message.text,message.seq);
     }
-    const report = message.kind === 'formal_report';
+    const report = message.kind === 'formal_report' || message.kind === 'group_report';
     const webhook = report && sendMessage.formalReportWebhook === true;
     if (report) {
       const scope = readReportScope.get(message.id);
-      if (!queryFormal || (!scope && message.chat_source_id===message.id) ||
-          (scope && !reportAllowed(current,scope.requester_id,scope.owner_id,scope.analyst_key,scope.group_keys))) {
+      const permitted = message.kind==='group_report' ? publishedScopeAllowed(current,scope) :
+        queryFormal && (scope ? reportAllowed(current,scope.requester_id,scope.owner_id,scope.analyst_key,scope.group_keys) :
+          message.chat_source_id!==message.id);
+      if (!permitted) {
         db.prepare("UPDATE feishu_workflow_messages SET status='blocked', text='', error=? WHERE seq=?")
           .run('正式报表查询已停用或成员及账户绑定已变更。',message.seq);
         return;
@@ -1203,6 +1267,10 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       if (!observation) return;
       readObservations.delete(message.id);
       const latest=settings();
+      if (observation.readAction==='group_report') {
+        if (message.chat_id===latest.chatId && publishedScopeAllowed(latest,readReportScope.get(message.id))) monitor.observeRead(observation,latest);
+        return;
+      }
       if (observation.readAction!==null && !allowedRead(message.chat_id,observation.senderId,message.id,now()-chatWindow,latest)) return;
       const text=message.chat_question ?? db.prepare('SELECT user_text FROM feishu_chat_turns WHERE response_id=?').get(message.id)?.user_text;
       if (text) monitor.observeRead({...observation,text},latest);
@@ -1379,6 +1447,11 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       const event=nextReportEvent.get();
       if (!event) break;
       const job=reportJob.get(event.event_id);
+      if (event.kind==='group_report') {
+        await publishGroupReport(event,job);
+        wake?.();
+        continue;
+      }
       const report=await readFormalReport(event,job);
       transaction(()=>{
         const current=settings();

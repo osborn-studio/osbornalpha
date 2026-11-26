@@ -23,7 +23,7 @@ test('only valid local and Bailian Chat Completions configurations opt in', () =
   }
   assert.throws(() => createFeishuLlmExtractor({...local,FEISHU_LLM_BASE_URL:'https://dashscope.aliyuncs.com/compatible-mode/v1'}),/配置无效/);
   assert.throws(() => createFeishuLlmExtractor({...local,FEISHU_LLM_BASE_URL:'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
-    FEISHU_LLM_API_KEY:'sk-sp-synthetic'}),/配置无效/);
+    FEISHU_LLM_API_KEY:'sk-sp-test'}),/配置无效/);
 });
 
 test('uses the ambiguity classification without trusting any candidate actions in that response', async () => {
@@ -284,7 +284,7 @@ test('only a complete standalone roster control can request a read',async()=>{
 
 test('local conversation and formal extraction accept the same strict read-only queries', async () => {
   const queries=[
-    {read:'pending'},{read:'analyst_roster'},
+    {read:'pending'},{read:'analyst_roster'},{read:'group_report'},
     {read:'formal_report',scope:'named',subject:'陈晨',sections:['recommendations','trades']},
     {read:'formal_report',scope:'context',sections:['scores']},{read:'formal_report',scope:'self',sections:['trades']},
     {read:'formal_report',scope:'all',sections:['scores','trades']},
@@ -297,7 +297,8 @@ test('local conversation and formal extraction accept the same strict read-only 
     assert.deepEqual(await extract(input),packet);
   }
   const invalid=[
-    {read:'approve'},{read:'pending',approved:true},{read:'formal_report',scope:'all',accountId:'untrusted',sections:['trades']},
+    {read:'approve'},{read:'pending',approved:true},{read:'group_report',subject:'陈晨'},{read:'group_report',sections:['trades']},
+    {read:'formal_report',scope:'all',accountId:'untrusted',sections:['trades']},
     {read:'formal_report',scope:'all',subject:'陈晨',sections:['scores']},
     {read:'formal_report',scope:'named',subject:'ou_private',sections:['scores']},
     {read:'formal_report',scope:'context',sections:[]},{read:'formal_report',scope:'all',sections:['write']},
