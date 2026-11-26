@@ -10,14 +10,14 @@ import {SW2021_L1_NAME_EN} from './sw2021-names-en';
 import {FRESHNESS,type Run,type Observation,type Membership} from './types';
 export type {MissingReason} from './derive';
 
-export type VendorPageDeps={db:VendorIndustryDb;tables:TableClient;isAdmin:()=>Promise<boolean>;now:Date};
+export type VendorPageDeps={db:VendorIndustryDb;tables:TableClient;isSignedIn:()=>Promise<boolean>;isAdmin:()=>Promise<boolean>;now:Date};
 type StoredMetric=typeof FINANCIAL_METRICS[number]['metric'];
 export type DetailMetric=StoredMetric|'revenue_yoy';
 export type ListMetric='revenue_yoy'|'net_income_parent_yoy'|'gross_margin'|'roe_avg';
 export type Basis='annual'|'quarter';
 export type VendorSource={vendor:string;product:string;interface:string;retrievalId:string;sha256:string;
  template:{id:string;version:number};apiNames:string[];fetchedAt:string;locator:{block:number;row:number;column?:string}|null};
-export type RunHeader={runId:string;kind:Run['kind'];generation:number;gridSize:{codes:number;periods:number};activatedAt:string|null;fetchedFrom:string;fetchedTo:string;
+export type RunHeader={licence:'public'|'internal';runId:string;kind:Run['kind'];generation:number;gridSize:{codes:number;periods:number};activatedAt:string|null;fetchedFrom:string;fetchedTo:string;
  parserVersion:string;mappingVersion:string;codeVersion:string;contentHash:string;datasetKey:string;origin:'vendor_reported';historyClass:'reconstruction'};
 export type VendorCell={code:string;metric:string;duration:Observation['duration'];periodEnd:string;unit:'cny_10k'|'pct'|'count';
  status:'ok'|'missing';valueText:string|null;missingReason:MissingReason|null;source:VendorSource|null;
@@ -26,21 +26,22 @@ export type VendorNode={code:string;nameZh:string;nameEn:string;vendorCode:strin
 export type ConstituentRow={securityCode:string;securityName:string;source:VendorSource};
 export type VendorFreshness=Record<Run['kind'],{status:FreshnessStatus;lastOkAt:string|null}>;
 type Active={state:'ok';header:RunHeader;freshness:VendorFreshness};
-type Inactive={state:'withheld'}|{state:'empty'};
+type Inactive={state:'withheld'}|{state:'empty';licence:RunHeader['licence']};
 type UnknownIndustry={state:'unknown_industry'};
 export type CnListView=Inactive|(Active&{nodes:VendorNode[];periodEnds:string[];cells:VendorCell[]});
 export type CnDetailView=Inactive|UnknownIndustry|(Active&{node:VendorNode;latest:VendorCell[];series:VendorCell[];
  constituents:{header:RunHeader;total:number;preview:ConstituentRow[]}|null});
 export type CnConstituentsView=Inactive|UnknownIndustry|(Active&{node:VendorNode;total:number;page:number;pageSize:number;rows:ConstituentRow[]});
 
-function access(deps:VendorPageDeps){
- return vendorAccess({isAdmin:deps.isAdmin,licenceStatus:async dataset_key=>{
+export async function vendorPageLicence(deps:VendorPageDeps){
+ const access=await vendorAccess({isSignedIn:deps.isSignedIn,isAdmin:deps.isAdmin,licenceStatus:async dataset_key=>{
   const [row]=await deps.tables.select('industry_dataset_licenses',{dataset_key});
   return typeof row?.status==='string'?row.status:null;
  }});
+ return access==='preview'?'internal':access;
 }
-function header(r:Run):RunHeader{
- return {runId:r.run_id,kind:r.kind,generation:r.generation,gridSize:{codes:r.expected_grid.codes.length,periods:r.expected_grid.period_ends?.length??0},activatedAt:r.activated_at,fetchedFrom:r.fetched_from,fetchedTo:r.fetched_to,
+function header(r:Run,licence:RunHeader['licence']):RunHeader{
+ return {licence,runId:r.run_id,kind:r.kind,generation:r.generation,gridSize:{codes:r.expected_grid.codes.length,periods:r.expected_grid.period_ends?.length??0},activatedAt:r.activated_at,fetchedFrom:r.fetched_from,fetchedTo:r.fetched_to,
   parserVersion:r.parser_version,mappingVersion:r.mapping_version,codeVersion:r.code_version,contentHash:r.content_hash,
   datasetKey:r.dataset_key,origin:'vendor_reported',historyClass:'reconstruction'};
 }
@@ -103,9 +104,10 @@ function sortedMembers(db:VendorIndustryDb,run:Run,code:string){
 }
 
 export async function cnListView(deps:VendorPageDeps,q:{metric:ListMetric;basis:Basis;periods?:number}):Promise<CnListView>{
- if(await access(deps)==='withheld')return {state:'withheld'};
+ const licence=await vendorPageLicence(deps);
+ if(licence==='withheld')return {state:'withheld'};
  const {db}=deps,run=await db.activeRun('financials');
- if(!run)return {state:'empty'};
+ if(!run)return {state:'empty',licence};
  const periodEnds=ends(run,q.basis).slice(-positive(q.periods,10,12)),latest=ends(run,'quarter').at(-1);
  const dates=new Set(periodEnds),derived=q.metric==='revenue_yoy';
  if(derived)for(const end of periodEnds)dates.add(prior(end));
@@ -114,16 +116,17 @@ export async function cnListView(deps:VendorPageDeps,q:{metric:ListMetric;basis:
   db.observationsGrid(run.run_id,{metrics:[derived?'revenue_cum':q.metric,'member_count'],periodEnds:[...dates]}),freshness(deps)]);
  const cell=cells(rows,await sources(db,rows),run);
  const nodes=classes.map(c=>node(c.code,c.name_zh,c.vendor_code,latest?cell(c.code,'member_count',latest):null));
- return {state:'ok',header:header(run),freshness:registry,nodes,periodEnds,
+ return {state:'ok',header:header(run,licence),freshness:registry,nodes,periodEnds,
   cells:nodes.flatMap(n=>periodEnds.map(end=>cell(n.code,q.metric,end)))};
 }
 const latestMetrics=['revenue_cum','revenue_yoy','net_income_parent_cum','net_income_parent_yoy','gross_margin','roe_avg'] as const;
 export async function cnDetailView(deps:VendorPageDeps,q:{code:string;metric:DetailMetric;basis:Basis;window:'5y'|'10y'|'all'}):Promise<CnDetailView>{
- if(await access(deps)==='withheld')return {state:'withheld'};
+ const licence=await vendorPageLicence(deps);
+ if(licence==='withheld')return {state:'withheld'};
  const industry=byIndexCode(q.code);
  if(!industry)return {state:'unknown_industry'};
  const {db}=deps,run=await db.activeRun('financials');
- if(!run)return {state:'empty'};
+ if(!run)return {state:'empty',licence};
  const [rows,memberships]=await Promise.all([db.observationsOfRun(run.run_id,{code:q.code}),db.activeRun('memberships')]);
  const members=memberships?await sortedMembers(db,memberships,q.code):[],preview=members.slice(0,5);
  const sourceOf=await sources(db,[...rows,...preview]),cell=cells(rows,sourceOf,run);
@@ -131,24 +134,25 @@ export async function cnDetailView(deps:VendorPageDeps,q:{code:string;metric:Det
  const count=last?cell(q.code,'member_count',last):null;
  const dates=ends(run,q.basis),end=dates.at(-1);
  const cutoff=end&&q.window!=='all'?String(Number(end.slice(0,4))-(q.window==='5y'?5:10))+end.slice(4):'';
- return {state:'ok',header:header(run),freshness:await freshness(deps),
+ return {state:'ok',header:header(run,licence),freshness:await freshness(deps),
   node:node(q.code,industry.nameZh,industry.gildataCode,count),latest:[...(annual?latestMetrics.map(m=>cell(q.code,m,annual)):[]),...(count?[count]:[])],
   series:dates.filter(d=>d>cutoff).map(d=>cell(q.code,q.metric,d)),
-  constituents:memberships?{header:header(memberships),total:members.length,preview:memberRows(preview,sourceOf)}:null};
+  constituents:memberships?{header:header(memberships,licence),total:members.length,preview:memberRows(preview,sourceOf)}:null};
 }
 export async function cnConstituentsView(deps:VendorPageDeps,q:{code:string;page?:number;pageSize?:number}):Promise<CnConstituentsView>{
- if(await access(deps)==='withheld')return {state:'withheld'};
+ const licence=await vendorPageLicence(deps);
+ if(licence==='withheld')return {state:'withheld'};
  const industry=byIndexCode(q.code);
  if(!industry)return {state:'unknown_industry'};
  const {db}=deps,run=await db.activeRun('memberships');
- if(!run)return {state:'empty'};
+ if(!run)return {state:'empty',licence};
  const [members,financials]=await Promise.all([sortedMembers(db,run,q.code),db.activeRun('financials')]);
  const last=financials&&ends(financials,'quarter').at(-1);
  const counts=financials&&last?await db.observationsOfRun(financials.run_id,{code:q.code,metric:'member_count',from:last,to:last}):[];
  const pageSize=positive(q.pageSize,50,200),lastPage=Math.max(1,Math.ceil(members.length/pageSize));
  const page=positive(q.page,1,lastPage),offset=(page-1)*pageSize;
  const slice=members.slice(offset,offset+pageSize),sourceOf=await sources(db,[...counts,...slice]);
- return {state:'ok',header:header(run),freshness:await freshness(deps),total:members.length,page,pageSize,
+ return {state:'ok',header:header(run,licence),freshness:await freshness(deps),total:members.length,page,pageSize,
   node:node(q.code,industry.nameZh,industry.gildataCode,financials&&last&&counts.length?cells(counts,sourceOf,financials)(q.code,'member_count',last):null),
   rows:memberRows(slice,sourceOf)};
 }

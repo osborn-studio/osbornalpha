@@ -1,9 +1,9 @@
 import {cookies} from 'next/headers';
-import {isAdminViewer} from '../admin-viewer';
+import {isAdminViewer,isSignedInViewer} from '../admin-viewer';
 import {memoryTableClient} from '../../db/memory-table-client';
 import {supabaseTableClient} from '../../db/table-client';
 import {getAdminSupabase} from '../../supabase/admin';
-import {memoryVendorRawStore} from '../../vendor/raw-store';
+import {memoryVendorRawStore,supabaseVendorRawStore,type VendorRawStore} from '../../vendor/raw-store';
 import {fixtureMode,E2E_COOKIE} from '../fixture-mode';
 import {memoryVendorIndustryDb,supabaseVendorIndustryDb} from './db';
 import {fixtureDirSource} from './fixtures-dir';
@@ -38,20 +38,30 @@ let seeded:ReturnType<typeof seedFixtures>|undefined;
 /** Only isolated fixture servers may impersonate an admin. A cookie read failure closes access. */
 export async function authorizedVendorFixtures(){
  if(!fixtureMode())return null;
- try{if((await cookies()).get(E2E_COOKIE)?.value==='unlicensed')return null;}catch{return null;}
+ const fixture=await viewerFixtures();
+ return fixture?.isPublic?null:fixture;
+}
+async function viewerFixtures(){
+ let value:string|undefined;
+ try{value=(await cookies()).get(E2E_COOKIE)?.value;}catch{return null;}
+ if(value==='unlicensed')return null;
  seeded??=seedFixtures().catch(error=>{seeded=undefined;throw error;});
- return seeded;
+ return {...await seeded,isPublic:value==='public'};
 }
 
-export async function vendorPageDeps():Promise<VendorPageDeps>{
+export async function vendorPageDeps():Promise<VendorPageDeps&{readonly raw?:VendorRawStore}>{
  const now=new Date();
  if(fixtureMode()){
-  const fixture=await authorizedVendorFixtures();
-  return fixture?{...fixture,now,isAdmin:async()=>true}:
-   {db:memoryVendorIndustryDb(),tables:memoryTableClient(),now,isAdmin:async()=>false};
+  const fixture=await viewerFixtures();
+  if(!fixture)return {db:memoryVendorIndustryDb(),tables:memoryTableClient(),now,isAdmin:async()=>false,isSignedIn:async()=>false};
+  const {db,tables,raw,isPublic}=fixture;
+  return {db,raw,now,isAdmin:async()=>!isPublic,isSignedIn:async()=>true,tables:isPublic?{...tables,async select(table,match,opts){
+   const rows=await tables.select(table,match,opts);
+   return table==='industry_dataset_licenses'?rows.map(row=>({...row,status:'public'})):rows;
+  }}:tables};
  }
  // Resolve the service client inside the licence lookup so even a configuration failure closes access.
  let admin:ReturnType<typeof getAdminSupabase>|undefined;
  const service=()=>admin??=getAdminSupabase();
- return {now,isAdmin:isAdminViewer,get tables(){return supabaseTableClient(service());},get db(){return supabaseVendorIndustryDb(service());}};
+ return {now,isAdmin:isAdminViewer,isSignedIn:isSignedInViewer,get raw(){return supabaseVendorRawStore(service());},get tables(){return supabaseTableClient(service());},get db(){return supabaseVendorIndustryDb(service());}};
 }

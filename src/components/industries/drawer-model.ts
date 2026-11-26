@@ -19,8 +19,8 @@ export function vendorMembershipPayload(nodeName:string,row:ConstituentRow,heade
  return {kind:'vendor_membership',nodeName,row,header};
 }
 export function vendorReplayUrl(cell:VendorCell):string {
- const params=new URLSearchParams({view:'replay',code:cell.code,metric:cell.metric,duration:cell.duration,period_end:cell.periodEnd});
- return `/api/admin/industries/vendor?${params}`;
+ const params=new URLSearchParams({code:cell.code,metric:cell.metric,duration:cell.duration,period_end:cell.periodEnd});
+ return `/api/industries/vendor/replay?${params}`;
 }
 export function readReplayResult(data:unknown,runId:string) {
  if(!isObj(data)||!isObj(data.run)||data.run.run_id!==runId||typeof data.match!=='boolean')return null;

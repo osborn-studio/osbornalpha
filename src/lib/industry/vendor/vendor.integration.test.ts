@@ -128,7 +128,7 @@ describe.skipIf(!process.env.S4_TEST_STATE)('vendor page reads on PG17',()=>{
   const ingest={db,tables,raw,source,universe,now:()=>now,codeVersion:'test'};
   const opts={mode:'apply',triggeredBy:'script',fromYear:2024,toYear:2025} as const;
   expect((await runGildataFinancials(ingest,opts)).status).toBe('success');
-  const deps={db,tables,now,isAdmin:async()=>true},code=universe[0].indexCode;
+  const deps={db,tables,now,isSignedIn:async()=>true,isAdmin:async()=>true},code=universe[0].indexCode;
   const views=(d:typeof deps)=>Promise.all([cnListView(d,{metric:'revenue_yoy',basis:'annual'}),
    cnDetailView(d,{code,metric:'gross_margin',basis:'quarter',window:'all'}),cnConstituentsView(d,{code})]);
   // Remove the scheme licence before the membership run takes a foreign key on it.

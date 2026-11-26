@@ -48,7 +48,7 @@ export function adaptVendorDrawer(p:VendorDrawerPayload,locale:Locale,t:Translat
   {id:'times',rows:[row('period',cell.periodEnd),row('asOf',unavailable),row('fetched',source?.fetchedAt),row('activated',header.activatedAt)]},
   {id:'transform',rows:[row('parser',header.parserVersion),row('mapping',header.mappingVersion),row('method','vendor-reported/1'),
    row('codeVersion',header.codeVersion),row('aggregation',tr('notPublished'))]},
-  {id:'licence',rows:[row('status',tr('internal')),row('attribution',tr('notRecorded')),row('note',tr('terms'))]},
+  {id:'licence',rows:[row('status',tr(header.licence)),row('attribution',tr('notRecorded')),row('note',tr(header.licence==='public'?'termsPublic':'terms'))]},
   {id:'links',rows:[]},
  ]};
 }
