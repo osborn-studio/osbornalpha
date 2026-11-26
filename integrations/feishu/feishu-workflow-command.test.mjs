@@ -225,8 +225,12 @@ test('a plain suggestion has the same registration payload as the minimal web fo
   const {analyst_id,role,source_type,...payload} = web;
   assert.deepEqual(body.recommendation,payload);
   assert.equal(body.simulation,null);
-  const preview = summary(body,'example','分析师 A',null);
-  assert.match(preview,/70%（表单默认）/);
+  const id = '12345678-abcd-4321-bfed-12345678abcd';
+  const preview = summary(body,id,'分析师 A',null);
+  assert.match(preview,/待确认提案 #12345678\n/);
+  assert.ok(!preview.includes(id));
+  assert.match(summary({...body,defaultConfidence:false},id,'分析师 A',null),/信心 70%/);
+  assert.doesNotMatch(preview,/信心|表单默认/);
   assert.match(preview,/16:30（北京时间）/);
   assert.doesNotMatch(preview,/undefined|null|目标价|止损价|参考价|建议理由|关联研究/);
 });
@@ -318,4 +322,48 @@ test('postposed price evidence must be current, exact, and unqualified', () => {
     assert.equal(result.fields[key],undefined,text);
     assert.equal(result.body,null,text);
   }
+});
+
+test('issuer shorthand and listing suggestions require an unambiguous selection consistent with the draft', () => {
+  const group = [
+    {ticker:'000333.SZ',market:'A',name:'美的集团'},
+    {ticker:'00300.HK',market:'HK',name:'美的集团'},
+  ];
+  const realEstate = {ticker:'03990.HK',market:'HK',name:'美的置业'};
+  const other = {ticker:'600519.SH',market:'A',name:'贵州茅台'};
+  const suggestions = [...group,realEstate].map(row => ({...row,suggestionOnly:true}));
+  const draft = {securityName:'美的',action:'buy',quantity:100};
+  const name = value => ({securityName:quote(value,value)});
+  const code = value => ({ticker:quote(value,value)});
+  const clarify = (text,fields,catalogue,priorCatalogue) => evaluateProposal(
+    'A','analystA',text,sentAt,[],draft,{intent:'proposal',fields},catalogue,priorCatalogue);
+
+  const onlySuggestion = clarify('美的',name('美的'),[suggestions[0]]);
+  const bothMarkets = clarify('美的集团',name('美的集团'),group,suggestions);
+  for (const result of [onlySuggestion,bothMarkets]) {
+    assert.equal(result.fields.ticker,undefined);
+    assert.equal(result.body,null);
+  }
+  for (const wrong of [realEstate,other]) {
+    assert.throws(() => clarify('美的集团 '+wrong.ticker,{...name('美的集团'),...code(wrong.ticker)},group,suggestions),
+      /不同的标的/);
+  }
+  assert.throws(() => clarify('贵州茅台 600519.SH',{...name('贵州茅台'),...code(other.ticker)},[other],suggestions),
+    /前面提到的是「美的」/);
+  const confirmed = clarify('000333.SZ',code('000333.SZ'),suggestions);
+  assert.equal(confirmed.fields.ticker,group[0].ticker);
+  assert.equal(confirmed.fields.quantity,100);
+  assert.deepEqual(confirmed.missing,['模拟成交价']);
+});
+
+test('a first order with both an issuer and a code needs matching security master evidence', () => {
+  const text = '买入美的集团 03990.HK 100股，模拟成交价3港元';
+  const fields = {securityName:quote('美的集团','美的集团'),ticker:quote('03990.HK','03990.HK'),
+    action:quote('buy','买入'),quantity:quote(100,'100股'),price:quote(3,'模拟成交价3港元')};
+  const order = listings => evaluateProposal('A','analystA',text,sentAt,[],{},{intent:'proposal',fields},listings);
+  assert.throws(() => order([]),/无法从证券主表核实/);
+  assert.throws(() => order([
+    {name:'美的集团',ticker:'00300.HK',market:'HK'},
+    {name:'美的置业',ticker:'03990.HK',market:'HK',suggestionOnly:true},
+  ]),/不同的标的/);
 });

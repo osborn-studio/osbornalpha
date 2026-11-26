@@ -26,8 +26,8 @@ const adviceOnlyCommand = /^(仅登记建议|只登记建议|只记建议|取消
 // The server resolves the real profile from the authenticated Feishu role. The shared parser requires a UUID for shape validation.
 const validationProfile = '00000000-0000-4000-8000-000000000000';
 const marketEvidence = {
-  A:/(?:A股|沪市|深市|北交所|上交所|深交所|^A$)/i,
-  HK:/(?:港股|港交所|香港|H股|^HK$|^港(?:的|市)?那只[。！？!?]?$)/i,
+  A:/(?:A股|沪市|深市|北交所|上交所|深交所|^A$|\b\d{6}\s+CH\b)/i,
+  HK:/(?:港股|港交所|香港|H股|^HK$|\b\d{1,5}\s+HK\b|^港(?:的|市)?那只[。！？!?]?$)/i,
   US:/(?:美股|纳斯达克|纽交所|NASDAQ|NYSE|^US$)/i,
 };
 const horizonEvidence = {
@@ -177,8 +177,28 @@ export function proposalSecurityQuery(text, interpretation, priorFields = {}) {
   if (ticker?.requiresListing) return (!priorFields.ticker && priorFields.securityName) || ticker.value;
   const name = modelName(source,interpretation);
   if (!name) return priorFields.ticker ? null : priorFields.securityName ?? null;
+  if (!priorFields.ticker && priorFields.securityName && name.name !== priorFields.securityName) return name.name;
   if (localModelListing(source,name,{}).ticker) return null;
   return name.name;
+}
+
+export function listingChoices(catalogue = [],market) {
+  const exact = catalogue.filter(item => !item.suggestionOnly);
+  return (exact.length ? exact : catalogue).filter(item => !market || item.market === market);
+}
+
+export function correctionTickerQuery(text,packet,priorFields) {
+  if (!priorFields.ticker && !priorFields.securityName) return null;
+  const field = modelField(comparable(text),packet,'ticker');
+  if (typeof field?.value !== 'string') return null;
+  const market = inferCoreMarket(field.value);
+  const ticker = market && normalizeSecurityTicker(field.value,market);
+  const original = priorFields.ticker ?? resolveNamedSecurity(priorFields.securityName).ticker;
+  return ticker && ticker !== original ? ticker : null;
+}
+
+function conflictingSecurity(ticker,previous,fallback) {
+  throw Object.assign(new Error(fallback),{status:400,conflictingTicker:ticker,previousSecurity:previous});
 }
 
 function boundedPriceEvidence(source, evidence) {
@@ -214,7 +234,7 @@ function includeAmountLabel(source, evidence, key) {
   return evidence;
 }
 
-function interpretedFields(text, interpretation, priorFields, receivedAt, catalogue) {
+function interpretedFields(text, interpretation, priorFields, receivedAt, catalogue, priorCatalogue) {
   if (interpretation.intent !== 'proposal') return {};
   const source = comparable(text);
   const field = key => modelField(source,interpretation,key);
@@ -242,7 +262,8 @@ function interpretedFields(text, interpretation, priorFields, receivedAt, catalo
   const nameValue = name?.name ?? priorName;
   const local = name ? localModelListing(source,name,options) :
     priorName && extracted.market ? resolveNamedSecurity(priorName,extracted.market) : {};
-  const remote = (catalogue ?? []).filter(item => !marketHint || item.market === marketHint);
+  const choices = listingChoices(catalogue,marketHint);
+  const remote = choices.filter(item => !item.suggestionOnly);
   if (nameValue) extracted.securityName = nameValue;
   // With a queried security master, only use a listing it actually verified for this issuer.
   if (!security?.requiresListing && local.ticker && (!catalogue || (remote.length === 1 && remote[0].ticker === local.ticker))) listings.push(local);
@@ -256,18 +277,26 @@ function interpretedFields(text, interpretation, priorFields, receivedAt, catalo
     const explicit = /[A-Z\d]/i.test(value) && evidence.includes(value.toUpperCase()) ?
       resolveModelSecurity(source,value,options) : resolveModelSecurity(source,security.evidence,options);
     if (explicit.ticker && explicit.ticker === normalizeSecurityTicker(value,explicit.market)) listings.push(explicit);
-    const exact = remote.find(item => normalizeSecurityTicker(value,item.market) === item.ticker);
+    const exact = choices.find(item => normalizeSecurityTicker(value,item.market) === item.ticker);
     if (exact && /^\d{1,5}$/.test(value) && (evidence === value || evidence.includes(`(${value})`))) listings.push(exact);
   }
-  if (!security?.requiresListing && !listings.length && remote.length === 1 && (marketHint || !resolveNamedSecurity(nameValue ?? '').securityName)) listings.push(remote[0]);
+  if (!security && !listings.length && remote.length === 1 && (marketHint || !resolveNamedSecurity(nameValue ?? '').securityName)) listings.push(remote[0]);
+  const refiningName = priorName && name && nameValue !== priorName;
+  // A second name can clarify a shorthand from the draft. Both searches must point
+  // to the same listing. A prefix match alone cannot select a trade.
+  const previousChoices = listingChoices(refiningName ? priorCatalogue : catalogue);
+  const sameIssuer = remote.some(row => previousChoices.some(previous => previous.ticker === row.ticker));
+  if (listings.length && name && catalogue?.length === 0 && !local.ticker) {
+    invalid(`暂时无法从证券主表核实「${name.name}」和该代码是否对应，请稍后再回复公司名和代码。`);
+  }
   if (new Set(listings.map(item=>item.ticker)).size > 1 ||
-      (name && !priorName && catalogue?.length && listings.some(item=>!remote.some(row=>row.ticker === item.ticker)))) {
+      (name && catalogue?.length && listings.some(item=>!choices.some(row=>row.ticker === item.ticker)))) {
     invalid('证券名称和代码指向不同的标的，请明确其中一只。');
   }
-  if (priorName && (nameValue !== priorName || (listings.length &&
+  if (priorName && ((refiningName && !sameIssuer) || (listings.length &&
       resolveNamedSecurity(priorName,listings[0].market).ticker !== listings[0].ticker &&
-      !catalogue?.some(item => item.ticker === listings[0].ticker) && (!name || catalogue?.length)))) {
-    invalid(`你前面提到的是「${priorName}」。请回复它的上市市场，或把公司名和完整代码一起发来。如果要换成另一只，请另发一条完整建议。`);
+      !previousChoices.some(item => item.ticker === listings[0].ticker) && (!name || refiningName || catalogue?.length)))) {
+    conflictingSecurity(listings[0]?.ticker,priorName,`你前面提到的是「${priorName}」。请回复它的上市市场，或把公司名和完整代码一起发来。如果要换成另一只，请另发一条完整建议。`);
   }
   if (listings.length) ({ticker:extracted.ticker,market:extracted.market} = listings[0]);
 
@@ -391,7 +420,7 @@ function validateFields(fields, signatures) {
   if (fields.ticker != null) {
     const market = inferCoreMarket(fields.ticker);
     if (!market || (fields.market && fields.market !== market) || !normalizeSecurityTicker(fields.ticker,market)) {
-      invalid('标的代码与市场不匹配，请写明交易所代码，例如 00700.HK。');
+      invalid('标的代码与市场不匹配，请补充该公司的上市市场和完整股票代码。');
     }
     fields.market = market;
   }
@@ -409,7 +438,7 @@ function validateFields(fields, signatures) {
 
 const buyDirection = action => action === 'buy' || action === 'add';
 
-export function evaluateProposal(role, analystName, command, receivedAt, analystAliases = [], priorFields = {}, interpretation, catalogue) {
+export function evaluateProposal(role, analystName, command, receivedAt, analystAliases = [], priorFields = {}, interpretation, catalogue, priorCatalogue) {
   const text = command.trim();
   const adviceOnly = isAdviceOnlyCommand(text) || (!interpretation &&
     /(?:仅|只)(?:登记|记录|提交|录入|记|录)(?:分析)?建议|(?:不做|不录入|不登记|取消)(?:模拟)?成交/.test(text));
@@ -418,7 +447,7 @@ export function evaluateProposal(role, analystName, command, receivedAt, analyst
   if (adviceOnlyCommand.test(text)) {
     update = {};
   } else if (interpretation) {
-    update = interpretedFields(text,interpretation,priorFields,receivedAt,catalogue);
+    update = interpretedFields(text,interpretation,priorFields,receivedAt,catalogue,priorCatalogue);
   } else if (pending.length === 1 && Object.hasOwn(priceLabels,pending[0]) && amountPattern.test(text)) {
     update = amountFields(pending[0],text);
   } else if (pending.length === 1 && pending[0] === 'quantity' && /^\d+(?:\.\d+)?\s*股?$/.test(text)) {
@@ -432,7 +461,8 @@ export function evaluateProposal(role, analystName, command, receivedAt, analyst
     invalid(`原提案是 ${priorFields.ticker}。未能从证券主表核实新代码 ${candidate.value}，请核对标的后重发。`);
   }
   if (priorFields.ticker && update.ticker && priorFields.ticker !== update.ticker) {
-    invalid(`原提案的标的是 ${priorFields.ticker}。如果要换成 ${update.ticker}，请另发一条完整建议。`);
+    conflictingSecurity(update.ticker,priorFields.securityName ?? priorFields.ticker,
+      `原提案的标的是 ${priorFields.ticker}。如果要换成 ${update.ticker}，请另发一条完整建议。`);
   }
   const fields = {...priorFields,...update};
   if (adviceOnly || fields.executionMode === 'advice_only') {
@@ -472,12 +502,12 @@ export function summary({recommendation:rec,simulation,defaultConfidence}, id, a
     .filter(key => rec[key] != null)
     .map(key => priceLabels[key] + ' ' + rec[key]);
   return [
-    `待确认提案 ${id}`,
+    `待确认提案 #${id.slice(0,8)}`,
     `分析师 ${analystName}`,
     `${rec.ticker} · ${rec.market} · ${actions[rec.action]}`,
     `建议时间 ${beijingInputValue(rec.recommended_at).replace('T',' ')}（北京时间）`,
     ...(prices.length ? [prices.join('｜') + '（' + currency + '）'] : []),
-    `信心 ${rec.confidence}%${defaultConfidence ? '（表单默认）' : ''}`,
+    ...(!defaultConfidence ? [`信心 ${rec.confidence}%`] : []),
     ...(rec.horizon ? ['期限 ' + (horizonLabels[rec.horizon] ?? rec.horizon)] : []),
     ...(rec.rationale ? ['建议理由 ' + rec.rationale] : []),
     ...(rec.thesis_ref ? ['关联研究 ' + rec.thesis_ref] : []),

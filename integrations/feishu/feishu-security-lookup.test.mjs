@@ -72,3 +72,28 @@ test('invalid input and non-authoritative search responses never return listings
   }});
   await assert.rejects(delayed('英伟达'),{message:'证券主表暂时不可用。'});
 });
+
+test('a short issuer name can return verified clarification choices without making any an exact match', async () => {
+  const rows = [
+    listing('000333.SZ','美的集团','A',{match_kind:'name'}),
+    listing('00300.HK','美的集团','HK',{match_kind:'name'}),
+    listing('03990.HK','美的置业','HK',{match_kind:'name'}),
+    listing('000001.SZ','美的关联公司','A',{match_kind:'fuzzy'}),
+    listing('000002.SZ','另一家美的公司','A',{match_kind:'name'}),
+    listing('000003.SZ','美的子公司','A',{match_kind:'name',selectable:false}),
+  ];
+  const lookup = createFeishuSecurityLookup({fetchImpl:async () => response(rows)});
+  const expected = [
+    {ticker:'000333.SZ',market:'A',name:'美的集团',suggestionOnly:true},
+    {ticker:'00300.HK',market:'HK',name:'美的集团',suggestionOnly:true},
+    {ticker:'03990.HK',market:'HK',name:'美的置业',suggestionOnly:true},
+  ];
+  assert.deepEqual(await lookup('美的'),[]);
+  assert.deepEqual(await lookup('美的',{includeSuggestions:true}),expected);
+  assert.deepEqual(await lookup('美的',{includeSuggestions:true,market:'A'}),[expected[0]]);
+  assert.deepEqual(await lookup('美',{includeSuggestions:true}),[]);
+  const exact = {ticker:'000333.SZ',market:'A',name:'美的集团'};
+  rows.push(listing('000333.SZ','美的集团','A',{match_kind:'exact_alias'}));
+  assert.deepEqual(await lookup('美的',{includeSuggestions:true}),[exact,...expected.slice(1)]);
+  assert.deepEqual(await lookup('美的'),[exact]);
+});

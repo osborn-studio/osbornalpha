@@ -66,6 +66,7 @@ test('a slow primary yields to one cloud chat request within the configured tota
     const before=performance.now();
     const reply=createFeishuChatResponder(settings,mock)({text:'ou_example fixture@example.invalid 91000000-0000-4000-8000-00000000000a 能听到吗？',isApprover:true,
       history:[{role:'assistant',content:'fixture-private-report-rows'}],
+      groupContext:[{member:'群成员',said:'fixture-private-group-message',assistant:'请补充上市市场'}],
       proposalContext:{ticker:'PRIVATE',action:'buy',status:'awaiting_approval'},
       readContext:{source:'formal_report',scope:'named',analyst:'fixture-private-name',sections:['scores']}});
     if (expected) assert.equal(await reply,expected);
@@ -73,6 +74,8 @@ test('a slow primary yields to one cloud chat request within the configured tota
     assert.ok(performance.now()-before<850,'model attempts exceeded the bounded request window');
     assert.deepEqual(mock.calls.map(c=>c.url),[localBase+'/chat/completions',cloudBase+'/chat/completions']);
     const [local,cloud]=mock.calls;
+    assert.equal(local.input.recentPublicGroupExchanges[0].said,'fixture-private-group-message');
+    assert.equal('recentPublicGroupExchanges' in cloud.input,false);
     assert.ok(local.options.signal.aborted);
     assert.ok(cloud.options.signal instanceof AbortSignal);
     assert.equal(cloud.options.signal.aborted,!expected);
@@ -220,12 +223,12 @@ test('cloud conversation accepts a single reply or a permitted read and withhold
     await assert.rejects(createFeishuChatResponder(env,mock)(input));
     assert.equal(mock.calls.length,2);
   }
-  for (const statement of ['你手头有 2 条待确认的提案','手上还压着两笔需要点头的单子','命中率为八成','暂无模拟成交']) {
+  for (const statement of ['你手头有 2 条待确认的提案','手上还压着两笔需要点头的单子','命中率为八成','暂无模拟成交','仓位占比 85%']) {
     const mock=modelStub(down,()=>completion({reply:statement}));
     const answer=await createFeishuChatResponder(env,mock)(input);
     assert.equal(typeof answer,'string');
     assert.match(answer,/待办.*评分.*模拟成交/);
-    assert.doesNotMatch(answer,/2 条|两笔|八成|暂无模拟成交/);
+    assert.doesNotMatch(answer,/2 条|两笔|八成|暂无模拟成交|85%/);
     assert.deepEqual(mock.calls[1].body.response_format,{type:'json_object'});
   }
 });
@@ -399,7 +402,7 @@ test('a late local completion cannot delay either receipt or duplicate a cloud-e
   await localStarted.promise;
   assert.equal(flow.receive(submission).duplicate,true);
   await flow.drainReceipts();
-  assert.deepEqual(messages,['收到，正在处理这条消息。']);
+  assert.deepEqual(messages,[],'no receipt before intent classification');
   assert.equal(model.calls.length,1);
   await interpreting;
   await flow.drainProposalReplies();
@@ -426,6 +429,20 @@ test('a late local completion cannot delay either receipt or duplicate a cloud-e
   assert.deepEqual(writes.map(write=>write.sourceId),[pending.id]);
   assert.equal(writes[0].execution.quantity,2);
   assert.deepEqual(flow.view().proposals.map(p=>p.formalStatus),['registered']);
-  assert.equal(messages.length,4); // Input receipt, summary, confirmation receipt, formal result.
+  assert.equal(messages.length,3); // Summary, confirmation receipt, formal result.
   assert.match(messages.at(-1),/模拟成交已登记/);
+});
+
+test('backup navigation uses a destination key while the linked receipt stays local',async()=>{
+  const query={read:'navigation',target:'context'};
+  const context={ticker:'00300.HK',action:'buy',status:'registered',execution:null};
+  const mock=modelStub(down,()=>completion(query));
+  assert.deepEqual(await createFeishuChatResponder(env,mock)({text:'我想从这条回执打开对应页面',proposalContext:context}),query);
+  assert.deepEqual(mock.calls[1].input.proposalContext,null);
+  const packet={intent:'read',fields:{},query};
+  const extractMock=modelStub(down,()=>completion(packet));
+  const extract=createFeishuLlmExtractor(env,{...extractMock,formalTrades:true});
+  assert.deepEqual(await extract({text:'刚才那条对应的网页入口呢',receivedAt:'2026-11-26T08:02:06Z'}),packet);
+  const invalid=modelStub(down,()=>completion({...query,url:'https://example.org'}));
+  await assert.rejects(createFeishuChatResponder(env,invalid)({text:'入口呢'}));
 });

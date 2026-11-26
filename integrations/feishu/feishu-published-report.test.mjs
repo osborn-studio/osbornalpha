@@ -70,3 +70,23 @@ test('public report refuses missing or changed group snapshots and never falls b
   await assert.rejects(generate(scope));
   assert.ok(reads>0);
 });
+
+test('PM group publication includes per-analyst holdings and a currency group cost share, with current authorization',async()=>{
+  const calls=[];
+  const generate=createPublishedGroupReportReader(async request=>{
+    calls.push(request);
+    const name=room.analystNamesByRole[request.analystKey];
+    const ticker=name==='甲'?'ACME':'FOO';
+    const cost=name==='甲'?10:30;
+    const response=packet(name,0,0,'暂无可判定命中的样本｜暂无已评分样本')
+      .replace('指定分析师','分析师 '+name).replace('分析师建议关联的模拟成交',name+' · 建议关联的模拟成交');
+    return response+'\n\n分析师持仓（按成本，按币种分别计算）\n'+ticker+'｜净股数 1｜均价 '+cost+'｜持仓成本 '+cost+' USD｜已实现盈亏 0 USD｜占比 100%';
+  },()=>room);
+  for(const requesterId of [undefined,'guest','author1'])await assert.rejects(generate({...scope,includePositions:true,requesterId}));
+  assert.deepEqual(calls,[]);
+  const message=await generate({...scope,includePositions:true,requesterId:'pm'});
+  assert.deepEqual(calls.map(x=>x.sections),Array(2).fill(['recommendations','scores','trades','positions']));
+  assert.match(message,/甲\nACME[^\n]+占比 100%\n乙\nFOO[^\n]+占比 100%/u);
+  const totals=message.split('全组持仓与占比（按同币种持仓成本）\n')[1];
+  assert.match(totals,/ACME[^\n]+USD｜占比 25%\nFOO[^\n]+USD｜占比 75%/u);
+});

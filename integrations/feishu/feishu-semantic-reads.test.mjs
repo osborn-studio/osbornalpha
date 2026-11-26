@@ -197,3 +197,34 @@ test('a stalled formal API has its own lane and proceeds concurrently with a cha
   await h.flow.drain();
   assert.ok(h.sent.some(item=>item.text==='正式报表'));
 });
+
+test('holdings group, owner, and named queries reuse a delivered group report for ordinal and named follow-ups',async t=>{
+  const groupText='本群分析师正式记录（北京时间）\n\nlina\n分析师持仓（按成本，按币种分别计算）\n暂无归属持仓。\n\nbin\n分析师持仓（按成本，按币种分别计算）\n暂无归属持仓。';
+  const h=fixture(t,{query:({analystKey})=>analystKey ? '正式模拟账户查询（分析师 '+analystKey+'，北京时间）' : groupText});
+  h.config.analystBySender={a:'lina',b:'bin'};
+  await h.ask('仓位占比各自是多少');
+  await h.ask('后者');
+  await h.ask('我要lina提案过的仓位');
+  await h.ask('那 bin 呢');
+  await h.ask('我的仓位',{senderId:'a'});
+  assert.deepEqual(h.queries,[{expectedOwnerId:owner,analystKey:null,analystKeys:['bin','lina'],sections:['positions']},
+    ...['bin','lina','bin','lina'].map(analystKey=>({expectedOwnerId:owner,analystKey,sections:['positions']}))]);
+  assert.deepEqual(h.calls,[]);assert.deepEqual(h.extracts,[]);
+  const successfulReads=h.observations.filter(e=>e.readAction==='positions').length;
+  assert.equal(successfulReads,5);
+  assert.match((await h.ask('仓位占比各自是多少',{senderId:'a'})).text,/跨分析师/u);
+  assert.match((await h.ask('我要lina提案过的仓位',{senderId:'guest'})).text,/正式报表仅/u);
+  assert.match((await h.ask('那 bin 呢',{senderId:'a',parentId:'out5'})).text,/跨分析师/u);
+  assert.equal(h.queries.length,5);assert.deepEqual(h.writes,[]);
+  assert.equal(h.observations.filter(e=>e.readAction==='positions').length,successfulReads);
+});
+
+test('a relative subject cannot broaden a report scope or infer a hidden analyst',t=>{
+  const {config}=fixture(t);
+  const names=['示例分析师甲（analystA）','示例分析师乙（analystB）','示例分析师丙（analystC）'];
+  const tool=modelReport('context',['positions']);
+  for(const text of [names[0],names.join('\n'),'无名单']){
+    const source={kind:'formal_report',text:'本群分析师正式记录（北京时间）\n'+text,analyst_key:null};
+    assert.ok(groundFormalRead(tool,'后者',config,{source}).scopeQuestion);
+  }
+});

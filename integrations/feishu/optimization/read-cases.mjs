@@ -1,5 +1,7 @@
+import {formalReadSections} from '../feishu-read-tool.mjs';
+
 // All aliases, values and dialogue turns here are fixtures. The monitor supplies only an enum.
-export const readCategories = ['analyst_roster','pending','recommendations','scores','trades','group_report'];
+export const readCategories = ['analyst_roster','pending',...formalReadSections,'group_report'];
 export const readTasks = Object.fromEntries(readCategories.flatMap(category => [
   ['read_'+category,'reads'],['extract_read_'+category,'read_intents'],
 ]));
@@ -15,6 +17,7 @@ const trainingRequests = {
   recommendations:'能翻一下我自己之前提过的投资建议吗？',
   scores:'我自己之前判断对了几回，命中率怎么样？',
   trades:'打开我名下根据建议产生的模拟成交记录。',
+  positions:'想核对采纳我的建议后，各标的剩下多少股、按成本各占多少。',
 };
 export function readTraining(task, previous) {
   const kind=task.slice('read_'.length);
@@ -22,9 +25,9 @@ export function readTraining(task, previous) {
   const inputFor=key=>({text:trainingRequests[key],isApprover:key==='pending',isAnalyst:!['pending','group_report'].includes(key)});
   const requests=[{input:inputFor(kind),expect:{tool:tool(kind)}}];
   if (readCategories.includes(previous)) requests.push({input:inputFor(previous),expect:{tool:tool(previous)}});
-  if (['recommendations','scores','trades'].includes(kind)) {
+  if (formalReadSections.includes(kind)) {
     const prior=kind==='trades'?'scores':'trades';
-    const label={recommendations:'建议原文',scores:'命中情况',trades:'模拟成交'}[kind];
+    const label={recommendations:'建议原文',scores:'命中情况',trades:'模拟成交',positions:'建议关联持仓'}[kind];
     requests.push({input:{text:'上面一条都没有，那同一个人的'+label+'呢？',isApprover:true,
       readContext:{source:'formal_report',scope:'named',analyst:'唐帆',sections:[prior]},
       history:[{role:'user',content:'查他的上一份记录。'},{role:'assistant',content:'本次查到 0 条。'}]},
@@ -42,6 +45,7 @@ const freshRequests = {
   pending:['我作为本群确认人，手头还有什么需要点头？','有多少申请等我去确认？','给我列出等我验收的提案。'],
   recommendations:['想复盘一下SUBJECT之前提过的操作建议。','能列出SUBJECT此前递过的建议吗？','把SUBJECT给系统提交的建议调来看看。'],
   scores:['想看看SUBJECT以往的判断命中率如何。','能给我SUBJECT那些建议的评估成绩么？','查查SUBJECT的评分和命中表现。'],
+  positions:['想了解SUBJECT的建议在组合里还持有哪些股票。','SUBJECT提过的建议里，各标的还剩多少股？','列一下按SUBJECT建议形成的持仓和成本占比。'],
   trades:['我需要核对SUBJECT的建议已经记了哪些模拟成交。','能给我SUBJECT模拟投资的成交清单吗？','帮忙翻一下SUBJECT的模拟组合实际买卖了哪些。'],
 };
 

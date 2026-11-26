@@ -9,6 +9,38 @@ const labelBefore = /(?:美股|纳斯达克|纽交所|NASDAQ|NYSE|港股|港交�
 const tickerShape = /^[A-Z]{1,5}(?:[.-][A-Z])?$/u;
 const canonical = code => code.replace('-', '.');
 
+export function numericListingAt(source,pos) {
+  if (/[A-Za-z\d./_-]$/u.test(source.slice(0,pos))) return null;
+  const label = /^(?:(\d{6})[ \t]+CH|(\d{1,5})[ \t]+HK)(?![A-Za-z\d./_-])/iu.exec(source.slice(pos));
+  return label && {code:label[1] ?? label[2],market:label[1] ? 'A' : 'HK',evidence:label[0]};
+}
+
+// The issuer and the instrument come from the model. A market suffix on that
+// same quoted instrument has a defined meaning independent of the model.
+export function groundNumericMarket(packet,text) {
+  const ticker = packet.fields.ticker;
+  if (!ticker) return packet;
+  const value = ticker.value.normalize('NFKC').trim();
+  const evidence = ticker.evidence.normalize('NFKC').trim();
+  const quoted = /^(\d{1,6})(?:[ \t]+(?:CH|HK))?$/iu.exec(evidence);
+  if (!quoted || !(value === quoted[1] || value.toUpperCase() === evidence.toUpperCase())) return packet;
+  const source = text.normalize('NFKC');
+  let market;
+  for (let pos=source.indexOf(evidence); pos!==-1; pos=source.indexOf(evidence,pos+1)) {
+    const label = numericListingAt(source,pos);
+    if (label?.code !== quoted[1]) return packet;
+    const current = {value:label.market,evidence:label.evidence};
+    if (market && market.value !== current.value) return packet;
+    market = current;
+  }
+  if (!market) return packet;
+  const other = packet.fields.market;
+  if (other && other.value !== market.value && !market.evidence.toUpperCase().includes(other.evidence.normalize('NFKC').trim().toUpperCase())) {
+    return {intent:'ambiguous',intentEvidence:market.evidence,fields:{}};
+  }
+  return {...packet,fields:{...packet.fields,ticker:{value:quoted[1],evidence:quoted[1]},market}};
+}
+
 // Only repair the field the model selected, using the same occurrence in its quoted current message.
 export function correctLabeledSymbol(packet,text) {
   const fields = packet.fields;

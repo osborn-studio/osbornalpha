@@ -27,7 +27,7 @@ export function createFeishuSecurityLookup({fetchImpl = fetch, baseUrl = 'https:
   }
   endpoint.pathname = '/api/search';
 
-  return async (name, {market} = {}) => {
+  return async (name, {market,includeSuggestions = false} = {}) => {
     if (typeof name !== 'string' || (market && !markets.has(market))) return [];
     const query = name.normalize('NFKC').trim().replace(/[–—−]/gu,'-');
     if (!query || query.length > 80 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) return [];
@@ -50,14 +50,17 @@ export function createFeishuSecurityLookup({fetchImpl = fetch, baseUrl = 'https:
     }
 
     const normalizedQuery = comparableName(query);
+    const allowNamePrefix = includeSuggestions && normalizedQuery.length >= 2 && /\p{L}/u.test(normalizedQuery);
     const listings = new Map();
     for (const row of packet.results) {
       if (row?.verification_status !== 'verified' || row.list_status !== 'listed' || row.selectable !== true ||
           !markets.has(row.m) || (market && row.m !== market) || typeof row.n !== 'string' || !row.n.trim() ||
-          typeof row.t !== 'string' || inferCoreMarket(row.t) !== row.m || !matchesQuery(row,normalizedQuery)) continue;
+          typeof row.t !== 'string' || inferCoreMarket(row.t) !== row.m) continue;
+      const exact = matchesQuery(row,normalizedQuery);
+      if (!exact && !(allowNamePrefix && row.match_kind === 'name' && comparableName(row.n).startsWith(normalizedQuery))) continue;
       const ticker = normalizeSecurityTicker(row.t,row.m);
-      if (!ticker || listings.has(ticker)) continue;
-      listings.set(ticker,{ticker,market:row.m,name:row.n.trim()});
+      if (!ticker || (listings.has(ticker) && !(exact && listings.get(ticker).suggestionOnly))) continue;
+      listings.set(ticker,{ticker,market:row.m,name:row.n.trim(),...(!exact && {suggestionOnly:true})});
     }
     return [...listings.values()];
   };
