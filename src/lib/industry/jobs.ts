@@ -16,6 +16,7 @@ import {supabaseSnapshotStore} from '../facts/snapshot-store';
 import type {SnapshotStore} from '../facts/snapshot-store';
 import type {FactsDb} from '../facts/types';
 import {getAdminSupabase} from '../supabase/admin';
+import {runMembershipsCsi300} from './csi300';
 import {runClassificationsSw} from './classifications';
 import {supabaseIndustryDb} from './db';
 import {industryCnUniverse} from './facts-scope';
@@ -36,10 +37,10 @@ import {runClassificationsSic,runMembershipsSic} from './sic';
 import {runMembershipsSw} from './source-memberships';
 import type {IndustryDb,IndustryDeps,ManifestStore,MetricCellRow,Scheme,SchemeVersion} from './types-us';
 
-export const INDUSTRY_JOBS=['load-a-share','facts-scope','memberships-sw','memberships-sic','marks','official','aggregate','aggregate-sic','valuation'] as const;
+export const INDUSTRY_JOBS=['load-a-share','memberships-csi300','facts-scope','memberships-sw','memberships-sic','marks','official','aggregate','aggregate-sic','valuation'] as const;
 export type IndustryJob=typeof INDUSTRY_JOBS[number];
 export const DEFERRED_JOBS:ReadonlySet<IndustryJob>=new Set<IndustryJob>(['official','valuation']);
-export const TUSHARE_JOBS:ReadonlySet<IndustryJob>=new Set<IndustryJob>(['load-a-share','memberships-sw','marks']);
+export const TUSHARE_JOBS:ReadonlySet<IndustryJob>=new Set<IndustryJob>(['load-a-share','memberships-csi300','memberships-sw','marks']);
 export const isIndustryJob=(s:string):s is IndustryJob=>(INDUSTRY_JOBS as readonly string[]).includes(s);
 
 /** What every job answers. The runners of Tasks 5–13 keep their own receipts; runIndustryJob maps them here. */
@@ -93,6 +94,7 @@ export async function runIndustryJob(job:IndustryJob,deps:IndustryJobDeps,opts:I
    const r=await runLoadAShare(deps,{apply:!opts.dryRun,triggeredBy,today:opts.today,maxLookups:opts.limit,...(opts.tickers===undefined?{}:{tickers:opts.tickers}),...captureOf(deps)});
    return {job,receipt:{batchId:r.batchId,status:receiptStatus(r.status),counts:r.apply?countsOf(r.apply.counts):{candidates:r.plan.candidates,...prefixed(r.plan.skipped,'skipped.'),...prefixed(r.plan.rejected,'rejected.')},errors:r.apply?.errors??[]}};
   }
+  case 'memberships-csi300':return {job,receipt:await runMembershipsCsi300(deps,opts)};
   case 'facts-scope':{
    // spec §4.10: not a separate upsert job — the industry universe is merged into desiredCn (Task 6 INDUSTRY block)
    const today=opts.today??utcToday(deps.now());
@@ -162,7 +164,7 @@ export function productionIndustryDeps(opts:ProductionIndustryDepsOptions):Indus
 }
 
 export interface SyncArgs{job:IndustryJob;apply:boolean;limit?:number;tickers?:string[];factsAsOf?:string;tradeDates:string[];l1Codes:string[];recomputeFrom?:string}
-export const SYNC_USAGE='usage: sync.ts --job <load-a-share|facts-scope|memberships-sw|memberships-sic|marks|official|aggregate|aggregate-sic|valuation> [--apply] [--limit n] [--ticker <canonical-CN-ticker>]... [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]';
+export const SYNC_USAGE='usage: sync.ts --job <load-a-share|memberships-csi300|facts-scope|memberships-sw|memberships-sic|marks|official|aggregate|aggregate-sic|valuation> [--apply] [--limit n] [--ticker <canonical-CN-ticker>]... [--facts-as-of YYYY-MM-DD] [--trade-date YYYY-MM-DD]... [--l1 <code>]... [--recompute-from YYYY-MM-DD]';
 const DATE_RE=/^\d{4}-\d{2}-\d{2}$/;
 const VALUE_FLAGS=new Set(['--job','--limit','--ticker','--facts-as-of','--trade-date','--l1','--recompute-from']);
 /** Pure argv parser of scripts/industry/sync.ts; errors carry the message printed before exit 2. */

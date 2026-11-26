@@ -102,7 +102,7 @@ export const SOURCE_CATALOG: readonly SourceEntry[] = [
   {
     ...defaults, id: 'tushare', name: { zh: 'Tushare 金融大数据', en: 'Tushare' },
     aliases: ['tushare_stock_basic', 'tushare_hk_basic', 'tushare:stock_basic',
-      'tushare:index_member_all', 'tushare:daily_basic', 'tushare:sw_daily'],
+      'tushare:index_weight', 'tushare:index_member_all', 'tushare:daily_basic', 'tushare:sw_daily'],
     hosts: ['api.tushare.pro'], credentials: ['TUSHARE_TOKEN'], pacing: pace(400),
     licence: { place: 'industry_dataset_licenses', keys: ['scheme:sw2021:2021', 'marks:tushare-daily_basic', 'official:tushare-sw_daily'] },
     capabilities: [capability('financial_facts', ['A']), capability('filings', ['A']), capability('filing_calendar', ['A']),

@@ -1,6 +1,6 @@
 import type { SecurityUniverse } from '@/lib/securities/model';
 
-const SCOPES: SecurityUniverse[] = [
+export const SECURITY_HEALTH_SCOPES: SecurityUniverse[] = [
   'a_stock', 'a_exchange_fund', 'a_cb', 'hk_main', 'sp500', 'nasdaq_top500', 'us_china',
 ];
 const CANARY_TICKERS = ['002463.SZ', '113001.SH', '00700.HK', 'AAPL', 'BABA'];
@@ -75,7 +75,7 @@ export function aggregateSecuritiesHealth(input: {
   canaries: HealthCanaryInput[];
 }): SecuritiesHealthResponse {
   const nowMs = Date.parse(input.now);
-  const scopes = SCOPES.map((scope) => {
+  const scopes = SECURITY_HEALTH_SCOPES.map((scope) => {
     const runs = input.runs.filter((run) => run.scope === scope).sort(byCompletedDesc);
     const latest = runs[0] ?? null;
     const success = runs.find((run) => run.status === 'success') ?? null;

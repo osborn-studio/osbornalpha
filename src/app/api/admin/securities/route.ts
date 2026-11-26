@@ -6,6 +6,7 @@ import {
 } from '@/lib/admin/auth';
 import {
   aggregateSecuritiesHealth,
+  SECURITY_HEALTH_SCOPES,
   type HealthCanaryInput,
   type HealthEventInput,
   type HealthMembershipInput,
@@ -26,6 +27,7 @@ export async function GET() {
       admin.from('security_universe_memberships')
         .select('ticker,universe,is_active,as_of_date')
         .eq('is_active', true)
+        .in('universe', SECURITY_HEALTH_SCOPES)
         .limit(20_000),
       admin.from('security_sync_runs')
         .select('scope,status,completed_at,source_as_of,inserted_count,updated_count,deactivated_count,error_code')

@@ -41,3 +41,12 @@ describe('security master migration contract', () => {
     expect(sql).not.toMatch(/asset_type[^\n]*(?:adr|lof|closed_end|reit)/i);
   });
 });
+
+it('adds CSI 300 to memberships while preserving the security master sync scopes', () => {
+  const sql = readFileSync('supabase/migrations/20261215090000_universe_csi300.sql', 'utf8').toLowerCase();
+  const allowed = sql.match(/check\s*\(universe in\s*\(([^)]+)\)/)?.[1];
+  expect(allowed?.match(/[a-z0-9_]+/g)?.sort()).toEqual(
+    ['a_stock', 'a_exchange_fund', 'a_cb', 'hk_main', 'sp500', 'nasdaq_top500', 'us_china', 'csi300'].sort(),
+  );
+  expect(sql).not.toMatch(/alter table (?:public\.)?security_sync_runs/);
+});

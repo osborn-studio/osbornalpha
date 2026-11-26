@@ -1,5 +1,5 @@
 // src/lib/facts/scope.test.ts
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi} from 'vitest';
 import {memoryTableClient} from '../db/memory-table-client';
 import {memoryFactsDb} from './memory-facts-db';
 import {SNAPSHOT_SKEW_MARGIN_MS,currentSecurities,fetchKey,reconcileScope,scopeRowFor} from './scope';
@@ -122,6 +122,43 @@ describe('reconcileScope: CN ticker choice, skips and paging',()=>{
  const sec=(c:Awaited<ReturnType<typeof seed>>,issuer:string,ticker:string,primary:boolean,extra:Record<string,unknown>={})=>c.insert('issuer_securities',{issuer_id:issuer,ticker,is_primary:primary,valid_from:'2010-01-01',valid_to:null,...extra});
  const key=(c:Awaited<ReturnType<typeof seed>>,entity:string,issuer:string|null)=>c.insert('research_entity_keys',{user_id:'u',entity_id:entity,in_scope:true,issuer_id:issuer,home_market:'A'});
  const I1='55555555-5555-4555-8555-555555555555',I2='66666666-6666-4666-8666-666666666666',I3='77777777-7777-4777-8777-777777777777';
+ const member=(tables:ReturnType<typeof memoryTableClient>,ticker:string,is_active=true,universe='csi300')=>tables.insert('security_universe_memberships',{ticker,universe,is_active,as_of_date:TODAY});
+ it('resolves active CSI 300 tickers to issuers, merges cohort reasons and retires a departing member',async()=>{
+  const tables=memoryTableClient();const {db}=recordingDb();
+  for(const id of [I1,I2,I3])await tables.insert('issuers',{issuer_id:id,status:'active'});
+  await sec(tables,I1,'777101.SH',true);await sec(tables,I2,'777102.SZ',false);
+  await sec(tables,I2,'777103.SZ',true);await sec(tables,I3,'777104.BJ',true);
+  await key(tables,'cohort-2',I2);
+  await member(tables,'777101.SH');await member(tables,'777102.SZ');await member(tables,'777104.BJ',false);
+  await reconcileScope({db,tables},'CN',{today:TODAY});
+  expect((await db.scopeAll('CN')).map(s=>[s.issuer_id,s.fetch_key,s.reasons,s.priority])).toEqual([
+   [I1,'777101.SH',['universe:csi300'],10],[I2,'777103.SZ',['cohort','universe:csi300'],10],
+  ]);
+  await tables.update('security_universe_memberships',{ticker:'777101.SH'},{is_active:false});
+  expect(await reconcileScope({db,tables},'CN',{today:TODAY,snapshotAt:NOW_ISO})).toMatchObject({desired:1,retired:1});
+  expect((await db.scopeRows('CN',[I1]))[0]).toMatchObject({priority:0,reasons:[]});
+ });
+ it('counts CSI 300 resolution failures by reason',async()=>{
+  const tables=memoryTableClient();const {db}=recordingDb();
+  await tables.insert('issuers',{issuer_id:I1,status:'merged'});
+  for(const id of [I2,I3])await tables.insert('issuers',{issuer_id:id,status:'active'});
+  await sec(tables,I1,'777201.SH',true);await sec(tables,A,'777202.SZ',true);
+  await sec(tables,I2,'900987.SH',true);await sec(tables,I3,'777204.SZ',true);await sec(tables,I3,'777205.SZ',true);
+  for(const ticker of ['777200.SH','777201.SH','777202.SZ','900987.SH','777204.SZ'])await member(tables,ticker);
+  const r=await reconcileScope({db,tables},'CN',{today:TODAY});
+  expect(r.skipped).toEqual({csi300_unknown_ticker:1,csi300_issuer_merged:1,csi300_unknown_issuer:1,csi300_no_cn_ticker:1,csi300_ambiguous_cn_ticker:1});
+  expect(r.desired).toBe(0);
+ });
+ it('preserves CSI 300 when the optional industry universe also supplies the issuer',async()=>{
+  vi.stubEnv('FACTS_CN_INDUSTRY_UNIVERSE','1');
+  try{
+   const tables=memoryTableClient();const {db}=recordingDb();
+   await tables.insert('issuers',{issuer_id:I1,status:'active'});await sec(tables,I1,'777301.SH',true);
+   await member(tables,'777301.SH');await member(tables,'777301.SH',true,'a_stock');
+   await reconcileScope({db,tables},'CN',{today:TODAY});
+   expect((await db.scopeAll('CN'))[0].reasons).toEqual(['universe:a_stock','universe:csi300']);
+  }finally{vi.unstubAllEnvs();}
+ });
  it('A+H issuer with an H primary gets its A share; B-share-only is skipped; two A candidates without a primary are ambiguous; two primaries are ambiguous',async()=>{
   const tables=await seed();const {db,calls}=recordingDb();
   for(const i of [I1,I2,I3])await tables.insert('issuers',{issuer_id:i,cik:null,status:'active'});

@@ -51,6 +51,10 @@
       "schedule": "10 1 * * *"
     },
     {
+      "path": "/api/cron/industry-sync?job=memberships-csi300",
+      "schedule": "0 3 3 * *"
+    },
+    {
       "path": "/api/cron/industry-sync?job=memberships-sic&limit=200",
       "schedule": "0 2 * * *"
     },

@@ -60,6 +60,7 @@ describe('industry sync cron',()=>{
  });
  it('gates: Tushare jobs 503 without a token; aggregate and facts-scope 403 without their CN flags',async()=>{
   const code=async(qs:string)=>{const r=await GET(req(qs,AUTH));return [r.status,(await r.json()).error.code];};
+  expect(await code('job=memberships-csi300')).toEqual([503,'tushare_unavailable']);
   expect(await code('job=marks')).toEqual([503,'tushare_unavailable']);
   expect(await code('job=load-a-share')).toEqual([503,'tushare_unavailable']);
   expect(await code('job=aggregate')).toEqual([403,'job_disabled']);

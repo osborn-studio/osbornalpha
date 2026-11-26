@@ -29,7 +29,10 @@ function harness(parse:ParseResult|(()=>ParseResult)=FY23,over:Partial<SyncDeps>
  const db=memoryFactsDb(tables);const storage=memorySnapshotStore();
  for(const s of scopes)void tables.insert('issuers',{issuer_id:s.issuer_id,status:'active'});
  const deps:SyncDeps={db,tables,storage,fetchUs:async()=>snap('{"facts":{}}'),fetchCn:async()=>[snap('{"code":0}')],parseUs:()=>typeof parse==='function'?parse():parse,parseCn:()=>typeof parse==='function'?parse():parse,now:()=>NOW,deadline:null,codeVersion:'a'.repeat(40),...over};
- mocks.reconcileScope.mockImplementation(async(d:{db:FactsDb},market:Market)=>d.db.reconcileScope(market,scopes.filter(s=>(s.market??'US')===market).map(s=>({issuer_id:s.issuer_id,reasons:['sp500'],priority:10,fetch_key:s.fetch_key}))));
+ mocks.reconcileScope.mockImplementation(async(d:{db:FactsDb},market:Market)=>{
+  const rows=scopes.filter(s=>(s.market??'US')===market).map(s=>({issuer_id:s.issuer_id,reasons:['sp500'],priority:10,fetch_key:s.fetch_key}));
+  return {changed:await d.db.reconcileScope(market,rows),desired:rows.length,retired:0,skipped:{}};
+ });
  // scopeRowFor (Task 14) answers for the issuers this harness knows; anyone else is unresolvable.
  mocks.scopeRowFor.mockImplementation(async(_tables:unknown,market:Market,issuerId:string)=>{const s=scopes.find(x=>x.issuer_id===issuerId&&(x.market??'US')===market);return s?{issuer_id:issuerId,reasons:['explicit'],priority:10,fetch_key:s.fetch_key}:null;});
  return {tables,db,storage,deps};
@@ -79,12 +82,23 @@ describe('runFactsSync — lifecycle',()=>{
   expect((await current(db,'2024-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000000',disclosure_seq:1});
   expect((await current(db,'2025-06-30')).rows.find(f=>f.concept==='revenue')).toMatchObject({value:'383285000001',disclosure_seq:2,is_revision:true});
  });
- it('runs idle when nothing is due and nothing is failing: success batch, ok heartbeat with idle=true',async()=>{
+ it('fails the scheduled batch when CN has no active scope, preserving counts from reconcile',async()=>{
   const {tables,deps}=harness(FY23,{},[]);
-  const r=await run(deps);
-  expect(r).toMatchObject({idle:true,status:'success',issuers:[]});
-  expect(r.detail).toMatchObject({idle:true,attempted:0});
-  expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',detail:{idle:true,attempted:0}});
+  const skipped={csi300_unknown_ticker:2};
+  mocks.reconcileScope.mockResolvedValue({desired:0,changed:0,retired:0,skipped});
+  for(let i=0;i<2;i++){
+   const r=await run(deps,{market:'CN'});
+   expect(r).toMatchObject({idle:true,status:'failed',issuers:[],errors:[{code:'empty_scope',message:JSON.stringify({market:'CN',skipped})}]});
+   expect(r.detail).toEqual({idle:true,attempted:0,published:0,failed:0,skipped:0});
+  }
+  expect(tables.rows('ingest_batches').map(b=>b.status)).toEqual(['failed','failed']);
+  expect(tables.rows('dq_freshness')[0]).toMatchObject({dataset:'facts.cn',status:'error',consecutive_errors:2,detail:{idle:true,empty_scope:true}});
+ });
+ it('reports an empty scope in a scheduled dry run without writing a batch or freshness',async()=>{
+  const {tables,deps}=harness(FY23,{},[]);
+  expect(await run(deps,{market:'CN',dryRun:true})).toMatchObject({status:'dry_run',idle:true,errors:[{code:'empty_scope',message:JSON.stringify({market:'CN',skipped:{}})}]});
+  expect(await run(deps,{market:'CN',dryRun:true,issuerIds:[]})).toMatchObject({errors:[]});
+  expect(tables.rows('ingest_batches')).toEqual([]);expect(tables.rows('dq_freshness')).toEqual([]);
  });
  describe('idle runs and freshness (healthy quiet weeks stay fresh, a failing active issuer is never masked)',()=>{
   let clock=NOW;
@@ -107,7 +121,7 @@ describe('runFactsSync — lifecycle',()=>{
    expect(r.idle).toBe(true);
    expect(tables.rows('dq_freshness')).toEqual([before]);
   });
-  it('a retired (priority 0) failed row is ignored: the idle run records ok',async()=>{
+  it('a retired (priority 0) row alone still leaves the market empty',async()=>{
    const scopes=[{issuer_id:ISSUER,fetch_key:'0000320193'}];
    const {tables,deps}=harness(FY23,{fetchUs:async()=>{throw new SyncError('sec_unavailable');}},scopes);
    await run(deps);
@@ -115,7 +129,8 @@ describe('runFactsSync — lifecycle',()=>{
    await deps.db.reconcileScope('US',[{issuer_id:ISSUER,reasons:['sp500'],priority:0,fetch_key:'0000320193'}]);   // ... so retire the row directly
    const r=await run(at(deps,3_600_000));
    expect(r.idle).toBe(true);
-   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'fresh',consecutive_errors:0});
+   expect(r.status).toBe('failed');
+   expect(tables.rows('dq_freshness')[0]).toMatchObject({status:'error',consecutive_errors:2,detail:{empty_scope:true}});
   });
  });
  it('publishes an empty run and reports no_rows when the source has nothing',async()=>{

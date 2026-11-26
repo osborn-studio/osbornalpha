@@ -154,7 +154,7 @@ describe('closedWindowTicker / mergeDesired',()=>{
 });
 
 describe('desiredCn INDUSTRY block (via reconcileScope)',()=>{
- it('flag off: the CN scope is exactly plan 2’s cohort set, industry tables are ignored',async()=>{
+ it('flag off: industry sources are ignored and the cohort stays in scope',async()=>{
   vi.stubEnv('FACTS_CN_INDUSTRY_UNIVERSE','');
   const t=await seed();const {db,calls}=recordingDb();
   const r=await reconcileScope({tables:t,db},'CN',{today:TODAY});
