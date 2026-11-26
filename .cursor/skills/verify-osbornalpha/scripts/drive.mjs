@@ -268,6 +268,20 @@ const journeys = {
     let feishuBody = null; try { feishuBody = await feishu.json(); } catch {}
     save(`auth-api-feishu-simulation-${MODE}.json`, { status: feishu.status, body: feishuBody });
     check('POST /api/integrations/feishu/simulation (ingest off) → 404 not_found', feishu.status === 404 && feishuBody?.error === 'not_found', `${feishu.status} ${JSON.stringify(feishuBody)}`);
+    // Admin-only Gildata industry data (#324/#332): the vendor read API refuses a signed-out caller with 403 unlicensed
+    // (never the vendor rows), and the vendor sync cron is unreachable because launch.sh pins CRON_SECRET (and
+    // INDUSTRY_CN_VENDOR_ENABLED / GILDATA_API_KEY) empty.
+    const vendor = await getJson('/api/admin/industries/vendor');
+    save(`auth-api-admin-industries-vendor-${MODE}.json`, vendor);
+    check('GET /api/admin/industries/vendor signed out → 403 unlicensed', vendor.status === 403 && vendor.body?.error?.code === 'unlicensed', `${vendor.status} ${JSON.stringify(vendor.body)}`);
+    const vsync = await getJson('/api/cron/industry-vendor-sync?job=gildata-memberships');
+    save(`auth-api-cron-industry-vendor-sync-${MODE}.json`, vsync);
+    check('GET /api/cron/industry-vendor-sync (no CRON_SECRET) → 503 cron_unavailable', vsync.status === 503 && vsync.body?.error?.code === 'cron_unavailable', `${vsync.status} ${JSON.stringify(vsync.body)}`);
+    // Read-only /admin/sources (#331) is admin-only: signed out it lands on /login?next=/admin/sources in both modes
+    // (gate mode: the middleware; guest mode: the page's own admin check redirects).
+    await page.goto(BASE + '/admin/sources', { waitUntil: 'networkidle' });
+    const src = new URL(page.url());
+    check('/admin/sources signed out → /login?next=/admin/sources', src.pathname === '/login' && src.searchParams.get('next') === '/admin/sources', page.url());
     await page.goto(BASE + '/login', { waitUntil: 'networkidle' });
     check('/login shows email + password inputs', await page.locator('input[type="email"]').isVisible() && await page.locator('input[type="password"]').isVisible());
     await shot(page, `auth-login-${MODE}`);
