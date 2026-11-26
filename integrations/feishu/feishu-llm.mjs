@@ -83,13 +83,22 @@ function withoutFeishuIds(text) {
   return text.replace(/@_user_\d+|\b(?:ou|on|oc|om)_[A-Za-z\d_-]+\b/g, '[飞书标识]');
 }
 
+// Never attach the provider body, chat text, URL, headers or original error to this error.
+class ModelFailure extends Error {
+  constructor(code,status) {
+    super('群聊助手暂时不可用。');
+    this.code=code;
+    if (Number.isInteger(status) && status>=100 && status<=599) this.status=status;
+  }
+}
+
 async function readCompletion(response) {
   if (!response.ok) {
-    await response.body?.cancel();
-    throw Error();
+    await response.body?.cancel().catch(()=>{});
+    throw new ModelFailure('MODEL_HTTP',response.status);
   }
   const reader = response.body?.getReader();
-  if (!reader) throw Error();
+  if (!reader) throw new ModelFailure('MODEL_OUTPUT');
   const decoder = new TextDecoder();
   let size = 0;
   let body = '';
@@ -98,13 +107,17 @@ async function readCompletion(response) {
     if (done) break;
     size += value.byteLength;
     if (size > 256_000) {
-      await reader.cancel();
-      throw Error();
+      await reader.cancel().catch(()=>{});
+      throw new ModelFailure('MODEL_OUTPUT');
     }
     body += decoder.decode(value, {stream:true});
   }
-  const choice = JSON.parse(body + decoder.decode())?.choices?.[0];
-  if (!choice || (choice.finish_reason != null && choice.finish_reason !== 'stop') || typeof choice.message?.content !== 'string') throw Error();
+  let choice;
+  try { choice = JSON.parse(body + decoder.decode())?.choices?.[0]; }
+  catch { throw new ModelFailure('MODEL_OUTPUT'); }
+  if (!choice || (choice.finish_reason != null && choice.finish_reason !== 'stop') || typeof choice.message?.content !== 'string') {
+    throw new ModelFailure('MODEL_OUTPUT');
+  }
   return choice.message.content;
 }
 
@@ -159,16 +172,22 @@ function modelSettings(env) {
 
 async function requestCompletion({url,bailian,model,timeoutMs,headers},fetchImpl,options) {
   const signal = AbortSignal.timeout(timeoutMs);
-  const response = await fetchImpl(url.href, {
-    method:'POST', headers, signal, redirect:'error',
-    body:JSON.stringify({model,stream:false,
-      ...(bailian ? {enable_thinking:false} : {reasoning_effort:'none'}),
-      ...options,
-    }),
-  });
-  const answer = await readCompletion(response);
-  signal.throwIfAborted();
-  return answer;
+  try {
+    const response = await fetchImpl(url.href, {
+      method:'POST', headers, signal, redirect:'error',
+      body:JSON.stringify({model,stream:false,
+        ...(bailian ? {enable_thinking:false} : {reasoning_effort:'none'}),
+        ...options,
+      }),
+    });
+    const answer = await readCompletion(response);
+    signal.throwIfAborted();
+    return answer;
+  } catch (error) {
+    if (signal.aborted) throw new ModelFailure('MODEL_TIMEOUT');
+    if (error instanceof ModelFailure) throw error;
+    throw new ModelFailure('MODEL_TRANSPORT');
+  }
 }
 
 export function createFeishuLlmExtractor(env = process.env, {fetchImpl = fetch,formalTrades = false,promptCandidate = activePrompt,readPrompt = () => promptCandidate} = {}) {
@@ -243,8 +262,9 @@ function plainChatReply(answer, proposalContext) {
   const liveQuote = /(?:当前股价|实时股价|当前报价|最新报价|最新股价|当前价格|实时价格|最新价格|现价)\s*(?:为|是|约|[:：])?\s*[$¥￥]?\d/u;
   const unverifiedRegistration = proposalContext?.status !== 'registered' &&
     /(?:^|[。！？]\s*)(?:回执显示[，：]?\s*)?这条(?:建议|提案)?\s*已经?(?:成功)?(?:登记|录入)/u.test(text);
-  if (!text || /^(?:\{|\[)/u.test(text) || claimedAction.test(text) || liveQuote.test(text) || unverifiedRegistration) {
-    throw new Error('群聊助手暂时不可用。');
+  if (!text || /^(?:\{|\[)/u.test(text)) throw new ModelFailure('MODEL_OUTPUT');
+  if (claimedAction.test(text) || liveQuote.test(text) || unverifiedRegistration) {
+    throw new ModelFailure('MODEL_REPLY_BLOCKED');
   }
   const limit = 520;
   const characters = Array.from(text);
@@ -256,14 +276,12 @@ export function createFeishuChatResponder(env = process.env, {fetchImpl = fetch,
   try { settings = modelSettings(env); }
   catch { return undefined; }
   if (!settings || settings.bailian) return undefined;
-  const chatSettings = {...settings,timeoutMs:Math.min(settings.timeoutMs,18_000)};
   return async ({text,history = [],isAnalyst = false,isApprover = false,proposalContext = null,onSentHistory}) => {
     if (typeof text !== 'string' || !text.trim()) throw new Error('群聊助手收到无效的消息内容。');
     const captured = {text:chatText(text,1800),history:scopedChatHistory(history),
       isAnalyst:isAnalyst === true,isApprover:isApprover === true,proposalContext:publicProposalForChat(proposalContext)};
-    const responseSettings = captured.proposalContext ? {...chatSettings,timeoutMs:Math.min(chatSettings.timeoutMs,9000)} : chatSettings;
     try {
-      const answer = await requestCompletion(responseSettings,fetchImpl,{
+      const answer = await requestCompletion(settings,fetchImpl,{
         temperature:0.2,max_tokens:320,messages:[
           {role:'system',content:withPromptGuidance(chatPrompt,readPrompt().chat)},
           {role:'user',content:JSON.stringify(captured)},
@@ -271,9 +289,9 @@ export function createFeishuChatResponder(env = process.env, {fetchImpl = fetch,
       });
       if (onSentHistory) try { onSentHistory(captured.history); } catch { /* Observing must not affect the answer. */ }
       return plainChatReply(answer,captured.proposalContext);
-    } catch {
-      // This fallback is independent of the formal suggestion extractor.
-      throw new Error('群聊助手暂时不可用。');
+    } catch (error) {
+      if (error instanceof ModelFailure) throw error;
+      throw new ModelFailure('MODEL_OUTPUT');
     }
   };
 }

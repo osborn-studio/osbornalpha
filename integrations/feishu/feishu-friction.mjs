@@ -53,6 +53,7 @@ function fieldsOf(values, names, model = false) {
 
 const intents = new Set(['other', 'proposal', 'help', 'ambiguous', 'cancel']);
 const topics = new Set(['missing', 'usage', 'investment']);
+const modelErrorCodes = new Set(['MODEL_TIMEOUT', 'MODEL_TRANSPORT', 'MODEL_HTTP', 'MODEL_OUTPUT', 'MODEL_REPLY_BLOCKED']);
 const safeKeys = keys => Array.isArray(keys) ? [...new Set(keys.filter(key => modelFields.has(key)))].sort() : undefined;
 
 function signalFor(turn, previous) {
@@ -110,6 +111,11 @@ export function createFrictionCollector(db, { now = Date.now, redactNames = [] }
       isSupplement: input.isSupplement === true, priorFields: fieldsOf(input.priorFields, names),
       priorMissing: safeKeys(input.pendingFields)
     });
+    if (turn.outcome === 'chat_fallback' && modelErrorCodes.has(record.modelErrorCode)) {
+      turn.modelErrorCode = record.modelErrorCode;
+      if (record.modelErrorCode === 'MODEL_HTTP' && Number.isInteger(record.modelHttpStatus) &&
+          record.modelHttpStatus >= 400 && record.modelHttpStatus <= 599) turn.modelHttpStatus = record.modelHttpStatus;
+    }
     if (record.missing) turn.missing = safeKeys(record.missing);
     for (const [packet, prefix] of [[record.packet, ''], [record.rawPacket, 'raw']]) {
       if (sensitive || !packet) continue;

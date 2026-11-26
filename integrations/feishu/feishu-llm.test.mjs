@@ -339,3 +339,41 @@ test('the formal extractor repairs a ticker-shaped issuer only with a matching c
   assert.equal(conflict.intent,'ambiguous');
   assert.deepEqual(conflict.fields,{});
 });
+
+test('casual and proposal-summary chat both give the loopback model the configured cold-start deadline',async t=>{
+  const deadlines=[];
+  const original=AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal,'timeout',ms=>{deadlines.push(ms);return original(ms);});
+  const responder=createFeishuChatResponder({...local,FEISHU_LLM_TIMEOUT_MS:'35000'},{
+    fetchImpl:async()=>completion('在，听到了。'),
+  });
+  await responder({text:'在吗'});
+  await responder({text:'这条进度如何？',proposalContext:{ticker:'NVDA',action:'buy',status:'awaiting_approval'}});
+  assert.deepEqual(deadlines,[35000,35000]);
+});
+
+test('chat diagnostics expose fixed categories and HTTP status without provider or message text',async()=>{
+  const privateText='provider-private-diagnostic-marker';
+  const cases=[
+    {code:'MODEL_TRANSPORT',request:async()=>{throw Error(privateText);}},
+    {code:'MODEL_HTTP',status:503,request:async()=>new Response(privateText,{status:503})},
+    {code:'MODEL_OUTPUT',request:async()=>new Response(privateText)},
+    {code:'MODEL_OUTPUT',request:async()=>completion('', 'length')},
+    {code:'MODEL_REPLY_BLOCKED',request:async()=>completion('我已经为你登记了这条建议。')},
+    {code:'MODEL_TIMEOUT',timeout:'1',request:async()=>{
+      await new Promise(resolve=>setTimeout(resolve,15));
+      return completion('在。');
+    }},
+  ];
+  for (const {code,status,request,timeout='35000'} of cases) {
+    const responder=createFeishuChatResponder({...local,FEISHU_LLM_TIMEOUT_MS:timeout},{fetchImpl:request});
+    await assert.rejects(responder({text:privateText}),err=>{
+      assert.equal(err.code,code);
+      assert.equal(err.status,status);
+      assert.equal(err.message,'群聊助手暂时不可用。');
+      assert.equal(err.cause,undefined);
+      assert.ok(!JSON.stringify(err).includes(privateText));
+      return true;
+    });
+  }
+});

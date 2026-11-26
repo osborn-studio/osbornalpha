@@ -1,4 +1,5 @@
 import { proposalStatus, reviseProposal } from './feishu-proposal-controls.mjs';
+import { analystRosterText, isAnalystRosterQuestion } from './feishu-analyst-roster.mjs';
 import { formalReportIntent } from './feishu-report-intent.mjs';
 import { isAssistantCommandCandidate } from './feishu-ostag.mjs';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,7 @@ const identifier = value => typeof value === 'string' && /^[\w:-]{1,160}$/.test(
 const proposalKinds = new Set(['proposal','proposal_ai','supplement','proposal_followup']);
 const recentDraftWindow = 30 * 60_000;
 const chatWindow = 30 * 60_000;
-const chatUnavailable = '我暂时没接上聊天模型，请稍后再试。';
+const chatUnavailable = '这次聊天模型没有返回可用答复，请稍后再试。';
 const usageHelp = '我可以登记分析建议和申请模拟成交。说出标的和动作就行，比如「我想买入英伟达」。有明确股数和每股成交价也可以一起写。整理好后，我会请 PM 确认。投资方向和成交价格由分析师提供。';
 const investmentHelp = '投资方向由分析师决定。你确定自己的建议后，把公司名和动作发给我，我可以整理并交给 PM 确认。';
 const priceExamples = {HK:'38.50 港元',A:'120 元人民币',US:'150 美元'};
@@ -176,6 +177,9 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
   const ownReportAt = db.prepare(`SELECT 1 FROM feishu_workflow_messages m
     JOIN feishu_workflow_events e ON e.chat_id=m.chat_id AND e.message_id=m.reply_to
     WHERE m.kind='formal_report' AND m.status='sent' AND m.chat_id=? AND m.message_id=? AND e.sender_id=?`);
+  const rosterRequester = db.prepare('SELECT sender_id FROM feishu_workflow_events WHERE chat_id=? AND message_id=?');
+  const ownBotMessage = db.prepare(`SELECT 1 FROM feishu_workflow_messages m JOIN feishu_workflow_events e
+    ON e.chat_id=m.chat_id AND e.message_id=m.reply_to WHERE m.status='sent' AND m.chat_id=? AND m.message_id=? AND e.sender_id=?`);
   const queueMessage = db.prepare(`INSERT INTO feishu_workflow_messages (id,chat_id,reply_to,text,kind,proposal_id)
     VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`);
   const nextDemo = db.prepare(`SELECT * FROM feishu_workflow_proposals WHERE demo_status='pending'
@@ -249,6 +253,9 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
           kind = 'approval';
           anchor = event.parentId;
         }
+      } else if (isAnalystRosterQuestion(content) && (event.directedToBot === true ||
+          (hasParent && ownBotMessage.get(event.chatId,event.parentId,event.senderId)))) {
+        kind = 'analyst_roster';
       } else if (queryFormal && (event.directedToBot === true ||
           (hasParent && ownReportAt.get(event.chatId,event.parentId,event.senderId))) && formalReportIntent(content,current)) {
         kind = 'formal_report';
@@ -710,6 +717,11 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       return 'paired';
     }
     if (current.chatId !== event.chat_id) return 'ignored';
+    if (event.kind === 'analyst_roster') {
+      // Render against the current membership when the queued reply is delivered.
+      notice(event,'analyst_roster','');
+      return 'responded';
+    }
     if (event.kind === 'formal_report') {
       if (interpretation?.error) notice(event,'formal_report',interpretation.error);
       else if (interpretation?.text && reportAllowed(current,event.sender_id,interpretation.ownerId,interpretation.analystKey)) {
@@ -860,6 +872,13 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
         .run('目标群映射已变更。',message.seq);
       return;
     }
+    if (message.kind === 'analyst_roster') {
+      const sender=rosterRequester.get(message.chat_id,message.reply_to)?.sender_id;
+      message.text=sender && (isApprover(current,sender) || roleFor(current,sender))
+        ? analystRosterText(current)
+        : '当前群的 PM 和已绑定分析师可以查看分析师名单。';
+      db.prepare('UPDATE feishu_workflow_messages SET text=? WHERE seq=?').run(message.text,message.seq);
+    }
     const report = message.kind === 'formal_report';
     const webhook = report && sendMessage.formalReportWebhook === true;
     if (report) {
@@ -993,13 +1012,17 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     const {session,history,proposal} = chatContext(event,since);
     const proposalContext = proposal && publicProposalContext(proposal);
     const text = event.text.slice(0,3000);
-    let reply, sentHistory;
+    let reply, sentHistory, modelErrorCode, modelHttpStatus;
     try {
       const answer = await respondToChat({text,history,
         ...(monitor && {onSentHistory:sent => { sentHistory = sent; }}),isAnalyst:Boolean(roleFor(current,event.sender_id)),
         isApprover:isApprover(current,event.sender_id),...(proposalContext && {proposalContext})});
       if (typeof answer === 'string' && answer.trim()) reply = answer.trim().slice(0,800);
-    } catch { /* Keep model provider details out of the group reply. */ }
+    } catch (error) {
+      modelErrorCode = error?.code;
+      modelHttpStatus = error?.status;
+    }
+    const fallback = modelErrorCode === 'MODEL_TIMEOUT' ? '这次聊天模型响应超时，请稍后再试。' : chatUnavailable;
     const modelReplied = Boolean(reply);
     let observedContext = proposalContext, responded = false;
     transaction(() => {
@@ -1012,7 +1035,7 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
         observedContext = publicProposalContext(latest);
         if (!reply || latest.formal_status !== proposalContext.status) reply = proposalFacts(latest,observedContext);
       }
-      const id = notice(event,'chat',reply ?? chatUnavailable,proposal?.id);
+      const id = notice(event,'chat',reply ?? fallback,proposal?.id);
       if (reply) {
         saveChatTurn.run(id,event.chat_id,event.sender_id,session,text,now());
         pruneChatTurns.run(event.chat_id,event.sender_id,event.chat_id,event.sender_id);
@@ -1021,8 +1044,8 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       responded = true;
     });
     if (responded && text.trim()!=='同意') observeSafely(() => monitor.observe({component:'chat',chatId:event.chat_id,senderId:event.sender_id,
-      messageId:event.message_id,threadId:proposal?.id ?? session,user:text,assistant:reply ?? chatUnavailable,
-      outcome:modelReplied ? 'chat' : 'chat_fallback',proposalContext:observedContext,sentHistory},settings()));
+      messageId:event.message_id,threadId:proposal?.id ?? session,user:text,assistant:reply ?? fallback,
+      outcome:modelReplied ? 'chat' : 'chat_fallback',proposalContext:observedContext,sentHistory,modelErrorCode,modelHttpStatus},settings()));
   }
 
   const nextMember = db.prepare(`SELECT e.*,j.action,j.display_name,j.attempts FROM feishu_membership_jobs j
