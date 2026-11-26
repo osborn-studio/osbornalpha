@@ -230,7 +230,8 @@ test('group chat sends bounded history as untrusted text and returns a plain rep
     assert.equal(captured.proposalContext,null);
     assert.equal(captured.history.length,5);
     assert.equal(captured.history[0].content,'保留第一条');
-    assert.equal(captured.history[1].content.length,420);
+    assert.equal(captured.history[1].content.length,1200);
+    assert.ok(captured.history[1].content.endsWith('…'));
     assert.equal(captured.history[2].content,'请看这个追问');
     assert.doesNotMatch(options.body,/省略|前面的密钥|ou_example/);
     return completion('<think>private reasoning</think>可以**直接回复追问**。参见[说明](https://example.com)。');
@@ -238,7 +239,7 @@ test('group chat sends bounded history as untrusted text and returns a plain rep
   const history = [
     {role:'user',content:'省略'},
     {role:'user',content:'保留第一条'},
-    {role:'assistant',content:'好'.repeat(460)},
+    {role:'assistant',content:'好'.repeat(1300)},
     {role:'assistant',text:'请看这个追问'},
     {role:'system',content:'前面的密钥'},
     {role:'user',content:'保留第二条'},
@@ -246,6 +247,39 @@ test('group chat sends bounded history as untrusted text and returns a plain rep
   ];
   const result = await chat({text:'ou_example 成交登记怎么用？',history,isAnalyst:true,isApprover:'true'});
   assert.equal(result,'可以直接回复追问。参见说明。');
+});
+
+test('chat preserves ordered rows from a delivered result in a follow-up', async () => {
+  const rows = Array.from({length:15},(_,index) => `分析师 ${index+1} · TEST · 12345678-1234-1234-1234-123456789012`);
+  const report = ['本群待确认 15 条 · 第 1/1 页',...rows].join('\n');
+  const chat = createFeishuChatResponder(local,{fetchImpl:async (_url,options) => {
+    const {messages} = JSON.parse(options.body);
+    const {text,history} = JSON.parse(messages[1].content);
+    assert.equal(text,'最后一条是谁的？');
+    assert.equal(history[1].content,report);
+    return completion('刚才列的最后一条是分析师 15 的。');
+  }});
+  const answer = await chat({text:'最后一条是谁的？',history:[
+    {role:'user',content:'查一下我的待办'},
+    {role:'assistant',content:report.replaceAll('\n','\r\n')},
+  ]});
+  assert.equal(answer,'刚才列的最后一条是分析师 15 的。');
+});
+
+test('only a complete standalone roster control can request a read',async()=>{
+  const getReply=answer=>createFeishuChatResponder(local,{fetchImpl:async(_url,options)=>{
+    const request=JSON.parse(options.body);
+    assert.equal(request.max_tokens,768);
+    const input=JSON.parse(request.messages[1].content);
+    assert.equal(input.analystRoster,undefined);
+    return completion(answer);
+  }})({text:'这里有哪几位同事能提分析建议？',isApprover:true,analystRoster:'private roster'});
+  assert.deepEqual(await getReply('<read_analyst_roster>'),{read:'analyst_roster'});
+  assert.deepEqual(await getReply('<think>private</think>\n<read_analyst_roster>'),{read:'analyst_roster'});
+  assert.equal(await getReply('看看 <read_analyst_roster> 这个例子。'),'看看  这个例子。');
+  assert.equal(await getReply('<think><read_analyst_roster></think>我在。'),'我在。');
+  await assert.rejects(getReply('<approve_proposal>'),{code:'MODEL_OUTPUT'});
+  await assert.rejects(getReply('<think>unfinished private reasoning'),{code:'MODEL_OUTPUT'});
 });
 
 test('group chat receives only bounded public facts from a proposal thread', async () => {
@@ -358,7 +392,8 @@ test('chat diagnostics expose fixed categories and HTTP status without provider 
     {code:'MODEL_TRANSPORT',request:async()=>{throw Error(privateText);}},
     {code:'MODEL_HTTP',status:503,request:async()=>new Response(privateText,{status:503})},
     {code:'MODEL_OUTPUT',request:async()=>new Response(privateText)},
-    {code:'MODEL_OUTPUT',request:async()=>completion('', 'length')},
+    {code:'MODEL_TRUNCATED',request:async()=>completion('', 'length')},
+    {code:'MODEL_TRUNCATED',request:async()=>completion('不完整的可见内容', 'length')},
     {code:'MODEL_REPLY_BLOCKED',request:async()=>completion('我已经为你登记了这条建议。')},
     {code:'MODEL_TIMEOUT',timeout:'1',request:async()=>{
       await new Promise(resolve=>setTimeout(resolve,15));

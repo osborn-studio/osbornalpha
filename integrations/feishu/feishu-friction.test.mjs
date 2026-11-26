@@ -203,11 +203,11 @@ test('only an opted-in formal connector initializes the private monitor store', 
 
 test('timeout feedback reaches the group and only a sanitized failure category reaches diagnostics',async t=>{
   const h=harness(t),replies=[];
-  const errors=[{code:'MODEL_TIMEOUT'},{code:'MODEL_HTTP',status:503},{code:'PRIVATE_ERROR_VALUE',status:497}];
+  const errors=[{code:'MODEL_TIMEOUT'},{code:'MODEL_HTTP',status:503},{code:'PRIVATE_ERROR_VALUE',status:497},{code:'MODEL_TRUNCATED'}];
   const workflow=openFeishuWorkflow(h.db,fn=>fn(),{config,monitor:h.collector,now:h.now,
     respondToChat:async()=>{throw Object.assign(Error('private provider error'),errors.shift());},
     sendMessage:async({text})=>{replies.push(text);return {messageId:'om_reply_'+replies.length};}});
-  for(let i=0;i<3;i++){
+  for(let i=0;i<4;i++){
     workflow.receive({eventId:'ev_f'+i,messageId:'om_f'+i,chatId:config.chatId,senderId:'ou_pm',directedToBot:true,text:'刚才说到哪里了？'});
     await workflow.drain();
   }
@@ -216,5 +216,7 @@ test('timeout feedback reaches the group and only a sanitized failure category r
   assert.equal(turns[0].modelErrorCode,'MODEL_TIMEOUT');
   assert.equal(turns[1].modelHttpStatus,503);
   assert.equal(turns[2].modelErrorCode,undefined);
+  assert.equal(turns[3].modelErrorCode,'MODEL_TRUNCATED');
+  assert.match(replies[3],/长度|生成.{0,8}上限/);
   assert.doesNotMatch(JSON.stringify([turns,replies]),/PRIVATE_ERROR_VALUE|private provider error|497/);
 });

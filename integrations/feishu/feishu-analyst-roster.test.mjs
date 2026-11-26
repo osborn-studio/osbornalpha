@@ -7,11 +7,12 @@ import {isAnalystRosterQuestion,analystRosterText} from './feishu-analyst-roster
 test('group roster questions stay distinct from analysis reports, signup, suggestions and confirmations',()=>{
   const questions=['本群分析师有哪些','本群有哪些分析师','请问现在本群里都有哪几位分析师呀？','谁是这个群的分析师',
     '你知道咱们群的分析师都有哪几位吗','能告诉我群里分析师叫什么名字吗','有谁是咱们群的分析师','我们的分析师是谁',
-    '查看我们群的分析师','请列一下本群已绑定的分析师名单','分析师名单','本群分析师有几位？'];
+    '查看我们群的分析师','请列一下本群已绑定的分析师名单','分析师名单','本群分析师有几位？',
+    '再查一下本群分析师有哪些','请你重新核对一下群里有哪些分析师','你再帮我看看咱们群的分析师都有谁'];
   for(const text of questions)assert.equal(isAnalystRosterQuestion(text),true,text);
   for(const text of ['哪些分析师给过哪些建议','查本群分析师的评分','我想成为分析师','正式系统有哪些分析师','帮我登记建议',
     '能告诉我哪些分析师给过建议吗','你知道咱们群的分析师都买了哪几只股票吗',
-    '本群分析师有哪些？顺便帮我登记一笔交易','你知道什么是分析师吗','同意','有谁能确认交易']){
+    '本群分析师有哪些？顺便帮我登记一笔交易','再查一下本群分析师有哪些模拟成交','你知道什么是分析师吗','同意','有谁能确认交易']){
     assert.equal(isAnalystRosterQuestion(text),false,text);
   }
 });
