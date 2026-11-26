@@ -2,6 +2,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isUuid } from '../../src/lib/portfolio/validate.ts';
 import { createFeishuChatResponder, createFeishuLlmExtractor } from './feishu-llm.mjs';
+import {createFormalReader} from './feishu-formal-read.mjs';
+import {makeReportSender, readReportDelivery} from './feishu-report-delivery.mjs';
 import { createFormalSync } from './feishu-formal-api.mjs';
 import { openFeishuRuntime, readFeishuBindings } from './feishu-runtime.mjs';
 import { validateAnalystAliases } from './feishu-pairing.mjs';
@@ -22,7 +24,13 @@ export function createFormalFeishuWorkflow({sendMessage,env = process.env,extrac
     throw Error('请完成正式连接器的模型、接入地址、模拟账户、分析师和审批人绑定。');
   }
   validateAnalystAliases(config);
-  const workflow = openFeishuRuntime(directory,{assistantEnv:env,sendMessage,syncFormal,extractWithModel:extractor,respondToChat:chat,
+  let reportConfig;
+  try { reportConfig=readReportDelivery(directory); } catch {
+    console.error('正式查询的群播报配置无效，请重新配置后重启连接器。');
+  }
+  const queryFormal=reportConfig?.chatId===config.chatId ? createFormalReader(env) : undefined;
+  const workflow = openFeishuRuntime(directory,{assistantEnv:env,sendMessage:makeReportSender(sendMessage,reportConfig),
+    queryFormal,syncFormal,extractWithModel:extractor,respondToChat:chat,
     ...(searchSecurity && {searchSecurity})});
   if (env.OSBORN_FEISHU_LOCAL_ASSISTANT === 'true') {
     return {...workflow,async drainBackground() {
