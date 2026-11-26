@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {readFile,writeFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {isDeepStrictEqual,parseArgs} from 'node:util';
+import {parseFeishuReadTool} from '../feishu-read-tool.mjs';
 import {
   evaluateProposal, missingFields, proposalSecurityQuery, summary,
 } from '../feishu-workflow-command.mjs';
@@ -68,7 +69,8 @@ export function loadBusinessFixtures(examples,fixture) {
     if (example?.kind !== 'extraction' || fingerprint(example) !== sha256 || expectations.has(id)) {
       throw Error('业务预期中的样例缺失、重复或指纹不符。');
     }
-    if (!['no_proposal','clarify_single_proposal','request_details','pm_advice','pm_simulation','cancel_request'].includes(expected?.route) ||
+    if (!['no_proposal','read_only','clarify_single_proposal','request_details','pm_advice','pm_simulation','cancel_request'].includes(expected?.route) ||
+        (expected.route==='read_only'&&!parseFeishuReadTool(expected.query)) ||
         (expected.route === 'request_details' && !Array.isArray(expected.missing)) ||
         (expected.route === 'pm_simulation' && !expected.simulation)) {
       throw Error('业务预期缺少有效的结果类型、缺项或模拟成交参数。');
@@ -91,6 +93,10 @@ const present = (text,quote) => typeof quote === 'string' && quote.trim().length
   text.normalize('NFKC').includes(quote.normalize('NFKC').trim());
 
 function replay(example, packet, catalogues) {
+  if(packet?.intent==='read'){
+    const query=parseFeishuReadTool(packet.query);
+    return query?{route:'read_only',query}:{route:'rejected'};
+  }
   if (!packet || !['other','help','proposal','ambiguous','cancel'].includes(packet.intent)) return {route:'unavailable'};
   if (['other','help'].includes(packet.intent)) return {route:'no_proposal'};
   if (packet.intent==='cancel') return {route:'cancel_request'};
@@ -124,6 +130,7 @@ export function assessBusinessCase(example,packet,fixtures=defaultFixtures) {
   const observed = replay(example,packet,fixtures.catalogues);
   const failures = [];
   if (observed.route !== expected.route) failures.push(`应为 ${expected.route}，实际为 ${observed.route}`);
+  if(expected.route==='read_only' && !isDeepStrictEqual(observed.query,parseFeishuReadTool(expected.query)))failures.push('查询工具、栏目或对象范围不符');
   if (expected.fields) {
     for (const [key,value] of Object.entries(expected.fields)) {
       if (observed.fields?.[key] !== value) failures.push(`${key} 应为 ${value}`);

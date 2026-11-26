@@ -30,7 +30,7 @@ DEFAULT_SEED = {
 }
 PURPOSE = {
     "extraction": "帮助模型识别群成员当前的真实意图，并从当条原文准确提取建议、补项及原文证据。",
-    "chat": "帮助模型在群里以自然、贴切的中文回答问题，准确使用已提供的草稿事实。",
+    "chat": "帮助模型接续群聊上下文，判断应直接回答还是查询建议、评分和命中率、模拟成交、待办或名单。以正确对象和范围调用只读工具；聊天、转述和提问不能触发写入。",
 }
 REFLECTION = """你在优化飞书助手的中文提示词。任务为 TASK_DESCRIPTION
 基础系统提示、字段规范、授权、审批及数据写入逻辑均固定。你只编写补充说明。
@@ -130,7 +130,7 @@ def wait_for_connector():
         with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
             busy = db.execute("""SELECT 1 FROM feishu_workflow_events WHERE
                 (received_at>=? OR (status='pending' AND received_at>=?))
-                AND kind IN ('chat','proposal_ai','proposal_followup','supplement') LIMIT 1""", bounds).fetchone()
+                AND kind IN ('chat','proposal','approval','assistant_command','formal_report','analyst_roster','proposal_ai','proposal_followup','supplement') LIMIT 1""", bounds).fetchone()
         if not busy:
             return
         time.sleep(1.5)

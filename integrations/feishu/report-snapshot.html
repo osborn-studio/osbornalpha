@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; object-src 'none'; form-action 'none'">
+<title>分析师报告 · Osborn Alpha</title>
+<style>
+:root{color-scheme:dark;--bg:#101011;--surface:#19191c;--line:#353539;--text:#f3f2ee;--muted:#aeafb3;--brass:#e4b85b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 Geist,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+main,.mast-inner{max-width:1180px;margin:auto;padding-inline:clamp(16px,5vw,64px)}.mast{border-bottom:1px solid var(--line)}
+.mast-inner{display:flex;justify-content:space-between;align-items:center;gap:18px;min-height:60px}.wordmark{font:600 17px/1 "Geist Mono",ui-monospace,monospace;letter-spacing:-.05em}
+.mast-inner small,small,.method,.empty,.scope span,.meta{color:var(--muted)}h1,h2,p{margin:0}h1{font-weight:600;font-size:clamp(31px,4vw,50px);line-height:1.15;letter-spacing:-.05em}
+h2{font-size:19px;letter-spacing:-.025em;font-weight:600}.hero{padding:42px 0 27px}.meta{margin-top:10px;font-size:14px}
+.controls,.buttons,.scope{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.controls{justify-content:space-between;padding:0 0 21px;border-bottom:1px solid var(--line)}
+label{font-size:14px;color:var(--muted)}select,button{font:inherit;border-radius:6px;border:1px solid #4d4d54;background:#242428;color:var(--text);padding:7px 13px;cursor:pointer}
+select{margin-left:6px;min-width:135px}button:first-child{background:var(--brass);border-color:var(--brass);color:#201c13;font-weight:600}button:hover,select:hover{filter:brightness(1.1)}:focus-visible{outline:2px solid var(--brass);outline-offset:3px}
+.scope{padding:24px 0 14px}.scope span{font-size:13px;border-left:1px solid var(--line);padding-left:12px}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--line);background:var(--surface);border-radius:10px;overflow:hidden}
+.metric{padding:18px 19px;border-right:1px solid var(--line)}.metric:last-child{border-right:0}.metric p{font-size:14px;color:var(--muted)}.metric strong{display:block;font-size:clamp(29px,3.7vw,44px);line-height:1.35;font-weight:550}.metric small{font-size:12px}
+.num,td:not(:first-child){font-variant-numeric:tabular-nums}.num{font-family:"Geist Mono",ui-monospace,"SFMono-Regular",monospace}
+.panel{border:1px solid var(--line);border-radius:10px;background:var(--surface);margin-top:17px;padding:19px 22px}.panel h2{margin-bottom:13px}
+.brief{border-left:3px solid var(--brass);padding-block:18px}.brief p{max-width:78ch;margin:3px 0;color:#dbdad6}.scroll{overflow:auto}
+table{width:100%;text-align:left;border-collapse:collapse;font-size:14px}td,th{padding:10px 12px;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-weight:500;font-size:12px;color:var(--muted)}td:first-child,th:first-child{padding-left:0}td:first-child,.num{white-space:nowrap}tr:last-child td{border-bottom:0}.empty{font-size:14px}
+.method{font-size:13px;padding:22px 0 42px;max-width:90ch}.noscript{padding:8px;background:#28241b}article[hidden]{display:none}
+@media(max-width:700px){.panel{padding:14px 16px}.metrics{grid-template-columns:1fr 1fr}.metric{padding:13px}.metric:nth-child(2){border-right:0}.metric:nth-child(-n+2){border-bottom:1px solid var(--line)}.hero{padding-top:28px}.buttons{gap:7px}button,select{font-size:14px}.mast-inner small{font-size:12px}.scroll table{min-width:580px}}
+@media print{:root{color-scheme:light;--bg:white;--surface:white;--text:#111;--muted:#474747;--line:#bbb}.controls,.noscript{display:none}.mast-inner,main{max-width:none;padding-inline:0}.hero{padding-top:15px}.metric{padding:10px}h1{font-size:28px}.num{font-size:inherit}.metrics{grid-template-columns:repeat(4,1fr)}.panel{break-inside:avoid}.brief p{color:#181818}.scroll{overflow:visible}.scroll table{min-width:0}.method{padding-bottom:0}}
+</style>
+</head>
+<body>
+<header class="mast"><div class="mast-inner"><span class="wordmark">OSBORN ALPHA</span><small>正式分析模块 / 报表快照</small></div></header>
+<main>
+  <div class="hero"><h1>分析师报告看板</h1><p class="meta">数据截至北京时间 <time class="num" id="generated">@@TIME@@</time></p></div>
+  <div class="controls">
+    <label for="analyst">分析师 <select id="analyst">@@OPTIONS@@</select></label>
+    <div class="buttons"><button type="button" id="download">导出分析报告</button><button type="button" id="print">打印 / PDF</button></div>
+  </div>
+  <noscript><p class="noscript">正在显示全组数据。启用浏览器脚本后可筛选单人和导出报告。</p></noscript>
+  @@VIEWS@@
+</main>
+<script>
+'use strict';
+const analyst=document.getElementById('analyst');
+const views=[...document.querySelectorAll('article[data-view]')];
+function showSelected() {
+  for(const view of views) view.hidden=view.dataset.view!==analyst.value;
+}
+analyst.addEventListener('change',showSelected);
+showSelected();
+document.getElementById('print').addEventListener('click',()=>window.print());
+document.getElementById('download').addEventListener('click',()=>{
+  const current=views.find(view=>!view.hidden);
+  const time=document.getElementById('generated').textContent;
+  const report=current.querySelector('template.export').content.textContent;
+  const url=URL.createObjectURL(new Blob([report],{type:'text/markdown;charset=utf-8'}));
+  const link=document.createElement('a');
+  link.href=url;link.download='Osborn-分析师报告-'+time.slice(0,10)+'-'+current.querySelector('.scope h2').textContent.replace(/[\\/:*?"<>|]/g,'_')+'.md';
+  document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+</script>
+</body></html>

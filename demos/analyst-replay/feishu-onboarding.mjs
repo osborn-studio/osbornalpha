@@ -25,6 +25,7 @@ export function readConfiguredBindings(directory) {
   if (!record(value) || (value.chatId != null && value.chatId !== '' && !identifier(value.chatId)) ||
       (value.analystBySender != null && !record(value.analystBySender)) ||
       (value.analystNamesByRole != null && !record(value.analystNamesByRole)) ||
+      (value.demoOnlyRoles != null && (!Array.isArray(value.demoOnlyRoles) || !value.demoOnlyRoles.every(identifier))) ||
       (value.approverIds != null && !Array.isArray(value.approverIds))) throw Error('身份配置格式无效');
   validateAnalystAliases(value);
   return value;
@@ -37,7 +38,7 @@ export function mergeSelfEnrollments(settings, db) {
   if (!rows.length) return settings;
   const analystBySender = {...settings.analystBySender};
   const analystNamesByRole = {...settings.analystNamesByRole};
-  const demoOnlyRoles = [];
+  const demoOnlyRoles = [...(settings.demoOnlyRoles ?? [])];
   const assignedProfiles = new Set(Object.values(analystBySender));
   for (const row of rows) {
     if (Object.hasOwn(analystBySender,row.sender_id) || settings.approverIds?.includes(row.sender_id) ||

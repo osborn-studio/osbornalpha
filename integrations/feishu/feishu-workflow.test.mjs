@@ -106,24 +106,41 @@ function approval(n, parentId = 'om_sent_1', extra = {}) {
   return event(n,{senderId:approver,createdAt:approvedAt,text:'同意',parentId,...extra});
 }
 
-test('labeled cash budget and model name evidence produce a single NVDA advice with no fill', async t => {
-  const h = harness(t);
-  const workflow = h.open({extractWithModel:async () => ({intent:'proposal',fields:{
+test('a cash order waits for author-supplied terms and PM approval before one formal trade', async t => {
+  const h = harness(t,{simulationAccount:{confirmed:true,id:owner}});
+  const writes = [];
+  const supplement = '这次100股，模拟成交价150美元';
+  const workflow = h.open({register:undefined,
+    syncFormal:async request => { writes.push(request); return {recommendationId,decisionId,tradeId}; },
+    extractWithModel:async ({text}) => text === supplement ?
+      packet({quantity:quote(100,'100股'),price:quote(150,'模拟成交价150美元')}) : packet({
     action:{value:'buy',evidence:'买20万人民币的英伟达股票'},
     securityName:{value:'英伟达',evidence:'英伟达股票'},
     quantity:{value:200000,evidence:'20万人民币'},
     currency:{value:'CNY',evidence:'20万人民币'},
-  }})});
+  })});
   workflow.receive(event(1,{text:'买20万人民币的英伟达股票',directedToBot:true}));
   await workflow.drain();
-  assert.match(h.messages[0].text,/NVDA · US · 买入/);
+  assert.match(h.messages[0].text,/NVDA/);
+  assert.match(h.messages[0].text,/模拟成交价、模拟成交股数/);
   assert.match(h.messages[0].text,/仅登记建议/);
   assert.equal(h.messages.length,1);
   assert.equal(h.registrations.length,0);
   workflow.receive(approval(2));
   await workflow.drain();
-  assert.equal(h.registrations[0].fields.ticker,'NVDA');
-  assert.equal(workflow.view().proposals[0].simulationStatus,'not_requested');
+  assert.deepEqual(writes,[]);
+  assert.deepEqual(workflow.view().proposals,[]);
+  workflow.receive(event(3,{text:supplement,parentId:'om_sent_1'}));
+  await workflow.drain();
+  assert.deepEqual(writes,[]);
+  const {summaryId} = workflow.view().proposals[0];
+  workflow.receive(approval(4,summaryId));
+  await workflow.drain();
+  assert.equal(writes.length,1);
+  assert.equal(writes[0].recommendation.ticker,'NVDA');
+  assert.equal(writes[0].execution.price,150);
+  assert.equal(writes[0].execution.quantity,100);
+  assert.equal(workflow.view().proposals[0].tradeId,tradeId);
 });
 
 test('a Xiaomi listing name, short code and cash budget do not need a ticker correction', async t => {
@@ -134,7 +151,8 @@ test('a Xiaomi listing name, short code and cash budget do not need a ticker cor
   })});
   workflow.receive(event(1,{text}));
   await workflow.drain();
-  assert.match(h.messages[0].text,/01810.HK · HK · 买入/);
+  assert.match(h.messages[0].text,/01810\.HK/);
+  assert.match(h.messages[0].text,/模拟成交价、模拟成交股数/);
   assert.match(h.messages[0].text,/仅登记建议/);
 });
 

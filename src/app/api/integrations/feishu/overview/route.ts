@@ -18,9 +18,11 @@ export async function GET(request:Request){
     !isUuid(owner)||!validFormalSections(sections)||(analyst!==null&&!sourceKey.test(analyst)))return json({error:'invalid_scope'},400);
   if(owner.toLowerCase()!==config.ownerId)return json({error:'owner_mismatch'},403);
   const analystId=analyst===null?null:config.analysts.get(analyst);
-  if(analystId===undefined)return json({error:'analyst_unavailable'},403);
+  if(analystId===undefined||config.analysts.size===0)return json({error:'analyst_unavailable'},403);
   try{
-    const text=await readFormalOverview(getAdminSupabase((input,init)=>fetch(input,{...init,cache:'no-store'})),{ownerId:config.ownerId,analystId,sections});
+    const text=await readFormalOverview(getAdminSupabase((input,init)=>fetch(input,{...init,cache:'no-store'})),{
+      ownerId:config.ownerId,analystId,boundAnalystIds:[...config.analysts.values()],sections,
+    });
     return json({text},200);
   }catch{return json({error:'query_unavailable'},503);}
 }

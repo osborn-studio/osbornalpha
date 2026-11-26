@@ -15,30 +15,33 @@ const appId='cli_0000000000000000',token='loopback-fixture-does-not-authorize-an
 const fixtureReport='正式分析建议：XYZ 买入\n正式建议评分：平均分 2.5\n我的投资：模拟成交 5 股';
 const fakeHook='https://open.feishu.cn/open-apis/bot/v2/hook/test-webhook';
 
-function mentionedReport() {
+function mentionedReport(sender=pmId,content='帮我看看示例分析师的分析建议、打分和模拟交易情况。',messageId='om_pm_read') {
   return normalizeGroupMessage({
-    app_id:appId,event_id:'evt_pm_read',sender:{sender_type:'user',sender_id:{open_id:pmId}},
-    message:{message_id:'om_pm_read',chat_type:'group',chat_id:chatId,create_time:'1795600000000',message_type:'text',
+    app_id:appId,event_id:'event_'+messageId,sender:{sender_type:'user',sender_id:{open_id:sender}},
+    message:{message_id:messageId,chat_type:'group',chat_id:chatId,create_time:'1795600000000',message_type:'text',
       mentions:[{key:'@_user_1',id:{open_id:botId},name:'Osborn 分析助手'}],
-      content:JSON.stringify({text:'@_user_1 帮我看看示例分析师的分析建议、打分和模拟交易情况。'})},
+      content:JSON.stringify({text:'@_user_1 '+content})},
   },appId,botId);
 }
 
 for(const mode of ['app','webhook']){
   test('a PM mention reads formal advice, scores and linked trades once across a restart using '+mode,async t=>{
     const directory=mkdtempSync(join(tmpdir(),'osborn-formal-read-'));
-    const bindings={chatId,approverIds:[pmId],analystBySender:{ou_fixture_analyst:'analyst_a',ou_second_analyst:'bin'},
-      analystNamesByRole:{analyst_a:'analyst_a',bin:'bin'},analystAliasesByRole:{analyst_a:['示例分析师'],bin:['陈斌']},
+    const bindings={chatId,approverIds:[pmId],analystBySender:{ou_fixture_analyst:'analyst_a',ou_second_analyst:'analystB'},
+      analystNamesByRole:{analyst_a:'analyst_a',analystB:'analystB'},analystAliasesByRole:{analyst_a:['示例分析师'],analystB:['示例分析师乙']},
       simulationAccount:{id:owner,confirmed:true}};
     writeFileSync(join(directory,'feishu-bindings.json'),JSON.stringify(bindings),{mode:0o600});
     writeFileSync(join(directory,'feishu-report-delivery.json'),JSON.stringify({
       mode,chatId,...(mode==='webhook'&&{url:fakeHook}),
     }),{mode:0o600});
     const reads=[],messages=[],posts=[],unexpected=[];
+    let bulletinFixture=false;
     const server=createServer((req,res)=>{
       reads.push({method:req.method,url:new URL(req.url,'http://localhost'),authorization:req.headers.authorization});
       res.writeHead(200,{'content-type':'application/json'});
-      res.end(JSON.stringify({text:fixtureReport}));
+      const emptyReport=['正式模拟账户查询（指定分析师，北京时间）','正式分析建议（共 0 条）',
+        '正式建议评分\n有效建议 0 条｜暂无可判定命中的样本｜暂无已评分样本','分析师建议关联的模拟成交（共 0 条）'].join('\n\n');
+      res.end(JSON.stringify({text:bulletinFixture?emptyReport:fixtureReport}));
     });
     let workflow;
     t.after(async()=>{
@@ -65,7 +68,7 @@ for(const mode of ['app','webhook']){
     const unexpectedCall=kind=>async()=>{unexpected.push(kind);throw Error('Unexpected '+kind);};
     const open=()=>createFormalFeishuWorkflow({
       env:{FEISHU_DATA_DIR:directory,FEISHU_SIMULATION_ORIGIN:origin,FEISHU_SIMULATION_INGEST_TOKEN:token},
-      sendMessage:async message=>{messages.push(message);return {messageId:'om_native_report'};},
+      sendMessage:async message=>{messages.push(message);return {messageId:'om_native_report_'+messages.length};},
       extractWithModel:unexpectedCall('proposal extraction'),respondToChat:unexpectedCall('chat'),
       searchSecurity:unexpectedCall('security search'),
     });
@@ -107,5 +110,20 @@ for(const mode of ['app','webhook']){
       assert.deepEqual(rows.map(row=>({...row})),[{kind:'formal_report',status:'sent'}]);
       assert.equal(db.prepare('SELECT count(*) n FROM feishu_workflow_drafts').get().n,0);
     }finally{db.close();}
+
+    bulletinFixture=true;
+    const visitor=mentionedReport('ou_group_visitor','生成一份报告','om_visitor_report');
+    assert.equal(workflow.receive(visitor).accepted,true);
+    await workflow.close(); workflow=open();
+    assert.equal(workflow.receive(visitor).duplicate,true);
+    await workflow.drain();
+    const requested=reads.slice(1);
+    assert.deepEqual(requested.map(r=>r.url.searchParams.get('analyst')).sort(),['analystB','analyst_a']);
+    assert.ok(requested.every(r=>r.method==='GET' && r.url.searchParams.get('owner')===owner &&
+      r.url.searchParams.get('sections')==='recommendations,scores,trades'));
+    const published=mode==='app'?messages.at(-1).text:posts.at(-1).body.content.text;
+    assert.match(published,/全组正式报告/); assert.match(published,/暂无已评分样本/);
+    assert.equal((mode==='app'?messages:posts).length,2);
+    assert.deepEqual(unexpected,[]);assert.deepEqual(workflow.view().proposals,[]);
   });
 }

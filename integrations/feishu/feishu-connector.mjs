@@ -117,8 +117,15 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
   }
   const options = { appId, appSecret, logger: sdkLogger, domain: sdk.Domain.Feishu };
   const client = new sdk.Client(options);
-  const workflow = createWorkflow({ sendMessage: makeFeishuSender(client) });
-  let timer, activeDrain, backgroundDrain, stopping, lastState;
+  let timer, scheduled, stopping, lastState;
+  const wake = () => {
+    if (!stopping && !scheduled) scheduled = setImmediate(() => { scheduled=undefined; pump(); });
+  };
+  const workflow = createWorkflow({ sendMessage:makeFeishuSender(client),wake });
+  const workers = [workflow.drainReceipts,workflow.drainProposalReplies,workflow.drainDelivery,workflow.drainFormal,workflow.drainReportReplies,
+    workflow.drainPrimary || workflow.drain,workflow.drainBackground,workflow.drainReads,
+    ...(workflow.drainReceipts ? [workflow.drainChat,workflow.drainDemo,workflow.drainMembership] : [])].filter(Boolean);
+  const running = new Map();
   let botOpenId, botLookup, nextBotLookupAt = 0;
   let finish;
   const done = new Promise(resolve => { finish = resolve; });
@@ -138,15 +145,11 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
   function pump() {
     if (stopping) return;
     resolveBotIdentity();
-    if (!activeDrain) {
-      activeDrain = Promise.resolve().then(() => workflow.drainPrimary ? workflow.drainPrimary() : workflow.drain())
+    for (const work of workers) {
+      if (running.has(work)) continue;
+      running.set(work,Promise.resolve().then(() => work.call(workflow))
         .catch(() => log('飞书工作队列本轮处理失败，将继续轮询。'))
-        .finally(() => { activeDrain = undefined; });
-    }
-    if (!backgroundDrain && workflow.drainBackground) {
-      backgroundDrain = Promise.resolve().then(() => workflow.drainBackground())
-        .catch(() => log('Demo 后台队列本轮处理失败，将继续轮询。'))
-        .finally(() => { backgroundDrain = undefined; });
+        .finally(() => { running.delete(work); }));
     }
   }
   const dispatcher = new sdk.EventDispatcher({ logger: sdkLogger }).register({
@@ -157,7 +160,7 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
       // Returning successfully ACKs this event. A failed durable write must reach
       // the SDK so Feishu can redeliver; slow scoring and replies happen in pump().
       const receipt = workflow.receive(event);
-      if (receipt?.accepted) setImmediate(pump);
+      if (receipt?.accepted) wake();
     },
   });
   const ws = new sdk.WSClient({
@@ -175,9 +178,10 @@ export function makeFeishuConnector({ appId, appSecret, createWorkflow, sdk = La
     if (stopping) return done;
     stopping = true;
     clearInterval(timer);
+    if (scheduled) clearImmediate(scheduled);
     try {
       ws.close({ force: true });
-      await Promise.all([activeDrain,backgroundDrain]);
+      await Promise.all(running.values());
       await workflow.close();
     } catch {
       exitCode = 1;

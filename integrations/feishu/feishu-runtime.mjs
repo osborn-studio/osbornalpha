@@ -8,6 +8,8 @@ import { openDemoRecaps } from '../../demos/analyst-replay/demo-recap.mjs';
 import { classifyAssistantCommand } from './feishu-ostag.mjs';
 import { openFrictionMonitor } from './feishu-friction.mjs';
 import { openFeishuWorkflow } from './feishu-workflow.mjs';
+import { createPublishedGroupReportReader } from './feishu-published-report.mjs';
+import { createGroupScopedReader } from './feishu-group-report.mjs';
 import { lookupFeishuListings } from './feishu-security-lookup.mjs';
 
 export function readFeishuBindings(directory) {
@@ -92,7 +94,9 @@ export function openFeishuRuntime(directory, {assistantEnv, ...options}) {
       monitor = openFrictionMonitor(resolve(file),{redactNames});
     }
     const workflow = openFeishuWorkflow(db,transaction,{searchSecurity:lookupFeishuListings,
-      ...options,...assistantOptions,config,monitor});
+      ...options,...assistantOptions,config,monitor,
+      queryFormal:options.queryFormal && createGroupScopedReader(options.queryFormal,config),
+      queryGroupReport:options.queryFormal && createPublishedGroupReportReader(options.queryFormal,config)});
     const closeDatabases = () => { monitor?.close(); db.close(); lock.close(); };
     return {...workflow,tickRecaps:() => recaps?.tick(),close() {
       if (recaps) return recaps.close().finally(closeDatabases);

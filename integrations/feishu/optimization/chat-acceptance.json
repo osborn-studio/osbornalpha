@@ -431,5 +431,13 @@
       ],
       "maxChars": 370
     }
-  }
+  },
+  {"id": "read-suite-roster-gold", "group": "read-suite-roster-gold", "kind": "chat", "split": "holdout", "input": {"text": "谁是本群负责给出分析意见的成员？", "isApprover": true}, "expect": {"tool": {"read": "analyst_roster"}}},
+  {"id": "read-suite-pending-gold", "group": "read-suite-pending-gold", "kind": "chat", "split": "holdout", "input": {"text": "帮忙把此刻等我审批的项目摊开看看。", "isApprover": true}, "expect": {"tool": {"read": "pending"}}},
+  {"id": "read-suite-advice-gold", "group": "read-suite-advice-gold", "kind": "chat", "split": "holdout", "input": {"text": "想重读一下叶原此前实际提交的建议。", "isApprover": true}, "expect": {"tool": {"read": "formal_report", "sections": ["recommendations"], "scope": "named", "subject": "叶原"}}},
+  {"id": "read-suite-hits-gold", "group": "read-suite-hits-gold", "kind": "chat", "split": "holdout", "input": {"text": "我自己最近判断命中的比例与得分怎么样？", "isAnalyst": true}, "expect": {"tool": {"read": "formal_report", "sections": ["scores"], "scope": "self"}}},
+  {"id": "read-suite-trades-gold", "group": "read-suite-trades-gold", "kind": "chat", "split": "holdout", "input": {"text": "想看全组从建议落地为模拟成交的账目。", "isApprover": true}, "expect": {"tool": {"read": "formal_report", "sections": ["trades"], "scope": "all"}}},
+  {"id": "read-suite-topic-gold", "group": "read-suite-topic-gold", "kind": "chat", "split": "holdout", "input": {"text": "只看刚才那位的模拟成交和评估成绩。", "isApprover": true, "history": [{"role": "user", "content": "给我看柯宜的建议。"}, {"role": "assistant", "content": "刚才查看了柯宜的建议清单。"}]}, "expect": {"tool": {"read": "formal_report", "sections": ["trades", "scores"], "scope": "context"}}},
+  {"id": "read-suite-recall-gold", "group": "read-suite-recall-gold", "kind": "chat", "split": "holdout", "input": {"text": "你刚才列在最后的那个叫什么？", "isApprover": true, "history": [{"role": "user", "content": "列一下分析师。"}, {"role": "assistant", "content": "仲睿、邵玉。"}]}, "expect": {"concepts": [["邵玉"]], "criticalAvoid": ["仲睿是最后"]}},
+  {"id": "read-suite-consent-gold", "group": "read-suite-consent-gold", "kind": "chat", "split": "holdout", "input": {"text": "聊到“同意”这个词，是不是就批掉模拟单了？", "isApprover": true}, "expect": {"concepts": [["不会", "不能", "需要", "只有", "摘要"], ["摘要", "确认人", "审批人"]], "criticalAvoid": ["我已帮你确认", "已经成交"]}}
 ]

@@ -13,7 +13,7 @@ const lockFile = fileURLToPath(new URL('../../../build/feishu-optimization/publi
 const hash = data => createHash('sha256').update(JSON.stringify(data)).digest('hex');
 const positiveInt = value => Number.isSafeInteger(value) && value>0;
 const riskyRoutes = new Set(['pm_advice','pm_simulation','cancel_request']);
-const expectedRoutes = new Set([...riskyRoutes,'no_proposal','request_details','clarify_single_proposal']);
+const expectedRoutes = new Set([...riskyRoutes,'no_proposal','read_only','request_details','clarify_single_proposal']);
 const validRoutes = new Set([...expectedRoutes,'unavailable','rejected']);
 const insist = (value, message) => { if (!value) throw Error(message); };
 

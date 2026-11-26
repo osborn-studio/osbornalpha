@@ -309,6 +309,9 @@
       "expected": {
         "route": "no_proposal"
       }
-    }
+    },
+    {"id": "extract-read-trades-vs-buy", "sha256": "8e3f2c196a678ce4f7fb3609451ac195506edcbf0bc3609a09af3c624b7220b1", "expected": {"route": "read_only", "query": {"read": "formal_report", "sections": ["trades"], "scope": "self"}}},
+    {"id": "extract-read-advice-score", "sha256": "378da12efe34311e7fa8ef4972e796db71db0f984ea048cb3ce260ee2d79bd59", "expected": {"route": "read_only", "query": {"read": "formal_report", "sections": ["recommendations", "scores"], "scope": "named", "subject": "戴芸"}}},
+    {"id": "extract-read-same-person", "sha256": "acef37dc242c7242ef813d9df4e78e4aa690c463da7eb6bfe86643fb7ec9060d", "expected": {"route": "read_only", "query": {"read": "formal_report", "sections": ["scores"], "scope": "context"}}}
   ]
 }

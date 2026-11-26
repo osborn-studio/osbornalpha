@@ -10,7 +10,7 @@ const modelFields = new Set(['securityName', 'ticker', 'market', 'action', 'exec
   'reference_price', 'target_price', 'stop_loss', 'fee', 'horizon', 'confidence', 'recommended_at']);
 const privateMessage = /(?:app[ _-]?secret|client[ _-]?secret|(?:password|secret|token)\s*[:=]|api[ _-]?key|authorization\s*:|bearer\s+\S+|access[ _-]?token|refresh[ _-]?token|\bwebhook\b|-----BEGIN [\w ]*PRIVATE KEY-----|密钥|密码|验证码|私钥|银行卡|身份证|信用卡|银行账[户号]|证券账[户号]|资金账[户号]|\bsk-[\w-]{8,})/iu;
 const negative = /(?:你.{0,4}(?:没听懂|没理解|理解错|答错|弄错|看错|没看|怎么又|又问)|答非所问|没回答我的问题|我(?:刚才|刚刚|前面|已经).{0,8}(?:说过|说了|给过|给了|填过|写过)|(?:怎么|为什么)(?:还|又)(?:要)?(?:问|让我填)|不是这个意思|理解反了|识别错了)/u;
-const correction = /(?:我说的是|我的意思是|我指的是|我刚才说的是|我想表达的是|你理解成|我只是(?:想问|问问|在问)|不是(?:让你|要你|叫你)|我没让你)/u;
+const correction = /(?:我(?:刚才)?(?:说|问|想查|想看|指)的是|我的意思是|我想表达的是|你理解成|我只是(?:想问|问问|在问)|不是(?:让你|要你|叫你)|我没让你)/u;
 const disown = /(?:我只是(?:想问|问问|在问|转述|举例)|我没(?:让你)?(?:提交|登记|下单|提建议)|不是(?:让你|要你|叫你)(?:登记|买|卖|下单|提交)|不是(?:我的|一条)建议)/u;
 const owned = /(?:我是(?:要|想)(?:登记|提交)|我是(?:在)?(?:提建议|给建议)|请把我的建议记|刚才就是我的建议)/u;
 const secretFragment = /\b(?:ou|oc|om|on|cli)_[A-Za-z0-9_-]+\b|@_user_\d+|\b[a-f\d]{8}-(?:[a-f\d]{4}-){3}[a-f\d]{12}\b|\b[\da-f]{12,}\b|\b[a-z\d_-]{28,}\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:https?:\/\/|www\.)[^\s，。；）]+|(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)|(?<!\d)\+\d{1,3}[- (]?(?:\d[ ()-]?){7,13}\d(?!\d)|(?<!\d)\d{12,}(?!\d)|@[\p{L}\p{N}_-]+/giu;
@@ -53,6 +53,15 @@ function fieldsOf(values, names, model = false) {
 
 const intents = new Set(['other', 'proposal', 'help', 'ambiguous', 'cancel']);
 const topics = new Set(['missing', 'usage', 'investment']);
+const modelErrorCodes = new Set(['MODEL_TIMEOUT', 'MODEL_TRANSPORT', 'MODEL_HTTP', 'MODEL_OUTPUT', 'MODEL_EMPTY', 'MODEL_TRUNCATED', 'MODEL_REPLY_BLOCKED']);
+const reportSections = new Set(['recommendations','scores','trades']);
+function readCategory(action) {
+  if (action === null) return 'chat';
+  if (action === 'analyst_roster' || action === 'pending' || action === 'group_report' || reportSections.has(action)) return action;
+  if (action?.read === 'analyst_roster' || action?.read === 'pending' || action?.read === 'group_report') return action.read;
+  if (action?.read === 'formal_report' && action.sections?.length === 1 && reportSections.has(action.sections[0])) return action.sections[0];
+  return undefined;
+}
 const safeKeys = keys => Array.isArray(keys) ? [...new Set(keys.filter(key => modelFields.has(key)))].sort() : undefined;
 
 function signalFor(turn, previous) {
@@ -77,6 +86,7 @@ export function createFrictionCollector(db, { now = Date.now, redactNames = [] }
   const expire = db.prepare('DELETE FROM friction_incidents WHERE created_at<=?');
   const trim = db.prepare('DELETE FROM friction_incidents WHERE id IN (SELECT id FROM friction_incidents ORDER BY created_at DESC,rowid DESC LIMIT -1 OFFSET 200)');
   const windows = new Map();
+  const lastRead = new Map();
   let nextPrune = 0;
   function prune() {
     const time = now();
@@ -86,6 +96,7 @@ export function createFrictionCollector(db, { now = Date.now, redactNames = [] }
       if (window.at <= time - contextTTL) windows.delete(key);
       else window.entries = window.entries.filter(entry => entry.at > time - contextTTL);
     }
+    for (const [key, item] of lastRead) if (item.at <= time-contextTTL) lastRead.delete(key);
     nextPrune = time + 60_000;
   }
   function observe(record, config) {
@@ -110,6 +121,11 @@ export function createFrictionCollector(db, { now = Date.now, redactNames = [] }
       isSupplement: input.isSupplement === true, priorFields: fieldsOf(input.priorFields, names),
       priorMissing: safeKeys(input.pendingFields)
     });
+    if (turn.outcome === 'chat_fallback' && modelErrorCodes.has(record.modelErrorCode)) {
+      turn.modelErrorCode = record.modelErrorCode;
+      if (record.modelErrorCode === 'MODEL_HTTP' && Number.isInteger(record.modelHttpStatus) &&
+          record.modelHttpStatus >= 400 && record.modelHttpStatus <= 599) turn.modelHttpStatus = record.modelHttpStatus;
+    }
     if (record.missing) turn.missing = safeKeys(record.missing);
     for (const [packet, prefix] of [[record.packet, ''], [record.rawPacket, 'raw']]) {
       if (sensitive || !packet) continue;
@@ -149,7 +165,31 @@ export function createFrictionCollector(db, { now = Date.now, redactNames = [] }
     insert.run(incidentId, at, component, signal, JSON.stringify({ version: 1, turns: recent.map(x => x.turn) }));
     trim.run();
   }
-  return { observe, prune };
+  function observeRead(record,config) {
+    if (!config.chatId || config.chatId !== record.chatId || !record.senderId || !record.messageId) return;
+    prune();
+    const at = now(), scope = digest(record.chatId,record.senderId), msg = digest(scope,record.messageId);
+    const prior = lastRead.get(scope);
+    if (prior?.msg === msg) return;
+    const category = readCategory(record.readAction);
+    const topic = record.threadId && digest(scope,record.threadId);
+    const related = record.relatedThreadId && digest(scope,record.relatedThreadId);
+    // Only a subsequent explicit correction independently resolved by the workflow is a training label.
+    // An unthreaded correction can refer to the sender's most recent exchange in this group.
+    if (prior?.model && prior.at > at-contextTTL && record.modelSelected === false &&
+        category && category !== 'chat' && category !== prior.category &&
+        (!related || prior.topic === related || prior.topic === topic) &&
+        typeof record.text === 'string' && correction.test(record.text) && !privateMessage.test(record.text)) {
+      const turn = {user:'',outcome:'verified_read_correction',previousRead:prior.category,expectedRead:category};
+      insert.run(digest('read_correction',msg),at,prior.component,'read_correction',JSON.stringify({version:1,turns:[turn]}));
+      trim.run();
+    }
+    lastRead.delete(scope);
+    if (category) lastRead.set(scope,{msg,topic,at,category,model:record.modelSelected===true,
+      component:record.modelComponent==='extraction'?'extraction':'chat'});
+    if (lastRead.size>256) lastRead.delete(lastRead.keys().next().value);
+  }
+  return { observe, observeRead, prune };
 }
 
 // A broken monitor must not block an event ACK or a group reply. Recover locally on a later observation.
@@ -174,7 +214,7 @@ export function openFrictionMonitor(file, { now = Date.now, log = console.error,
     }
   }
   return {
-    observe: (...args) => invoke('observe', ...args), prune: () => invoke('prune'),
+    observe: (...args) => invoke('observe', ...args), observeRead: (...args) => invoke('observeRead', ...args), prune: () => invoke('prune'),
     close: () => { sqlite?.close(); sqlite = collector = undefined; }
   };
 }

@@ -141,7 +141,7 @@ export async function workerTick(config,{now=clockNow,label=labelIncident,cycle=
   validateSettings(config);
   const dir=config.directory, activePath=cycleOptions.activePath??resolve(here,'../active-prompt.json');
   const db=openLedger(dir),lock=new DatabaseSync(join(dir,'worker-lock.sqlite'));
-  let source;
+  let source,priorityWatch;
   try{
     try{lock.exec('BEGIN EXCLUSIVE');}catch(err){if(err.errcode===5||err.errcode===6)return {state:'already_running'};throw err;}
     const start=now();
@@ -154,23 +154,35 @@ export async function workerTick(config,{now=clockNow,label=labelIncident,cycle=
     atomic(db,()=>{for(const row of incoming)if(workflowTopics.has(row.component))admit.run(row.id,row.created_at,row.component);});
     const pause=()=>config.liveQueuePath && queueBusy(config.liveQueuePath,now(),60000);
     if(pause()){heartbeat(db,'state','deferring_to_group');return {state:'deferring_to_group'};}
+    const priority=new AbortController();
+    const offlineSignal=signal ? AbortSignal.any([signal,priority.signal]) : priority.signal;
+    if(config.liveQueuePath){
+      // Stop an in-flight reflection or evaluation as soon as foreground work arrives.
+      // Disconnecting the loopback stream lets the model serve the member immediately.
+      priorityWatch=setInterval(()=>{
+        try { if(pause())priority.abort(); } catch { priority.abort(); }
+      },200);
+      priorityWatch.unref();
+    }
+    const offlineFetch=(url,options={})=>fetch(url,{...options,signal:options.signal
+      ? AbortSignal.any([offlineSignal,options.signal]) : offlineSignal});
     const waiting=db.prepare("SELECT * FROM items WHERE state='pending' AND due<=? ORDER BY created,id LIMIT 12").all(start);
     for(const item of waiting){
-      if(signal?.aborted||pause())break;
+      if(offlineSignal.aborted||pause())break;
       const incident=source.prepare('SELECT signal,episode_json FROM friction_incidents WHERE id=?').get(item.id);
       if(!incident){db.prepare("UPDATE items SET state='expired',reason='source_expired' WHERE id=?").run(item.id);continue;}
       try{
         const result=await label({id:item.id,component:item.component,signal:incident.signal,episode:JSON.parse(incident.episode_json)},{
-          env:{FEISHU_LLM_BASE_URL:config.baseUrl,FEISHU_LLM_MODEL:config.model,FEISHU_LLM_TIMEOUT_MS:String(config.timeoutMs)}});
+          fetchImpl:offlineFetch,env:{FEISHU_LLM_BASE_URL:config.baseUrl,FEISHU_LLM_MODEL:config.model,FEISHU_LLM_TIMEOUT_MS:String(config.timeoutMs)}});
         if(!['eligible','diagnostic','insufficient'].includes(result.status)||!workflowTopics.has(result.component))throw Error('无效分类');
         if(result.status==='eligible'&&(!acceptanceFamilies[result.component].includes(result.family)||
           !Array.isArray(result.examples)||!result.examples.length||result.examples.length>12))throw Error('无效训练标签');
         const reason=/^[a-z0-9_-]{1,80}$/i.test(result.reason??'')?result.reason:result.status;
         db.prepare('UPDATE items SET component=?,state=?,reason=?,family=?,samples=?,due=0,attempts=0 WHERE id=?').run(
           result.component,result.status,reason,result.family??null,result.status==='eligible'?JSON.stringify(result.examples):null,item.id);
-      }catch{retryItem(db,item.id,now(),item.attempts+1,'label_retry');}
+      }catch{if(offlineSignal.aborted)break;retryItem(db,item.id,now(),item.attempts+1,'label_retry');}
     }
-    if(signal?.aborted||pause()){heartbeat(db,'state','deferring_to_group');return {state:'deferring_to_group'};}
+    if(offlineSignal.aborted||pause()){heartbeat(db,'state','deferring_to_group');return {state:'deferring_to_group'};}
     const dueItems=db.prepare("SELECT * FROM items WHERE state='eligible' AND due<=? ORDER BY created,id").all(start);
     const recent=db.prepare(`SELECT 1 FROM runs WHERE component=? AND (task=? OR (task IS NULL AND family=?))
       AND status IN ('published','rejected','eligible','no_challenger') AND ended>? LIMIT 1`);
@@ -212,16 +224,24 @@ export async function workerTick(config,{now=clockNow,label=labelIncident,cycle=
     try{
       const outcome=await cycle({component:item.component,development,...sealed,runDirectory,model:config.model,
         baseUrl:config.baseUrl,timeoutMs:config.timeoutMs,budget:config.budget??72,apply:config.apply},
-        {...cycleOptions,registryPath,liveQueuePath:config.liveQueuePath,signal});
+        {...cycleOptions,registryPath,liveQueuePath:config.liveQueuePath,signal:offlineSignal});
       if(!terminal.has(outcome.status))throw Error('无效实验状态');
       finish(db,runId,outcome.status,now());
       heartbeat(db,'state','watching');heartbeat(db,'lastCycle',now());
       return {state:outcome.status,runId,component:item.component,family:item.family,incidentCount:batch.length};
     }catch(err){
+      if(priority.signal.aborted){
+        atomic(db,()=>{
+          db.prepare("UPDATE items SET state='eligible',due=0,run_id=NULL WHERE run_id=?").run(runId);
+          db.prepare("UPDATE runs SET status='deferred',ended=? WHERE id=?").run(now(),runId);
+          heartbeat(db,'state','deferring_to_group');
+        });
+        return {state:'deferring_to_group',runId};
+      }
       retryRun(db,runId,now());heartbeat(db,'state','retry_scheduled');
       return {state:'retry_scheduled',runId,reason:err.code==='HOLDOUT_REUSED'?'fresh_cases':'offline_job'};
     }
-  } finally {source?.close();lock.close();db.close();}
+  } finally {clearInterval(priorityWatch);source?.close();lock.close();db.close();}
 }
 
 async function main(){

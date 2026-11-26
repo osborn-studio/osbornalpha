@@ -24,7 +24,9 @@ test('both running formal model adapters pick up the next published supplement a
   async function verify(version){
     await extract({text:'招呼一声',receivedAt:'2026-11-01T00:00:00Z'});
     await respond({text:'在吗'});
-    assert.ok(instructions.at(-2).endsWith('提取'+version));
+    const extraction=instructions.at(-2);
+    assert.deepEqual(extraction.match(/提取[甲乙]/gu),['提取'+version]);
+    assert.ok(extraction.indexOf('提取'+version)<extraction.indexOf('正式连接器的新建'));
     assert.ok(instructions.at(-1).endsWith('群聊'+version));
   }
   for(const version of ['甲','乙']){
