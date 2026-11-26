@@ -8,10 +8,11 @@ const sections = {
   trades: /模拟(?:交易|成交|买卖)|成交(?:情况|结果|记录|明细|列表)|(?:已|实际|完成|落地|执行)(?:经|的)?(?:成交|交易)|成交了(?:哪些|多少|几笔)|哪些.{0,5}成交|(?:已经|已|最后|哪些.{0,12})(?:落|下)了?单|(?:落|下)了单|(?:组合|投资模块|账户).{0,8}(?:买卖|交易)|(?:买卖|成交).{0,8}(?:记到|记入|记在)(?:了)?(?:组合|账户)/u,
   positions: /仓位|持仓|占比/u,
 };
-const queryWords = /我要|多少|查|看|列|哪些|准不准|有多准|汇总|统计|盘点|回顾|复盘|调出|核对|展示|报[告一下]|告诉我|想知道|发.{0,6}(?:清单|明细|列表|一份)|有(?:哪些|哪几|几条|几笔|什么|多少)|如何|怎样|怎么样|是多少|多少分|几分|情况|结果|明细|清单|列表|记录|表现|战绩|成绩/u;
+const queryWords = /多少|查|看|列|哪些|准不准|有多准|汇总|统计|盘点|回顾|复盘|调出|核对|展示|报[告一下]|告诉我|想知道|发.{0,6}(?:清单|明细|列表|一份)|有(?:哪些|哪几|几条|几笔|什么|多少)|如何|怎样|怎么样|是多少|多少分|几分|情况|结果|明细|清单|列表|记录|表现|战绩|成绩/u;
 const help = /怎么(?:查|看|操作|用|算|计|评分|打分|查询|查看|登记|录入|提交)|如何(?:查|看|操作|计算|评分|打分|查询|查看|登记|录入|提交)|(?:从|在)哪[里儿]?(?:查|看|登|录)|(?:评分|打分|命中率)(?:的)?(?:标准|规则|口径|算法|公式)|(?:评分|打分|模拟成交|建议登记)(?:是什么|是什么意思)|(?:能不能|可否)(?:支持|实现|添加)|(?:希望|需要)(?:实现|增加|开发)/u;
 const writing = /(?:请|帮我|替我|我要|我想|我决定|我提议|我建议|建议是|建议[为：:])\s*(?:模拟)?(?:买入|卖出|建仓|加仓|减仓|清仓|持有|下单|撤回|登记|提交|录入|确认|修改|更正)|(?:修改|撤回|作废|登记|提交|录入)(?:一下|一条|这条|该条|这笔)(?:分析|交易|持仓|模拟)?(?:建议|成交|提案|记录)|(?:^|[，,；;。])\s*(?:建议|模拟)?(?:买入|卖出|加仓|减仓|下单)/u;
 const newAdvice = /(?:有什么|有没有|给点|提供|征求|想听|寻求|请给|你有|有何).{0,8}(?:投资|交易|买卖|操作|选股|分析)?建议|给我(?:些|点|个|一些)?(?:投资|分析|交易|买卖|操作)?建议/u;
+const readOpening = /^(?:(?:请你?|麻烦你?|帮我|给我|我[想要]|想|能否|可以)\s*)*(?:查|看一?下|看看|列出|汇总|核对|统计|盘点|展示)/u;
 const unsupportedDates = /(?:今天|今日|今早|昨晚|昨天|昨日|前天|明天|本周|这周|上周|本月|这个月|上月|今年|去年|本季|上季|(?:上|本|这|前|下)个?(?:礼拜|星期|季度|月份)|(?:最近|近|这|前|后|过去)\s*[一二三四五六七八九十百两几\d]+(?:个)?(?:天|日|周|星期|礼拜|月|季度|年)|(?:最近|过去|前|后|最新)\s*[零一二三四五六七八九十百\d]+\s*(?:天|日|周|月|年|条|笔|次)|[12]\d{3}[-./年]\d|\d+\s*月|\d+\s*[号日](?!\s*(?:和|及|、|与|命中|评分|打分|得分)))/u;
 const unsupportedDetails = /(?:只|仅|筛|限|按)(?:看|显示|查询|查|要|出|取|选|排序)?\s*(?:买入|卖出|加仓|减仓|港股|美股|A股|命中(?!率)|未命中|未评分|已评分|未成交|已成交|分数|价格)|(?:买入|卖出|加仓|减仓|港股|美股|A股|未命中|未评分|已评分)(?:的)?(?:交易|建议|记录)|(?:排名|排行|最高|最低|逐笔导出|翻页|下一页)|(?:[0-9]{5,6}(?:\.HK|\.SH|\.SZ)?|[A-Z]{2,6}\.US)\b/iu;
 const nameHelp = '请用一位已绑定分析师的名字查询，也可以说「查我的评分」或「查看我的建议」。';
@@ -206,9 +207,19 @@ export function formalReportIntent(value, config) {
   const accountContext = /正式(?:系统|版|账户|组合)|分析模块|我的投资|(?:已登记|历史|已提交|之前的)建议/u.test(text);
   if (requested.length===1 && requested[0]==='recommendations' && newAdvice.test(text) && !matched.length &&
       !accountContext && !/(?:我|自己|我们|大家|分析师)(?:最近)?的建议/u.test(text)) return null;
-  if (!queryWords.test(text) && !/^(?:(?:我的|大家的|全组|全部|分析师|的)?(?:最近|近期|最新)?\s*(?:建议|分析建议|评分|打分|命中率|得分|模拟交易|模拟成交|持仓|仓位|占比)\s*[、，,和及与\s]*)+$/u.test(residual.trim())) return null;
+  // A bound analyst plus a nominal holding description is enough for a read.
+  // An expression of intent alone may introduce a trade, which belongs to the extractor.
+  const namedHolding = requested.length===1 && requested[0]==='positions' && matched.length===1 &&
+    generalSubject(residual.replace(/[\s。！？?!]/gu,''));
+  if (!namedHolding && !queryWords.test(text) && !/^(?:(?:我的|大家的|全组|全部|分析师|的)?(?:最近|近期|最新)?\s*(?:建议|分析建议|评分|打分|命中率|得分|模拟交易|模拟成交|持仓|仓位|占比)\s*[、，,和及与\s]*)+$/u.test(residual.trim())) return null;
   if (/这(?:一)?[条笔]|刚才那[条笔]|上[一那][条笔]|提案编号/u.test(text) && !/所有|全部|有哪些/u.test(text)) return null;
-  if (unsupportedReportFilters(text,residual)) return {error:filterHelp};
+  if (unsupportedReportFilters(text,residual)) {
+    // A ticker also occurs in trade instructions. Only reject a filter ahead of
+    // inference when the speaker opened with a read; model-selected reads still
+    // undergo the same filter validation in groundFormalRead.
+    if (requested.includes('positions') && !readOpening.test(text)) return null;
+    return {error:filterHelp};
+  }
   if (matched.length > 1) return {error:nameHelp};
   // Do not turn an unknown named subject (“查王五的成绩”) into an account-wide report.
   // Common sentence openings and temporal qualifiers are harmless; other possessives need clarification.

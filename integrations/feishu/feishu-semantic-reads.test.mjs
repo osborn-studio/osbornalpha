@@ -16,7 +16,7 @@ function fixture(t,options={}) {
   let seq=0;
   const services={config:()=>config,sendMessage:async request=>{sent.push(request);return {messageId:'out'+sent.length};},
     respondToChat:async input=>{calls.push(input);return responders.get(input.text) ?? '收到。';},
-    extractWithModel:async input=>{extracts.push(input);return {intent:'read',query:responders.get(input.text),fields:{}};},
+    extractWithModel:async input=>{extracts.push(input);return options.extract?.(input) ?? {intent:'read',query:responders.get(input.text),fields:{}};},
     queryFormal:async req=>{queries.push(req);return options.query ? options.query(req) : '这份正式报表 '+req.sections.join('、');},
     syncFormal:async request=>{writes.push(request);throw Error('unexpected write');},monitor:{prune(){},observe(){},observeRead(evt){observations.push(evt);}}};
   const open=()=>openFeishuWorkflow(db,fn=>{
@@ -217,6 +217,22 @@ test('holdings group, owner, and named queries reuse a delivered group report fo
   assert.match((await h.ask('那 bin 呢',{senderId:'a',parentId:'out5'})).text,/跨分析师/u);
   assert.equal(h.queries.length,5);assert.deepEqual(h.writes,[]);
   assert.equal(h.observations.filter(e=>e.readAction==='positions').length,successfulReads);
+});
+
+test('a request to change a holding reaches proposal extraction, while explicit filtered reads stay read-only',async t=>{
+  const h=fixture(t,{extract:({text})=>({intent:'proposal',fields:{
+    ticker:text.includes('NVDA') ? {value:'NVDA',evidence:'NVDA'} : {value:'00700.HK',evidence:'00700.HK'},
+    action:text.includes('卖出') ? {value:'sell',evidence:'卖出'} : text.includes('减半')
+      ? {value:'trim',evidence:'减半'} : {value:'add',evidence:'加到两成'},
+  }})});
+  const instructions=['我要把 NVDA 的持仓全部卖出','我要把00700.HK的仓位减半','我看好00700.HK，把仓位加到两成','我要把 NVDA 的持仓全部卖出，看看效果'];
+  for(const text of instructions)await h.ask(text,{senderId:'a'});
+  assert.deepEqual(h.extracts.map(req=>req.text),instructions);
+  assert.match(h.sent[0].text,/待确认提案/);
+  const filtered=await h.ask('我要查看00700.HK的持仓',{senderId:'pm'});
+  assert.match(filtered.text,/筛选条件暂不支持/);
+  assert.equal(h.extracts.length,instructions.length);
+  assert.deepEqual(h.queries,[]);assert.deepEqual(h.writes,[]);
 });
 
 test('a relative subject cannot broaden a report scope or infer a hidden analyst',t=>{
