@@ -12,7 +12,7 @@ import type {RunHeader,VendorCell,VendorSource} from '@/lib/industry/vendor/page
 function render(children:ReactNode) {
  return renderToStaticMarkup(createElement(NextIntlClientProvider,{locale:'en',timeZone:'UTC',messages:{industries,research},children}));
 }
-const header:RunHeader={runId:'synthetic-run',kind:'financials',generation:1,activatedAt:'2032-07-20T02:03:04Z',
+const header:RunHeader={licence:'internal',runId:'synthetic-run',kind:'financials',generation:1,activatedAt:'2032-07-20T02:03:04Z',
  fetchedFrom:'2032-07-13',fetchedTo:'2032-07-14',parserVersion:'fixture/1',mappingVersion:'fixture/2',codeVersion:'local',
  contentHash:'abc',datasetKey:'fixture',origin:'vendor_reported',historyClass:'reconstruction',gridSize:{codes:1,periods:3}};
 const node={code:'801080.SI',nameEn:'Example Industry',nameZh:'合成行业',members:null,vendorCode:'fixture'};

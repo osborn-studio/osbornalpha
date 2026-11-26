@@ -15,7 +15,7 @@ async function setup(admin=true){
  const tables=memoryTableClient();
  for(const dataset_key of ['scheme:sw2021:2021','vendor:gildata:industry-financials'])
   await tables.insert('industry_dataset_licenses',{dataset_key,status:'internal'});
- return {tables,db:memoryVendorIndustryDb(),now,isAdmin:async()=>admin};
+ return {tables,db:memoryVendorIndustryDb(),now,isSignedIn:async()=>true,isAdmin:async()=>admin};
 }
 it('withholds every view without reading any vendor data, even for unknown codes',async()=>{
  const deps=await setup(false);
@@ -29,7 +29,7 @@ it('withholds every view without reading any vendor data, even for unknown codes
 it('returns empty for an absent active run',async()=>{
  const deps=await setup();
  for(const result of await Promise.all([cnListView(deps,list),cnDetailView(deps,detail),cnConstituentsView(deps,{code})]))
-  expect(result).toEqual({state:'empty'});
+  expect(result).toEqual({state:'empty',licence:'internal'});
 });
 it('reads fixture cells with both input sources and a single evidence batch per view',async()=>{
  const deps=await setup();
@@ -49,9 +49,13 @@ it('reads fixture cells with both input sources and a single evidence batch per 
  expect(lookup).toHaveBeenCalledTimes(1);
  expect(await cnDetailView(deps,detail)).toMatchObject({constituents:null,series:[{missingReason:'no_prior_period'},{status:'ok'}]});
  expect((await runGildataMemberships(ingest,opts)).status).toBe('success');
+ await deps.tables.update('industry_dataset_licenses',{status:'internal'},{status:'public'});
+ deps.isAdmin=async()=>false;
+ expect(await cnListView(deps,list)).toMatchObject({state:'ok',header:{licence:'public'}});
  lookup.mockClear();
  const d=await cnDetailView(deps,detail);
  if(d.state!=='ok')throw Error(d.state);
+ expect([d.header.licence,d.constituents?.header.licence]).toEqual(['public','public']);
  expect(d.latest).toHaveLength(7);expect(d.constituents?.preview).toHaveLength(5);expect(lookup).toHaveBeenCalledTimes(1);
  const p=await cnConstituentsView(deps,{code,page:2,pageSize:2});
  expect(p).toMatchObject({state:'ok',page:2,total:6,rows:d.constituents?.preview.slice(2,4)});
@@ -86,4 +90,20 @@ it('checks unknown constituents codes after access and before reading either run
  const activeRun=vi.spyOn(deps.db,'activeRun');
  expect(await cnConstituentsView(deps,{code:'unknown'})).toEqual({state:'unknown_industry'});
  expect(activeRun).not.toHaveBeenCalled();
+});
+
+it.each(['scheme:sw2021:2021','vendor:gildata:industry-financials'])('withholds before vendor reads when %s is unavailable',async key=>{
+ for(const status of ['internal','missing','throws']){
+  const deps=await setup(false);
+  vi.spyOn(deps.tables,'select').mockImplementation(async(_,match)=>{
+   if(match.dataset_key!==key)return [{status:'public'}];
+   if(status==='throws')throw Error();
+   return status==='missing'?[]:[{status}];
+  });
+  const touched=vi.fn(()=>{throw Error('vendor read');});
+  deps.db=new Proxy(deps.db,{get:touched});
+  for(const view of await Promise.all([cnListView(deps,list),cnDetailView(deps,detail),cnConstituentsView(deps,{code})]))
+   expect(view).toEqual({state:'withheld'});
+  expect(touched).not.toHaveBeenCalled();
+ }
 });

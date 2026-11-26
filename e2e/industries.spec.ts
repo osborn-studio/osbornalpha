@@ -25,8 +25,7 @@ test('vendor list opens derived inputs, replays a stored observation and switche
   await inputs.filter({ hasText: '2025-12-31' }).click();
   const observation = page.locator('[data-drawer-kind="vendor_observation"]');
   await expect(observation).toContainText('响应 SHA-256');
-  const replay = page.waitForResponse(r => new URL(r.url()).pathname === '/api/admin/industries/vendor' &&
-    new URL(r.url()).searchParams.get('view') === 'replay');
+  const replay = page.waitForResponse(r => new URL(r.url()).pathname === '/api/industries/vendor/replay');
   await observation.getByRole('button', { name: '重放（原始响应）' }).click();
   const response = await replay;
   expect(response.ok()).toBe(true);

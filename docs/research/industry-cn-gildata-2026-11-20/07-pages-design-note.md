@@ -1,4 +1,4 @@
-# 07 — Design note: Chinese industry pages (admin-only), first build
+# 07 — Design note: Chinese industry pages, first build
 
 Date: 2026-11-25. Basis: canvas section 7 (`06-canvas.md`, confirmed by the owner on
 2026-11-25), `04-spec.md` §3/§6/§8, and what the Gildata ingest (`06-build-notes-ingest.md`)
@@ -17,33 +17,79 @@ served from the active vendor generations:
 | `/intel/industries/sw2021/[code]/constituents` | `Cn-Constituents`, `M-Cn-Constituents` |
 | source drawer on every number | `Cn-Drawer`, `M-Cn-Drawer` |
 | `GET /api/admin/industries/vendor` (existing, admin-only) | new views `grid`, `replay` |
+| `GET /api/industries/vendor/replay` (licence-gated, see §2.2) | the drawer's replay |
 
-The default scheme stays `sic`. The public `/api/industries*` routes are not changed and never
-return vendor rows. The older Tushare-based `sw2021` read model stays in `src/lib/industry/`
+The default scheme stays `sic`. The existing public `/api/industries` routes are not changed and
+never return vendor rows. The older Tushare-based `sw2021` read model stays in `src/lib/industry/`
 for reconciliation and its API, but the three pages no longer render it.
 
 ## 2. Gate
 
-Access is decided on the server before any vendor row is read:
+Revised 2026-11-26 (owner decision of that date, taken with the vendor-terms risk stated: the
+pages open to every signed-in user). Access is decided on the server, per request, before any
+vendor row is read (`vendorAccess`, `src/lib/industry/vendor/access.ts`):
 
-1. Licence rows `scheme:sw2021:2021` and `vendor:gildata:industry-financials` must both exist
-   with status `internal` or `public`; a missing row or a failed lookup closes the page for
-   everyone.
-2. The viewer must be an admin. In this release a `public` licence status does not open the
-   pages to other users: the vendor terms bar third-party display, so opening them is a code
-   change, not a row update.
-3. Anyone else gets the `Cn-States` withheld page: no grid, no skeleton, no industry list, no
-   counts, no dates. The vendor read functions are not called, so nothing vendor-derived can
-   be in the HTML, the RSC payload or page metadata.
+| Licence rows `scheme:sw2021:2021` and `vendor:gildata:industry-financials` | Viewer | Result |
+|---|---|---|
+| both `public` | signed in (admin or not) | `public`: pages shown, no admin-only bar |
+| both `public` | signed out | withheld |
+| at least one `internal`, the other `internal` or `public` | admin | `preview`: pages shown with the admin-only bar |
+| at least one `internal` | anyone else | withheld |
+| a row missing, any other status, or a failed lookup | anyone | withheld |
+
+The switch is the status of the two rows in `industry_dataset_licenses`. There is no code
+constant and no environment flag, so opening and closing need no deploy
+(`docs/runbooks/industry-cn-vendor.md`, "Opening and closing the pages").
+
+Withheld viewers get the `Cn-States` withheld page: no grid, no skeleton, no industry list, no
+counts, no dates. The vendor read functions are not called, so nothing vendor-derived can be in
+the HTML, the RSC payload or page metadata.
 
 Pages are `force-dynamic`; vendor views are never put in the last-good-view cache
-(`stale-views.ts`) or any shared cache; the admin API answers `Cache-Control: no-store`.
+(`stale-views.ts`) or any shared cache, and both vendor APIs answer `Cache-Control: no-store`.
+The licence rows are read on every request, so setting either row back to `internal` withholds
+the pages from non-admins on their next request (covered by a test).
+
+### 2.1 Public state on the pages
+
+The canvas has no separate public artboard for list, detail or constituents; its footer note
+says the vendor attribution is shown once a dataset is public. The public state is therefore
+the designed page without the admin-only bar:
+
+- kept: run bar (run id, generation, activation, `reconstructed`), origin tags, freshness
+  chips, the source button on every number, missing-cell reasons;
+- removed: the admin-only bar and the "internal preview" label on the scheme switch;
+- changed: the footer source line names the vendor without "internal"; the drawer's licence
+  section reads "Public (signed-in users)" and says the status is recorded in the licence
+  table and audited. Attribution wording is still "not recorded yet" (canvas Q4 is open).
+
+### 2.2 Source drawer for non-admins
+
+The drawer content comes with the page. Its replay button calls
+`GET /api/industries/vendor/replay?code&metric&duration&period_end`, gated by the same
+`vendorAccess` check (signed-in and both rows `public`, or admin in the internal state; the gate
+runs before parameter validation and before the archive is opened). It returns what the admin
+`view=replay` returns — run header, the stored cell, provenance (vendor, product, interface,
+retrieval id, response SHA-256, template, fetch time, row locator), the re-parsed text and
+whether it matches — and never the archived response bytes. `/api/admin/industries/vendor`
+stays admin-only and unchanged. The `/api/industries` list and per-scheme routes still never
+return vendor rows.
+
+### 2.3 What the scheme row also opens
+
+`scheme:sw2021:2021` is shared with the older Tushare-based SW2021 read model. Setting it to
+`public` also makes `GET /api/industries?scheme=sw2021` and the per-industry routes under
+`/api/industries/sw2021/` answer instead of `403 unlicensed`. Those routes need no sign-in and
+their successful answers are cacheable (classification tree cached up to an hour, tag
+`industries`), so closing them again is not immediate in the way the vendor pages are.
+`marks:tushare-daily_basic` and `official:tushare-sw_daily` stay `internal`. Whoever flips the
+row should know this before doing it.
 
 ## 3. What is built now
 
 | Artboard part | Built | Notes |
 |---|---|---|
-| Admin-only bar, scheme switch state (`internal preview` / `withheld`) | yes | |
+| Admin-only bar, scheme switch state (`internal preview` / `withheld`) | yes | shown in the internal state only (§2.1) |
 | Vendor run bar: generation, activation time, `reconstructed`, origin tag | yes | |
 | List: signed heatmap + table equivalent | yes | 31 industries × up to 10 fiscal years |
 | List metrics | yes | revenue YoY (derived `yoy/1`), parent net profit YoY (vendor), gross margin, ROE (average) |
@@ -52,9 +98,9 @@ Pages are `force-dynamic`; vendor views are never put in the last-good-view cach
 | "Member set changed" mark on a derived YoY | yes | when the vendor member count differs between the two periods |
 | Constituents | yes | current snapshot only, paged; six-digit code as returned by the vendor |
 | Source drawer: vendor observation, derived statistic, membership | yes | publisher, product, interface, template, row locator, response SHA-256, fetched at, activation, parser and mapping versions, licence; "not provided by vendor" stated line by line; no URL |
-| Replay | yes | admin API `view=replay` re-parses the archived response for one cell and compares with the stored text; it never calls the vendor |
+| Replay | yes | `/api/industries/vendor/replay` (§2.2; same result as admin `view=replay`) re-parses the archived response for one cell and compares with the stored text; it never calls the vendor |
 | Missing cells | yes | `vendor not provided`, `no prior period`, `invalid denominator`; never 0, never blank |
-| States | yes | withheld, admin preview, empty (no active run), read error, stale chip |
+| States | yes | withheld, admin preview, public, empty (no active run), read error, stale chip |
 | zh / en, phone layouts (table first, one period with a stepper) | yes | English industry names from a reviewed static table |
 
 `yoy/1`: `value(t) ÷ value(t − 1 year) − 1` on the same cumulative metric and the same period

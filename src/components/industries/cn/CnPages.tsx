@@ -21,11 +21,11 @@ function ScopeSwitch({status}:{status?:'withheld'|'preview'}){
  return <SchemeSwitch path={INDUSTRIES_PATH} search={{}} scheme="sw2021" swStatus={status?t(`cnList.${status}`):undefined}/>;
 }
 
-export function CnState({state,kind,path,search}:{state:'withheld'|'empty'|'error';kind:PageKind;path:string;search:Search}){
+export function CnState({state,licence,kind,path,search}:{licence?:RunHeader['licence'];state:'withheld'|'empty'|'error';kind:PageKind;path:string;search:Search}){
  const t=useTranslations('industries');
  return <div className={layout}>
-  <PageHeader title={t('page.title')} scope="" scopeSwitch={<ScopeSwitch status={state==='withheld'?'withheld':state==='empty'?'preview':undefined}/>} legend={false}/>
-  {state==='empty'&&<PreviewNotice dataset={kind==='constituents'?'memberships':'financials'}/>}
+  <PageHeader title={t('page.title')} scope="" scopeSwitch={<ScopeSwitch status={state==='withheld'?'withheld':licence==='internal'?'preview':undefined}/>} legend={false}/>
+  {licence==='internal'&&<PreviewNotice dataset={kind==='constituents'?'memberships':'financials'}/>}
   {state==='withheld'?<StateNotice kind="withheldCn">
     <Link className="rounded border border-accent px-3 py-2" href={sic}>{t('states.unlicensed.switchToSic')}</Link>
     <details className="text-text-dim"><summary className="cursor-pointer">{t('states.unlicensed.learnMore')}</summary><p className="mt-1">{t('cnDrawer.terms')}</p></details>
@@ -45,12 +45,12 @@ function VendorShell({kind,header,freshness,node,scope,children}:{kind:PageKind;
  return <SourceDrawerProvider><div className={layout}>
   <nav className="text-xs text-text-dim"><Link href={sw}>{t('page.title')}</Link> / {t('schemes.sw2021')} · {t('levels.1')}
    {node&&<> / <Link href={industryPath('sw2021',node.code)}>{node.code}</Link></>}{kind==='constituents'&&' / '+t('page.constituents')}</nav>
-  <PageHeader title={title} altTitle={english?node?.nameEn:undefined} scope={scope} scopeSwitch={<ScopeSwitch status="preview"/>} legend={false}/>
+  <PageHeader title={title} altTitle={english?node?.nameEn:undefined} scope={scope} scopeSwitch={<ScopeSwitch status={header.licence==='internal'?'preview':undefined}/>} legend={false}/>
   <div className="flex flex-wrap items-center gap-2 text-xs">
    {(['financials','memberships'] as const).map(key=><span key={key} className="inline-flex items-center gap-1">{t(`cnList.${key}`)} <FreshnessChip status={freshness[key].status} asOf={freshness[key].lastOkAt?.slice(0,10)}/></span>)}
    <span>{t('cnList.valuation')} · {t('states.notServed.title')}</span>
   </div>
-  <PreviewNotice dataset={header.kind}/>
+  {header.licence==='internal'&&<PreviewNotice dataset={header.kind}/>}
   <section id="vendor-run" className="space-y-2 rounded-lg border border-border p-3 text-xs text-text-dim">
    <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><strong>{t('cnList.run')}</strong>
     <code className="break-all">{header.runId}</code><span>{t('cnList.generation',{n:header.generation})}</span>
@@ -61,7 +61,7 @@ function VendorShell({kind,header,freshness,node,scope,children}:{kind:PageKind;
    </div><p id="industry-methods">{t('cnList.reconstruction')}</p>
   </section>
   {children}
-  <ResearchFooter sources={[{publisher:t('cnList.source')}]} methodsHref="#industry-methods"/>
+  <ResearchFooter sources={[{publisher:t(header.licence==='public'?'cnList.sourcePublic':'cnList.source')}]} methodsHref="#industry-methods"/>
  </div></SourceDrawerProvider>;
 }
 

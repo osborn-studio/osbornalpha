@@ -12,7 +12,7 @@ import {vendorCellPayload,vendorMembershipPayload,vendorReplayUrl,readReplayResu
 import {adaptVendorDrawer} from '../source-drawer-adapter';
 
 const t=(key:string)=>key;
-const header:RunHeader={runId:'fixture-a',kind:'financials',gridSize:{codes:1,periods:1},generation:1,activatedAt:'2091-04-07',fetchedFrom:'2091-04-05',fetchedTo:'2091-04-06',
+const header:RunHeader={licence:'internal',runId:'fixture-a',kind:'financials',gridSize:{codes:1,periods:1},generation:1,activatedAt:'2091-04-07',fetchedFrom:'2091-04-05',fetchedTo:'2091-04-06',
  parserVersion:'synthetic-parser',mappingVersion:'synthetic-mapping',codeVersion:'synthetic-build',contentHash:'abc',datasetKey:'fixture',origin:'vendor_reported',historyClass:'reconstruction'};
 const source:VendorSource={vendor:'synthetic',product:'fixture-product',interface:'fixture-api',retrievalId:'fixture-event',sha256:'af'.repeat(32),
  template:{id:'fixture-query',version:7},apiNames:[],fetchedAt:'2091-04-06',locator:{block:0,row:3,column:'column-abc'}};
@@ -27,7 +27,12 @@ describe('vendor drawer',()=>{
   const body=JSON.stringify(view.sections);
   for(const text of ['fixture-query/7','column-abc','synthetic-parser','synthetic-mapping','synthetic-build','2091-04-07','vendor-reported/1','cnDrawer.noUrl','cnDrawer.notRecorded','cnDrawer.notPublished'])expect(body).toContain(text);
   expect(body).not.toContain(source.sha256);
-  expect(new URL(vendorReplayUrl(cell),'https://fixture.invalid').searchParams.get('period_end')).toBe(cell.periodEnd);
+  expect(vendorReplayUrl(cell)).toBe('/api/industries/vendor/replay?code=SYNTH&metric=revenue_cum&duration=YTD&period_end=2090-12-31');
+ });
+ it.each(['public','internal'] as const)('describes the %s licence',licence=>{
+  const view=adaptVendorDrawer({...stored,header:{...header,licence}},'en',t);
+  expect(view.sections.find(s=>s.id==='licence')?.rows.map(r=>r.value)).toEqual([
+   'cnDrawer.'+licence,'cnDrawer.notRecorded',licence==='public'?'cnDrawer.termsPublic':'cnDrawer.terms']);
  });
  it('rejects replay from another generation even when the active row matched its archive',()=>{
   const result={run:{run_id:'fixture-b'},replayed_text:'73510',match:true};
