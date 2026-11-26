@@ -53,6 +53,21 @@ test('only normalized group text from humans reaches the local workflow', () => 
   assert.match(normalizeGroupMessage(data, appId).text, /^@_user_1/);
 });
 
+test('plain-text links expose their display label and preserve adjacent ticker characters', () => {
+  const data = flattened(event());
+  data.message.mentions = [{key:'@_user_1',id:{open_id:'ou_bot'}}];
+  data.message.content = JSON.stringify({text:'@_user_1 01810[.HK](http://00700.hk/)'});
+  const linked = normalizeGroupMessage(data, appId, 'ou_bot');
+  assert.equal(linked.text,'01810.HK');
+  assert.equal(linked.directedToBot,true);
+  assert.equal(linked.parentId,'om_summary');
+
+  data.message.content = JSON.stringify({text:'我要购买小米集团－Ｗ（１８１０） 100万港币用来建仓'});
+  assert.equal(normalizeGroupMessage(data, appId).text,'我要购买小米集团-W(1810) 100万港币用来建仓');
+  data.message.content = JSON.stringify({text:'关联研究：[季度复盘](https://example.invalid/topic(2026))'});
+  assert.equal(normalizeGroupMessage(data, appId).text,'关联研究：季度复盘');
+});
+
 test('reads the visible text of a Feishu post and retains inline formatting boundaries, paragraphs and reply IDs', () => {
   const data = flattened(event());
   const post = {title:'',content:[
@@ -113,6 +128,27 @@ test('directedToBot requires a mention of its own verified open ID present in th
   data.message.content = JSON.stringify({text:'同意 @_user_10'});
   assert.equal(normalizeGroupMessage(data,appId,'ou_bot').text,'同意');
   assert.equal(normalizeGroupMessage(data,appId).directedToBot,undefined);
+});
+
+test('a verified mention with no extra text remains an addressed group event', () => {
+  const data = flattened(event());
+  data.message.content = JSON.stringify({text:' @_user_1  '});
+  data.message.mentions = [{key:'@_user_1',id:{open_id:'ou_bot'}}];
+  assert.equal(normalizeGroupMessage(data,appId),null);
+  assert.equal(normalizeGroupMessage(data,appId,'ou_other').directedToBot,undefined);
+  const directed = normalizeGroupMessage(data,appId,'ou_bot');
+  assert.equal(directed.text,'');
+  assert.equal(directed.directedToBot,true);
+});
+
+test('an unverified mention cannot be removed to make an approval', () => {
+  const data = flattened(event());
+  data.message.content = JSON.stringify({text:'@_user_1 同意'});
+  data.message.mentions = [{key:'@_user_1',id:{open_id:'ou_other'}}];
+  assert.equal(normalizeGroupMessage(data,appId).text,'@_user_1 同意');
+  assert.equal(normalizeGroupMessage(data,appId,'ou_bot').text,'@_user_1 同意');
+  data.message.mentions[0].id.open_id = 'ou_bot';
+  assert.equal(normalizeGroupMessage(data,appId,'ou_bot').text,'同意');
 });
 
 test('bot info discovery runs concurrently with the websocket and a failed lookup preserves the legacy path', async () => {

@@ -1,5 +1,6 @@
 outputs/
 build/analyst-replay*/
+build/feishu*/
 tmp/
 tasks/
 research-books/

@@ -4,11 +4,11 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolveScoringKline } from '../../src/lib/data/kline/reliability.ts';
 import { validateKlineSeries } from '../../src/lib/data/kline/validate.ts';
+import { fetchDatagatewayDailyKline, isDatagatewayConfigured } from '../../src/lib/data/sources/datagateway.ts';
 import { fetchScoringBars } from '../../src/lib/scoring/daily-bars.ts';
 import { exchangeDate } from '../../src/lib/scoring/forward.ts';
 import { normalizeSecurityTicker } from '../../src/lib/securities/ticker.ts';
 import { FINAL_SCORING_DAY } from './demo-score.mjs';
-import { fetchReplayGatewayHistory } from './datagateway.mjs';
 import { classifyMarket, currencyCodeOfMarket } from '../../src/lib/utils.ts';
 
 const file = readFileSync(new URL('./tencent-hk00700.json', import.meta.url));
@@ -50,12 +50,13 @@ function sliceWindow(ticker, market, date, series, mode) {
 }
 
 async function fromGateway(ticker, market, date, now) {
+  if (!isDatagatewayConfigured()) return null;
   const adjustment = market === 'A' ? 'qfq' : 'none';
   const today = exchangeDate(now.toISOString(), market);
   const end = shiftDate(date, 100);
-  const series = await fetchReplayGatewayHistory({
-    ticker, market, limit:160, adjustment,
+  const series = await fetchDatagatewayDailyKline(ticker, market, 160, adjustment, {
     startDate:shiftDate(date, -40), endDate:end < today ? end : today,
+    requireExplicitAdjustment:true, timeoutMs:6000,
   });
   if (!series) return null;
   return { ...validateKlineSeries(series, adjustment, 160), freshness:'fresh', fetchedAt:now.toISOString() };

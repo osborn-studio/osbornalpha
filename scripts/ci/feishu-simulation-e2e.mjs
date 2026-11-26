@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import * as sdk from '@larksuiteoapi/node-sdk';
 import { POST } from '../../src/app/api/integrations/feishu/simulation/route.ts';
-import { makeFeishuConnector } from '../../demos/analyst-replay/feishu-connector.mjs';
+import { makeFeishuConnector } from '../../integrations/feishu/feishu-connector.mjs';
 import { createLocalFeishuWorkflow } from '../../demos/analyst-replay/feishu-local.mjs';
 import { SCHEMA_BOOTSTRAP_SQL } from '../s4/local-db.ts';
 

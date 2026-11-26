@@ -1,0 +1,375 @@
+[
+  {
+    "kind": "extraction",
+    "id": "independent-r2-01",
+    "group": "independent-r2-two-markets-one-order",
+    "split": "holdout",
+    "input": {
+      "text": "美股那边先放一放。我这条建议是加仓港股京东集团-SW（09618.HK）。",
+      "receivedAt": "2026-11-25T09:17:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "add",
+        "market": "HK",
+        "securityName": "京东集团-SW",
+        "ticker": "09618.HK"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-02",
+    "group": "independent-r2-us-amount",
+    "split": "holdout",
+    "input": {
+      "text": "今天我打算拿八千美元买入美股可口可乐（KO），请把这笔建仓记下来。",
+      "receivedAt": "2026-11-25T09:24:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "buy",
+        "securityName": "可口可乐",
+        "market": "US",
+        "ticker": "KO",
+        "executionMode": "simulate"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-03",
+    "group": "independent-r2-sz-price-labels",
+    "split": "holdout",
+    "input": {
+      "text": "深市的格力电器，代码000651，我建议减仓。参考价42.8，止损价39。",
+      "receivedAt": "2026-11-25T09:31:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "trim",
+        "securityName": "格力电器",
+        "ticker": "000651",
+        "market": "A",
+        "reference_price": 42.8,
+        "stop_loss": 39
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-04",
+    "group": "independent-r2-hk-hyphenated-name",
+    "split": "holdout",
+    "input": {
+      "text": "港股快手-W我现在建议持有。万一后面跌穿45再讨论卖不卖。",
+      "receivedAt": "2026-11-25T09:38:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "hold",
+        "securityName": "快手-W",
+        "market": "HK"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-05",
+    "group": "independent-r2-us-advice-only",
+    "split": "holdout",
+    "input": {
+      "text": "请录入我的建议，清仓美股迪士尼股票，只登记建议，不做模拟成交。",
+      "receivedAt": "2026-11-25T09:45:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "sell",
+        "market": "US",
+        "securityName": "迪士尼",
+        "executionMode": "advice_only"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-06",
+    "group": "independent-r2-sh-pass-market",
+    "split": "holdout",
+    "input": {
+      "text": "我对沪市的中国联通（600050）给观望建议；上次说的买入是上一轮的事。",
+      "receivedAt": "2026-11-25T09:52:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "pass",
+        "securityName": "中国联通",
+        "market": "A",
+        "ticker": "600050"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-07",
+    "group": "independent-r2-partial-registration",
+    "split": "holdout",
+    "input": {
+      "text": "先替我登记一条泡泡玛特的建议，具体方向我晚些补。",
+      "receivedAt": "2026-11-25T09:59:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "securityName": "泡泡玛特"
+      },
+      "intentEvidence": true
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-08",
+    "group": "independent-r2-us-fill-vs-old-lot",
+    "split": "holdout",
+    "input": {
+      "text": "我原来有80股。今天我的建议是加仓美股英特尔，另外模拟买入12股，模拟成交价每股24.6美元。",
+      "receivedAt": "2026-11-25T10:06:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "action": "add",
+        "securityName": "英特尔",
+        "market": "US",
+        "executionMode": "simulate",
+        "quantity": 12,
+        "price": 24.6,
+        "currency": "USD"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-09",
+    "group": "independent-r2-draft-bare-share-count",
+    "split": "holdout",
+    "input": {
+      "text": "35",
+      "receivedAt": "2026-11-25T10:13:00+08:00",
+      "isSupplement": true,
+      "priorFields": {
+        "securityName": "微软",
+        "action": "buy",
+        "executionMode": "simulate",
+        "price": 410,
+        "currency": "USD"
+      },
+      "pendingFields": [
+        "quantity"
+      ]
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "quantity": 35
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-10",
+    "group": "independent-r2-draft-reference-and-fill",
+    "split": "holdout",
+    "input": {
+      "text": "46.2是参考价，模拟成交用每股45.8元人民币。",
+      "receivedAt": "2026-11-25T10:20:00+08:00",
+      "isSupplement": true,
+      "priorFields": {
+        "securityName": "长江电力",
+        "action": "buy",
+        "executionMode": "simulate",
+        "quantity": 200
+      },
+      "pendingFields": [
+        "price"
+      ]
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "reference_price": 46.2,
+        "price": 45.8,
+        "currency": "CNY"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-11",
+    "group": "independent-r2-draft-shares-vs-total",
+    "split": "holdout",
+    "input": {
+      "text": "原仓合计600股。这次模拟卖出只填150股。",
+      "receivedAt": "2026-11-25T10:27:00+08:00",
+      "isSupplement": true,
+      "priorFields": {
+        "securityName": "海尔智家",
+        "action": "sell",
+        "executionMode": "simulate",
+        "price": 26.1
+      },
+      "pendingFields": [
+        "quantity"
+      ]
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "quantity": 150
+      },
+      "optionalFields": {
+        "action": "sell",
+        "executionMode": "simulate"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-12",
+    "group": "independent-r2-draft-cross-listing",
+    "split": "holdout",
+    "input": {
+      "text": "我指在香港上市的那只。",
+      "receivedAt": "2026-11-25T10:34:00+08:00",
+      "isSupplement": true,
+      "priorFields": {
+        "securityName": "中国石油",
+        "action": "hold"
+      },
+      "pendingFields": [
+        "market"
+      ]
+    },
+    "expect": {
+      "intent": "proposal",
+      "fields": {
+        "market": "HK"
+      }
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-13",
+    "group": "independent-r2-borrowed-call",
+    "split": "holdout",
+    "input": {
+      "text": "刚才投研群的原话是“买入中芯国际，参考价62”。我只是转给大家看看。",
+      "receivedAt": "2026-11-25T10:41:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "other",
+      "fields": {}
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-14",
+    "group": "independent-r2-settled-trade",
+    "split": "holdout",
+    "input": {
+      "text": "昨天我已经把手上的耐克股票全部卖完了，成交回单也收到了。",
+      "receivedAt": "2026-11-25T10:48:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "other",
+      "fields": {}
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-15",
+    "group": "independent-r2-conditional-entry",
+    "split": "holdout",
+    "input": {
+      "text": "得等到财报出来且毛利率回升，我才会对拼多多提加仓建议。",
+      "receivedAt": "2026-11-25T10:55:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "other",
+      "fields": {}
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-16",
+    "group": "independent-r2-suitability-question",
+    "split": "holdout",
+    "input": {
+      "text": "美股的星巴克现在适合建仓吗，还是应该继续等一等？",
+      "receivedAt": "2026-11-25T11:02:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "help",
+      "fields": {},
+      "helpTopic": "investment"
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-17",
+    "group": "independent-r2-draft-question",
+    "split": "holdout",
+    "input": {
+      "text": "我这条草稿还少填哪些信息才能提交？",
+      "receivedAt": "2026-11-25T11:09:00+08:00",
+      "isSupplement": true,
+      "priorFields": {
+        "securityName": "招商银行",
+        "action": "buy",
+        "executionMode": "simulate"
+      },
+      "pendingFields": [
+        "quantity",
+        "price"
+      ]
+    },
+    "expect": {
+      "intent": "help",
+      "fields": {},
+      "helpTopic": "missing"
+    }
+  },
+  {
+    "kind": "extraction",
+    "id": "independent-r2-18",
+    "group": "independent-r2-non-current-opinion",
+    "split": "holdout",
+    "input": {
+      "text": "顺丰控股这阵子成交活跃，我的意思只是提醒大家留意成交量。",
+      "receivedAt": "2026-11-25T11:16:00+08:00",
+      "isSupplement": false
+    },
+    "expect": {
+      "intent": "other",
+      "fields": {}
+    }
+  }
+]

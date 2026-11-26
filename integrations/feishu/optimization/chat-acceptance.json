@@ -1,0 +1,435 @@
+[
+  {
+    "id": "chat-audit-late-arrival",
+    "group": "chat-audit-late-arrival",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "我刚进大群，好多名字还对不上号，先来打个招呼～",
+      "isAnalyst": false,
+      "isApprover": false
+    },
+    "expect": {
+      "concepts": [
+        [
+          "欢迎",
+          "你好",
+          "您好",
+          "嗨",
+          "哈[喽啰罗]",
+          "幸会",
+          "很高兴",
+          "多[多多]?关照",
+          "慢慢熟",
+          "认识你",
+          "别拘束",
+          "常来",
+          "🙌",
+          "👋"
+        ]
+      ],
+      "avoid": [
+        "提交建议|审批流程|模拟成交|待确认卡"
+      ],
+      "maxChars": 180
+    }
+  },
+  {
+    "id": "chat-audit-agenda",
+    "group": "chat-audit-agenda",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "就选能让大家先发言的那个。开场白帮我想一句，可以直接发群里。",
+      "history": [
+        {
+          "role": "user",
+          "content": "下午复盘想换个开头：先问问大家这周踩过什么坑，或者我先念收益表。"
+        },
+        {
+          "role": "assistant",
+          "content": "一个是邀请大家分享经历，另一个是先过数据。你更想从哪边开始？"
+        }
+      ]
+    },
+    "expect": {
+      "concepts": [
+        [
+          "坑",
+          "教训",
+          "不顺",
+          "失误",
+          "失策",
+          "踩雷",
+          "弯路",
+          "失手",
+          "翻车",
+          "做错",
+          "没做[对好]",
+          "经验",
+          "遗憾",
+          "重来",
+          "改进",
+          "反思",
+          "不如预期",
+          "复盘.{0,10}经历"
+        ],
+        [
+          "分享",
+          "说说",
+          "聊聊",
+          "谁",
+          "哪[个一件些]",
+          "讲讲",
+          "有没有",
+          "有什么",
+          "有啥",
+          "来一个",
+          "[？?]"
+        ]
+      ],
+      "avoid": [
+        "提交建议|审批流程|模拟成交"
+      ],
+      "maxChars": 220
+    }
+  },
+  {
+    "id": "chat-audit-attribution",
+    "group": "chat-audit-attribution",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "我是登记过的研究员。群里一位同事看好一只票，我把他的原话贴过来给大家看。这样的转述够走我的提交流程吗？",
+      "isAnalyst": true,
+      "isApprover": false
+    },
+    "expect": {
+      "concepts": [
+        [
+          "不够",
+          "不能",
+          "不算",
+          "不会",
+          "不行",
+          "不足",
+          "无法",
+          "还不[能行够]",
+          "不[会可应宜能].{0,8}(?:提[交报]|进[入行]|启动|触发|当作|视为)",
+          "仅.{0,12}(?:交流|讨论|转述|参考)",
+          "[需得要].{0,12}(?:本人|自己|你|您)",
+          "只[有接受].{0,12}(?:本人|自己|你|您)"
+        ],
+        [
+          "(?:本人|自己|你|您|亲自).{0,25}(?:明[确示]|提出|建议|推荐|主张|表态|表达|认可|认同)",
+          "(?:建议|推荐|观点).{0,10}(?:是|来自|出自|归属).{0,6}(?:本人|你|您|自己)"
+        ]
+      ],
+      "maxChars": 430
+    }
+  },
+  {
+    "id": "chat-audit-simulation-fields",
+    "group": "chat-audit-simulation-fields",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "我准备提一笔模拟卖出。标的和方向都写了，金额我只写了大约的总数。模拟成交信息还缺哪两样？",
+      "isAnalyst": true,
+      "isApprover": false
+    },
+    "expect": {
+      "concepts": [
+        [
+          "股数",
+          "多少股",
+          "(?:交易|卖出|拟成交|成交|股票)数量",
+          "数量",
+          "几股"
+        ],
+        [
+          "每股",
+          "单价",
+          "每一股",
+          "成交价",
+          "一股.{0,8}(?:多少钱|价格|多少元)",
+          "价位",
+          "卖出价",
+          "拟.{0,4}价格"
+        ]
+      ],
+      "maxChars": 400
+    }
+  },
+  {
+    "id": "chat-audit-hkd-line",
+    "group": "chat-audit-hkd-line",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "排版把模拟成交那一行挤没了。请只补这一行，写清方向、股数和每股价格，带上币种。",
+      "proposalContext": {
+        "ticker": "00388.HK",
+        "action": "trim",
+        "status": "awaiting_approval",
+        "execution": {
+          "quantity": 350,
+          "price": 286.4,
+          "currency": "HKD",
+          "direction": "sell"
+        }
+      }
+    },
+    "expect": {
+      "concepts": [
+        [
+          "卖",
+          "减持",
+          "减仓",
+          "沽[售出]"
+        ],
+        [
+          "港[元币幣圓圆]",
+          "HKD",
+          "HK\\$",
+          "港纸"
+        ]
+      ],
+      "numbers": {
+        "required": [
+          350,
+          286.4
+        ],
+        "allowed": [
+          350,
+          286.4,
+          388
+        ]
+      },
+      "maxChars": 310
+    }
+  },
+  {
+    "id": "chat-audit-usd-pending",
+    "group": "chat-audit-usd-pending",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "刚换过一版草稿，谁给我核对一下最终摘要里每份多少钱、用什么币结算？这笔现在走到哪里了？",
+      "history": [
+        {
+          "role": "user",
+          "content": "之前的草稿写的是每股 48.5 美元，准备再改。"
+        }
+      ],
+      "proposalContext": {
+        "ticker": "MESA",
+        "action": "buy",
+        "status": "pending_formal_sync",
+        "execution": {
+          "quantity": 64,
+          "price": 46.75,
+          "currency": "USD",
+          "direction": "buy"
+        }
+      }
+    },
+    "expect": {
+      "concepts": [
+        [
+          "美元",
+          "美[金圆圓元]",
+          "USD",
+          "US\\$"
+        ],
+        [
+          "待.{0,12}(?:同步|登记|入账|入库|录入|入册)",
+          "等.{0,15}(?:同步|登记|入账|入库|录入|入册)",
+          "(?:同步|登记|入账|入库|录入).{0,8}(?:中|待|尚未|未完成)",
+          "(?:尚未|还没|尚待|还需|还要|未完成|未正式).{0,10}(?:同步|登记|入账|入库|录入)",
+          "同步中"
+        ]
+      ],
+      "numbers": {
+        "required": [
+          46.75
+        ],
+        "allowed": [
+          46.75,
+          64
+        ]
+      },
+      "maxChars": 380
+    }
+  },
+  {
+    "id": "chat-audit-cny-book",
+    "group": "chat-audit-cny-book",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "帮我照摘要回一下后台同事：这条在登记流程的哪一步，模拟单每股按多少、什么币种记？别算总金额。",
+      "proposalContext": {
+        "ticker": "600028.SH",
+        "action": "add",
+        "status": "registered",
+        "execution": {
+          "quantity": 900,
+          "price": 6.17,
+          "currency": "CNY",
+          "direction": "buy"
+        }
+      }
+    },
+    "expect": {
+      "concepts": [
+        [
+          "已.{0,8}(?:登记|入账|记录在案|入册|入库|录入|记账)",
+          "(?:登记|入账|入库|录入|记账).{0,6}(?:完成|完毕|成功|好了|在案)",
+          "登记了",
+          "正式记录.{0,6}已"
+        ],
+        [
+          "人民币",
+          "人民幣",
+          "CNY",
+          "RMB",
+          "(?:[0-9.]| )元(?:人民币)?(?:/股|每股|一股)"
+        ]
+      ],
+      "numbers": {
+        "required": [
+          6.17
+        ],
+        "allowed": [
+          6.17,
+          900,
+          600028
+        ]
+      },
+      "maxChars": 380
+    }
+  },
+  {
+    "id": "chat-audit-analyst-role",
+    "group": "chat-audit-analyst-role",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "这是我本人提的。我只有研究员身份，能自己把眼前这条拍板通过吗？谁来接这一步？",
+      "isAnalyst": true,
+      "isApprover": false,
+      "proposalContext": {
+        "ticker": "PINE",
+        "action": "hold",
+        "status": "awaiting_approval",
+        "execution": null
+      }
+    },
+    "expect": {
+      "concepts": [
+        [
+          "不[能可行够]",
+          "无法",
+          "无权",
+          "没有.{0,5}权限",
+          "不能自行",
+          "只[能有]",
+          "需[要由]",
+          "要由",
+          "得由",
+          "应由",
+          "须由",
+          "请.{0,8}(?:PM|经理)"
+        ],
+        [
+          "PM",
+          "组合经理",
+          "投资经理",
+          "基金经理",
+          "投资组合管理[人者]",
+          "已绑定.{0,5}(?:审批人|审批者|确认人|负责人)"
+        ]
+      ],
+      "maxChars": 440
+    }
+  },
+  {
+    "id": "chat-audit-pm-reply",
+    "group": "chat-audit-pm-reply",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "我这个账号已经绑好了审批身份。现在这条准备放行，具体要在哪儿回哪两个字？",
+      "isAnalyst": false,
+      "isApprover": true,
+      "proposalContext": {
+        "ticker": "FENN",
+        "action": "hold",
+        "status": "awaiting_approval",
+        "execution": null
+      }
+    },
+    "expect": {
+      "concepts": [
+        [
+          "同意"
+        ],
+        [
+          "摘要",
+          "卡片",
+          "待确认.{0,6}(?:消息|下方|下面|那条)",
+          "(?:原|对应|这|那|该)(?:条|张|则|个).{0,8}(?:消息|下方|下面|里回复)",
+          "(?:回复|引用|跟帖).{0,8}(?:这条|那条|该条|原消息)"
+        ]
+      ],
+      "maxChars": 360
+    }
+  },
+  {
+    "id": "chat-audit-withdrawn",
+    "group": "chat-audit-withdrawn",
+    "kind": "chat",
+    "split": "holdout",
+    "input": {
+      "text": "这个流程眼下还在等我批吗？我有审批身份。",
+      "isAnalyst": false,
+      "isApprover": true,
+      "proposalContext": {
+        "ticker": "VIO",
+        "action": "pass",
+        "status": "withdrawn",
+        "execution": null
+      }
+    },
+    "expect": {
+      "concepts": [
+        [
+          "撤[回销掉]",
+          "取消",
+          "作废",
+          "已撤"
+        ],
+        [
+          "不[用必需再能可]",
+          "无需",
+          "无[须效法]",
+          "已结束",
+          "已经结束",
+          "终止",
+          "不能",
+          "不在.{0,7}(?:待|等)",
+          "未在.{0,7}(?:待|等)",
+          "没有.{0,9}(?:可批|待批|待确认|待审)",
+          "不用等",
+          "结束了",
+          "流程.{0,8}结束",
+          "不处于",
+          "无需处理",
+          "失效"
+        ]
+      ],
+      "maxChars": 370
+    }
+  }
+]

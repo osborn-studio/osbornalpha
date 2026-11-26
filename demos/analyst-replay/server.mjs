@@ -149,7 +149,8 @@ function json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 const profiles = openAnalystProfiles(db, keys);
-const feishuAdmin = openFeishuAdmin(directory, profiles.list);
+const feishuAdmin = openFeishuAdmin(directory, profiles.list, {db,createProfile:profiles.create,transaction,
+  connectorDirectory:publicOrigin ? undefined : process.env.REPLAY_FEISHU_CONNECTOR_DIR});
 const desk = openRegistrationDesk(db, transaction, loadMarketWindow, profiles.list,
   publicOrigin ? () => [] : feishuAdmin.boundAnalystRoles);
 const trades = openTradeStore(db, transaction, profiles.exists);
@@ -193,7 +194,8 @@ function currentView(role, localDemoOrigin) {
 }
 const assets = new Map([
   ['/', ['index.html','text/html']], ['/app.js', ['app.js','text/javascript']],
-  ['/beijing-time.mjs',['beijing-time.mjs','text/javascript']], ['/trades.js',['trades.js','text/javascript']],
+  ['/beijing-time.mjs',[resolve(here,'../../integrations/feishu/beijing-time.mjs'),'text/javascript']],
+  ['/trades.js',['trades.js','text/javascript']],
   ['/feishu-bindings.js',['feishu-bindings.js','text/javascript']],
   ['/trades.css',['trades.css','text/css']], ['/analysts.js',['analysts.js','text/javascript']],
   ['/registrations.js',['registrations.js','text/javascript']], ['/styles.css',['styles.css','text/css']], ['/ledger.js',['ledger.js','text/javascript']],
@@ -240,10 +242,17 @@ const server = createServer(async (req, res) => {
     const {path, localInternal, localDemoOrigin} = requestIngress(req, server.address().port);
     const asset = assets.get(path);
     if (req.method === 'GET' && asset) {
-      const bytes = readFileSync(join(here,'public',asset[0]));
+      const bytes = readFileSync(resolve(here,'public',asset[0]));
       res.writeHead(200, { 'Content-Type': asset[1] + '; charset=utf-8' });
       res.end(bytes);
       return;
+    }
+    if (req.method === 'POST' && path === '/internal/feishu/onboarding') {
+      if (publicOrigin || !localInternal || req.headers['sec-fetch-site']) throw err(403,'仅允许本机连接器发起建档。');
+      const result = feishuAdmin.onboard(await input(req));
+      try { writeLauncher(); }
+      catch { console.error('已保存飞书绑定，未能刷新本机角色入口。'); }
+      return json(res,200,result);
     }
     if (req.method === 'POST' && path === '/internal/mock-feishu') {
       if (!localInternal || !sameKey(req.headers['x-demo-mock-token'], mockToken)) throw err(403,'本地接收器凭据无效');
@@ -296,7 +305,9 @@ const server = createServer(async (req, res) => {
         if (!feishuAdmin.approvedRegistration(role,data)) throw err(403,'无法核对已确认的飞书提案。');
         fromFeishu = true;
       }
-      const entry = path === '/api/registrations' ? await desk.register(role,data,{fromFeishu}) : await desk.refresh(role,data.id);
+      const forRecap = path === '/api/registrations/refresh' && req.headers['x-demo-registration-source'] === 'feishu-recap';
+      if (forRecap) verifyLocalDemoRequest(req,localDemoOrigin,true);
+      const entry = path === '/api/registrations' ? await desk.register(role,data,{fromFeishu}) : await desk.refresh(role,data.id,{forRecap});
       kick();
       return json(res,200,{entry});
     }

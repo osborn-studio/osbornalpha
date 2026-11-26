@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMarketWindowLoader } from './market-data.mjs';
-import { fetchReplayGatewayHistory, parseReplayGatewayHistory } from './datagateway.mjs';
+import { parseDatagatewayDailyKline } from '../../src/lib/data/sources/datagateway.ts';
 
 const hk = {ticker:'700.HK', market:'HK', recommended_at:'2026-06-16T02:00:00Z'};
 const us = {ticker:'AAPL', market:'US', recommended_at:'2026-06-16T14:00:00Z'};
@@ -91,40 +91,9 @@ test('verifies the scoring price basis and preserves a single provider for the w
   const window = await load(us);
   assert.equal(window.source,'腾讯财经');
   assert.equal(window.bars.length,11);
-});
-
-test('requires explicit gateway price basis, the requested security and a valid close on every row', () => {
   const closeData = {data:[{date:'2026-06-16',symbol:'AAPL',value:'123.45'}]};
-  const parse = payload => parseReplayGatewayHistory(payload, 'none', ['AAPL']);
-  assert.throws(() => parse(closeData), /did not report/);
-  assert.throws(() => parse({...closeData, adjustment:'qfq'}), /adjustment does not match/);
-  assert.equal(parse({...closeData, adjustment:'raw'}).bars[0].close, 123.45);
-  assert.throws(() => parseReplayGatewayHistory({...closeData, adjustment:'raw'}, 'none', ['MSFT']), /different security/);
-  assert.throws(() => parse({adjustment:'raw', data:[...closeData.data, {date:'2026-06-17', value:null}]}), /missing or invalid close/);
-});
-
-test('sends the replay window to the configured gateway and rejects invalid ranges before fetching', async (t) => {
-  const gatewayEnv = {DATAGATEWAY_BASE_URL:'https://gateway.example.com', DATAGATEWAY_API_KEY:'fixture-secret'};
-  const previous = Object.fromEntries(Object.keys(gatewayEnv).map(key => [key, process.env[key]]));
-  Object.assign(process.env, gatewayEnv);
-  t.after(() => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  });
-
-  const args = {ticker:'00700.HK', market:'HK', limit:160, adjustment:'none', startDate:'2026-05-01', endDate:'2026-09-01'};
-  const request = t.mock.fn(async (url, init) => {
-    assert.equal(url.hostname, 'gateway.example.com');
-    assert.deepEqual(JSON.parse(init.body), {symbols:['0700.HK'], startDate:'2026-05-01', endDate:'2026-09-01', mode:'strict_sync'});
-    return Response.json({adjustment:'raw', data:[{symbol:'0700.HK', date:'2026-06-16', value:447.4}]});
-  });
-  assert.equal((await fetchReplayGatewayHistory(args, request)).bars[0].close, 447.4);
-  assert.equal(await fetchReplayGatewayHistory({...args, startDate:'2026-02-30'}, request), null);
-  assert.equal(await fetchReplayGatewayHistory({...args, endDate:'2026-04-30'}, request), null);
-  assert.equal(request.mock.callCount(), 1);
-  await assert.rejects(fetchReplayGatewayHistory(args, async () => new Response('x'.repeat(1_000_001))), /exceeded the size limit/);
+  assert.throws(()=>parseDatagatewayDailyKline(closeData,'none',{requireExplicitAdjustment:true}),/did not report/);
+  assert.equal(parseDatagatewayDailyKline({...closeData,adjustment:'raw'},'none',{requireExplicitAdjustment:true}).bars[0].close,123.45);
 });
 
 test('discards stale fallback caches, erroneous weekend bars and mismatched market symbols', async () => {

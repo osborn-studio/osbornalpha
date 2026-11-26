@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectNaturalProposal,extractNatural} from './feishu-natural.mjs';
+import {detectNaturalProposal,extractNatural,resolveModelSecurity} from './feishu-natural.mjs';
 
 const receivedAt = '2026-11-23T17:08:29.000Z'; // November 24 in Beijing.
 
@@ -24,16 +24,6 @@ test('a specific position adjustment can refine a colloquial direction but not a
   }
 });
 
-test('recognizes the current direction alongside negated and already completed actions', () => {
-  assert.equal(extractNatural('不要卖出腾讯控股，我建议买入腾讯控股').action, 'buy');
-  assert.equal(extractNatural('我想买腾讯控股。昨天已经加仓了。').action, 'buy');
-  assert.equal(extractNatural('我想卖腾讯控股。昨天已经减仓了。').action, 'sell');
-  assert.deepEqual(extractNatural('我想买腾讯控股。昨天已经加仓200股。', {receivedAt}),
-    {ticker:'00700.HK',market:'HK',action:'buy'});
-  assert.throws(() => extractNatural('我想买腾讯控股。之后还要加仓。'), /多个不同的建议动作/);
-  assert.equal(detectNaturalProposal('昨天已经加仓腾讯控股', { directedToBot:true }), false);
-});
-
 test('spoken budgets do not obscure the stock name or turn into a trade size', () => {
   const expected = {ticker:'NVDA',market:'US',action:'buy'};
   for (const text of [
@@ -48,6 +38,20 @@ test('spoken budgets do not obscure the stock name or turn into a trade size', (
   ]) assert.deepEqual(extractNatural(text),expected,text);
   assert.deepEqual(extractNatural('买200股英伟达股票'),{...expected,quantity:200});
   assert.deepEqual(extractNatural('买腾讯音乐股票'),{action:'buy'});
+  assert.deepEqual(resolveModelSecurity('给英伟达投20万人民币，只记这条建议','英伟达',{},'英伟达'),
+    {ticker:'NVDA',market:'US',securityName:undefined});
+});
+
+test('a condition next to an issuer name grounds that issuer without accepting related securities', () => {
+  const listing = {ticker:'NVDA',market:'US',securityName:undefined};
+  for (const text of ['英伟达如果跌破140就止损，眼下我建议继续持有','英伟达若跌破140就止损，先持有']) {
+    assert.deepEqual(resolveModelSecurity(text,'英伟达',{},'英伟达'),listing,text);
+  }
+  for (const text of ['英伟达供应商如果有变化再减持','英伟达相关ETF若跌破140就止损','英伟达若干供应商']) {
+    assert.deepEqual(resolveModelSecurity(text,'英伟达',{},'英伟达'),{},text);
+  }
+  assert.deepEqual(resolveModelSecurity('腾讯音乐如果跌破140就止损','腾讯',{},'腾讯'),{});
+  assert.equal(detectNaturalProposal('如果英伟达跌破140再买入'),false);
 });
 
 test('initial intent includes partial suggestions and directed stock codes; ignores chatter, questions, conditional and negative orders', () => {

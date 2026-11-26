@@ -9,8 +9,8 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { openFeishuWorkflow } from './feishu-workflow.mjs';
-import { pairingReference } from './feishu-pairing.mjs';
+import { openFeishuWorkflow } from '../../integrations/feishu/feishu-workflow.mjs';
+import { pairingReference } from '../../integrations/feishu/feishu-pairing.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 async function startServer(directory, publicOrigin = '') {
@@ -59,6 +59,10 @@ test('the local role picker exchanges a selected role without embedding keys in 
   const keys = JSON.parse(await readFile(join(directory,'role-keys.json'),'utf8'));
   const launcher = await readFile(join(directory,'start.html'),'utf8');
   const home = await (await fetch(origin)).text();
+  const timeModule = await fetch(origin+'/beijing-time.mjs');
+  assert.equal(timeModule.status,200);
+  assert.match(timeModule.headers.get('content-type'),/^text\/javascript\b/);
+  assert.match(await timeModule.text(),/export function beijingInputToISO\(/);
   const roster = await (await fetch(origin+'/api/demo/roles')).json();
   assert.deepEqual(roster.roles, [
     {id:'A',display_name:'分析师 A',kind:'human'},
