@@ -1,5 +1,7 @@
 // Login returns carry navigation state, never arbitrary queries (tokens, codes,
 // nested next URLs, etc.). Keep this edge/browser-safe and independent of DB code.
+import { inferCoreMarket, normalizeSecurityTicker } from '@/lib/securities/ticker';
+
 const INDUSTRY_SELECTORS: Record<string, RegExp> = {
   scheme: /^(sic|sw2021)$/,
   metric: /^(revenue_sum|net_income_parent_sum|gross_margin|roe|revenue_yoy|net_income_yoy|member_count)$/,
@@ -21,6 +23,13 @@ export function loginReturnDestination(value: string | null): string {
     for (const [key, allowed] of Object.entries(INDUSTRY_SELECTORS)) {
       const values = url.searchParams.getAll(key);
       if (values.length === 1 && allowed.test(values[0])) search.set(key, values[0]);
+    }
+  } else if (pathname === '/portfolio') {
+    const symbols = url.searchParams.getAll('s');
+    if (symbols.length === 1 && /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/i.test(symbols[0])) {
+      const market = inferCoreMarket(symbols[0]);
+      const ticker = market && normalizeSecurityTicker(symbols[0], market);
+      if (ticker) search.set('s', ticker);
     }
   }
   const query = search.toString();

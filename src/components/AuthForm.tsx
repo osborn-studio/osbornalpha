@@ -103,9 +103,12 @@ export function AuthForm({ mode }: { mode: Mode }) {
     if (!configured) return show(t('form.supabaseNotConfigured'));
     trackEvent(isLogin ? 'login_submitted' : 'signup_submitted', { provider });
     const sb = getBrowserSupabase();
+    const callback = new URL('/auth/callback', window.location.origin);
+    const next = new URLSearchParams(window.location.search).get('next');
+    if (isLogin && next) callback.searchParams.set('next', loginReturnDestination(next));
     const { error } = await sb.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: { redirectTo: callback.href },
     });
     if (error) {
       const errorCode = stableAuthErrorCode(error);
