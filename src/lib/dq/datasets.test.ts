@@ -71,11 +71,11 @@ describe('DATASETS / DQ_DATASET_INVENTORY',()=>{
    'industry.agg.sw2021','industry.agg.sic','industry.sw2021.memberships','industry.sic.memberships',
    'industry.sw2021.classifications','industry.sic.classifications','industry.sw2021.source','industry.marks','industry.official',
    'vendor.gildata.industry.members.sw2021','vendor.gildata.industry.fin.sw2021',
-   'universe.csi300','issuers.a_stock','issuers.a_stock.targeted','facts.hk','documents.edgar','documents.cninfo','documents.hkexnews',
+   'universe.csi300','universe.star50','issuers.a_stock','issuers.a_stock.targeted','facts.hk','documents.edgar','documents.cninfo','documents.hkexnews',
    'documents.upload','documents.extract','documents.candidates','broker_research',
   ];
   expect([...DQ_DATASET_NAMES].sort()).toEqual(expected.sort());
-  expect(DQ_DATASET_NAMES).toHaveLength(50);
+  expect(DQ_DATASET_NAMES).toHaveLength(51);
  });
  it('matches the Gildata owner datasets and their weekly batch producer',()=>{
   const entries=DQ_DATASET_INVENTORY.filter(e=>e.source==='gildata');
