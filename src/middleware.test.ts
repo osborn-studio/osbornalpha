@@ -64,6 +64,17 @@ describe('middleware auth gate',()=>{
   await middleware(post());
   expect(mocks.getUser).toHaveBeenCalledTimes(3);
  });
+ it('uses the exact authenticated overview GET without running a browser session check', async () => {
+  const path = '/api/integrations/feishu/overview';
+  vi.stubEnv('FEISHU_SIMULATION_INGEST_ENABLED', 'true');
+  expect((await middleware(req(path))).headers.get('x-middleware-next')).toBe('1');
+  expect(mocks.getUser).not.toHaveBeenCalled();
+  await middleware(new NextRequest('https://alpha.example'+path, {method:'POST'}));
+  await middleware(req(path+'/other'));
+  vi.stubEnv('FEISHU_SIMULATION_INGEST_ENABLED', 'false');
+  await middleware(req(path));
+  expect(mocks.getUser).toHaveBeenCalledTimes(3);
+ });
  it('sends an authenticated login visitor to macro',async()=>{
   mocks.getUser.mockResolvedValue({data:{user:{id:'user-1'}}});
   const res=await middleware(req('/login'));

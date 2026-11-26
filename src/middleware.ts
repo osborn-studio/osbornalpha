@@ -81,9 +81,11 @@ export async function middleware(request: NextRequest) {
   if (pathname === '/api/companies' || pathname.startsWith('/api/companies/')) return response;
   // END COMPANY
 
-  // The opt-in simulation bridge authenticates the exact server-to-server POST itself.
-  if (process.env.FEISHU_SIMULATION_INGEST_ENABLED === 'true' && request.method === 'POST' &&
-      rawPathname === '/api/integrations/feishu/simulation') return response;
+  // These two machine endpoints validate the bound connector token inside their handlers.
+  if (process.env.FEISHU_SIMULATION_INGEST_ENABLED === 'true' && (
+    (request.method === 'POST' && rawPathname === '/api/integrations/feishu/simulation') ||
+    (request.method === 'GET' && rawPathname === '/api/integrations/feishu/overview')
+  )) return response;
 
   const sbUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const sbKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
