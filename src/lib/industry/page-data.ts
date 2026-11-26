@@ -6,7 +6,7 @@
 // bounded, 2 h expiry) and shown with an error notice when a later read fails — but ONLY after the
 // dataset's licence is re-checked as public right now; a failed or negative check fails closed and
 // forgets the whole dataset (spec §4.8: a revoked licence never keeps serving old numbers).
-import {requireAdminUser} from '../admin/auth';
+import {isAdminViewer} from './admin-viewer';
 import {schemeDatasetKey} from './licenses';
 import {adminReadDeps,publicReadDeps} from './public-deps';
 import {defaultMetric,durationsForScheme,metricsForScheme,SCHEME_VERSION,utcDate} from './read';
@@ -18,7 +18,7 @@ import type {AggDuration,AggMetric,Scheme} from './types-us';
 export interface PageLoad<T>{view:T|null;error:'read_failed'|null;staleAt:string|null;preview:boolean}
 export interface PageDeps{publicDeps:(now:Date)=>ReadDeps;adminDeps:(now:Date)=>ReadDeps;isAdmin:()=>Promise<boolean>}
 
-export async function isAdminViewer():Promise<boolean>{try{await requireAdminUser();return true;}catch{return false;}}
+export {isAdminViewer};
 const DEFAULT_DEPS:PageDeps={publicDeps:publicReadDeps,adminDeps:adminReadDeps,isAdmin:isAdminViewer};
 
 export async function loadView<T extends {state:string}>(key:string,build:(deps:ReadDeps)=>Promise<T>,opts:{scheme:Scheme;now?:Date;deps?:PageDeps}):Promise<PageLoad<T>>{

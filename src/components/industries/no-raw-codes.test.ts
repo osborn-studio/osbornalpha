@@ -20,6 +20,9 @@ for(const [locale,industries,judgments,label] of [['zh',zh,zhJudgments,'仅当�
   const {availabilityAssumed,availabilityObserved,availabilityEvidenced}=industries.drawer;
   const sources=Object.fromEntries(Object.entries(industries.sources).filter(([key])=>key.startsWith('availability')));
   const copy={states:industries.states,missing:industries.missing,sources,drawer:{availabilityAssumed,availabilityObserved,availabilityEvidenced}};
+  expect(industries.cnList.missing+' · '+industries.missing.not_in_run).toBe(locale==='zh'?'缺失 · 本次运行未包含':'Missing · not in this run');
+  const vendorCodes=/\b(?:not_in_run|vendor_not_provided|no_prior_period|invalid_denominator|vendor:gildata:[a-z-]+|scheme:sw2021:2021)\b/;
+  expect(offendingPaths({drawer:industries.cnDrawer,datasets:industries.cnDatasets,missing:industries.missing},'industries',vendorCodes)).toEqual([]);
   expect(offendingPaths(copy,'industries',new RegExp(`${bracketed.source}|\\bmanifest_mismatch\\b`))).toEqual([]);
  });
  it(`keeps bracketed codes out of timeline copy (${locale})`,()=>{

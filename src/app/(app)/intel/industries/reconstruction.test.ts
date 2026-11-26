@@ -25,14 +25,15 @@ import {runHeader} from '@/lib/industry/read';
 import {runRow} from '@/lib/industry/fixture-rows';
 it.each(['zh','en'] as const)('renders scheme-specific reconstruction once on list and detail in %s',async locale=>{
  state.locale=locale;
- for(const scheme of ['sic','sw2021'] as const)for(const membershipOn of ['2026-11-03',null]){
+ const scheme='sic';
+ for(const membershipOn of ['2026-11-03',null]){
   const header={...runHeader(runRow()),membershipOn,factsAsOf:'2026-11-10'};
   const node={code:'3674',level:1,nameEn:'Industry',nameZh:'行业',parentCode:null};
   const common={state:'ok' as const,datasetKey:'scheme:sic:sec-current' as const,preview:false,freshness:'fresh' as const,header,periodEnds:[],valuation:{state:'not_enabled' as const}};
   state.list={...common,kind:'aggregate',nodes:[],metric:'revenue_sum',duration:'12M',cells:[],companion:[]};
   state.detail={...common,node,ancestors:[],children:[],aggregated:true,members:{count:0,unresolved:0,lastAddition:null},series:[],method:{methodVersion:header.methodVersion,configHash:header.configHash,formulaVersion:header.formulaVersion,codeVersion:header.codeVersion,config:{}},sources:['sec_submissions']};
   const catalog=locale==='zh'?zh:en;
-  const expected=(scheme==='sic'?catalog.states.reconstruction.bodySic:catalog.states.reconstruction.bodySw).replace('{date}',membershipOn??header.factsAsOf);
+  const expected=catalog.states.reconstruction.bodySic.replace('{date}',membershipOn??header.factsAsOf);
   for(const tree of [await ListPage({searchParams:Promise.resolve({scheme})}),await DetailPage({params:Promise.resolve({scheme,code:'3674'}),searchParams:Promise.resolve({})})]){
    const html=renderToStaticMarkup(createElement(NextIntlClientProvider,{locale,timeZone:'UTC',messages:{industries:catalog,research:locale==='zh'?researchZh:researchEn},children:tree}));
    expect(html.match(/data-state="reconstruction"/g)).toHaveLength(1);

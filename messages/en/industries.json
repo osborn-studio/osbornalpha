@@ -142,6 +142,25 @@
     "notPublished": {
       "title": "Not published yet",
       "body": "Self-computed valuations are calculated and published only after the basis reconciliation is complete. Until then no self-computed valuation is shown and no other source is substituted. Percentiles are not enabled."
+    },
+    "withheldCn": {
+      "title": "China industry data: licence pending",
+      "body": "This data comes from a commercial data service. Until its display terms are confirmed no number, list or chart is shown. US industries (SIC, public SEC data) are available."
+    },
+    "adminPreviewVendor": {
+      "title": "Admins only · vendor data is not yet licensed for display",
+      "body": "Dataset \"{dataset}\" has licence status \"internal\". Only admins see these numbers; other signed-in users see \"data licence pending\" and are pointed to the SIC scheme. Before it goes public the owner records the contract clause in the licence table."
+    },
+    "noStageMethod": {
+      "title": "No stage method published",
+      "body": "Facts only, no grouping."
+    },
+    "notServed": {
+      "title": "Not served",
+      "body": "No valuation is shown and no other source stands in for it."
+    },
+    "notYetAvailable": {
+      "title": "Not yet available"
     }
   },
   "missing": {
@@ -151,7 +170,11 @@
     "financial_excluded": "Excluded by method: no gross margin for financials",
     "unresolved_over_limit": "Too many unresolved members",
     "manifest_mismatch": "Manifest self-check failed",
-    "absent": "Row missing from the expected grid"
+    "absent": "Row missing from the expected grid",
+    "not_in_run": "not in this run",
+    "vendor_not_provided": "not provided by vendor",
+    "no_prior_period": "no prior period",
+    "invalid_denominator": "invalid denominator"
   },
   "roles": {
     "included": "Included",
@@ -306,7 +329,9 @@
       "aggregate": "Aggregate number",
       "valuation": "Valuation number",
       "fact": "Disclosed fact",
-      "membership": "Membership row"
+      "membership": "Membership row",
+      "vendor": "Vendor observation",
+      "derived": "Derived statistic"
     },
     "sections": {
       "value": "Value & method",
@@ -415,5 +440,152 @@
     "revenue_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y| over one comparable set",
     "net_income_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y| over one comparable set",
     "member_count": "n_members (with n_unresolved)"
+  },
+  "origin": {
+    "vendor": "Vendor-reported",
+    "derived": "Derived"
+  },
+  "cnDatasets": {
+    "financials": "Gildata · industry financials (vendor-reported)",
+    "memberships": "SW 2021 classification and membership"
+  },
+  "cnBasis": {
+    "annual": "Annual",
+    "quarter": "Quarter-end (as reported)",
+    "single": "Single quarter"
+  },
+  "cnMetrics": {
+    "member_count": "Members",
+    "revenue_cum": "Revenue (cumulative)",
+    "revenue_ttm": "Revenue (TTM)",
+    "net_income_parent_cum": "Parent net profit (cumulative)",
+    "net_income_parent_ttm": "Parent net profit (TTM)",
+    "net_income_parent_yoy": "Parent net profit YoY",
+    "net_assets": "Net assets",
+    "roe_avg": "ROE (average)",
+    "roe_ttm": "ROE (TTM)",
+    "gross_margin": "Gross margin",
+    "gross_margin_ttm": "Gross margin (TTM)",
+    "ocf_to_revenue": "Operating cash flow / revenue",
+    "revenue_yoy": "Revenue YoY"
+  },
+  "cnList": {
+    "scope": "SW level 1 · {n} industries · {basis}.",
+    "detailScope": "A Shenwan 2021 level-1 industry. The Chinese name comes from the classification source; the English name comes from a reviewed table in the repository, not machine translation at run time.",
+    "membersScope": "Membership is a fact, but its history only starts at the first observation.",
+    "preview": "internal preview",
+    "withheld": "withheld",
+    "run": "Vendor run",
+    "generation": "Generation {n}",
+    "activated": "Activated",
+    "reconstruction": "The vendor publishes neither its aggregation method nor the member list, so past values are not what was visible at the time. Each cell became available at this run’s activation, not at the period end.",
+    "source": "Gildata · Datamap (internal, attribution not public)",
+    "memberships": "Membership",
+    "financials": "Financials",
+    "valuation": "Valuation",
+    "missing": "Missing",
+    "positive": "positive",
+    "negative": "negative",
+    "grid": "Grid",
+    "stages": "Stages",
+    "display": "Display",
+    "judgments": "Where judgments live",
+    "judgmentBody": "No registered judgment exists for this scope. Facts are shown as usual.",
+    "caption": "Brass = positive, grey with a hairline frame = negative; the sign is always printed, depth shows magnitude only, not good or bad, and is not the market up/down colour. A cell opens its source; a row name opens the industry.",
+    "empty": "The first sync of China industry data has not completed, so there is nothing to show. The grid appears once the first run is activated.",
+    "emptyTitle": "No data yet",
+    "period": "Period",
+    "industryCount": "{n} industries"
+  },
+  "cnDrawer": {
+    "industry": "Industry",
+    "metric": "Metric",
+    "period": "Period",
+    "value": "Value",
+    "window": "Window",
+    "publisher": "Publisher",
+    "gildata": "Gildata (恒生聚源)",
+    "product": "Product",
+    "interface": "Interface",
+    "dataset": "Dataset / field",
+    "templateNote": "Not supplied by the vendor; the query template is recorded instead",
+    "templateUnavailable": "Not supplied by the vendor; no query template was recorded for this observation",
+    "locator": "Row locator",
+    "blockRow": "Block {block} · row {row}",
+    "sha": "Response SHA-256",
+    "url": "URL",
+    "noUrl": "No public URL",
+    "asOf": "Vendor as-of",
+    "fetched": "Fetched at",
+    "activated": "Available at (activation)",
+    "parser": "Parser",
+    "mapping": "Mapping version",
+    "method": "Method",
+    "codeVersion": "Code version",
+    "aggregation": "Aggregation method",
+    "notPublished": "Not published by the vendor",
+    "status": "Status",
+    "internal": "Internal (admins only)",
+    "attribution": "Attribution",
+    "notRecorded": "Not recorded yet",
+    "note": "Note",
+    "terms": "The personal-account terms do not allow giving data to third parties.",
+    "formula": "Formula",
+    "formulaVersion": "Formula version",
+    "rule": "Rule",
+    "missingRule": "Both periods must have values and the prior-year value must be positive. An absent prior period, missing input, or zero or negative denominator carries its own missing reason. A figure with no row in this run is marked “not in this run”.",
+    "inputs": "Inputs",
+    "setChanged": "Member counts differ between the two periods; the member set changed.",
+    "inputsNote": "Each input opens its own vendor-observation drawer. Licence follows the inputs (internal).",
+    "sourceRow": "Source row",
+    "snapshot": "Snapshot fetched at",
+    "entryDate": "Vendor entry date",
+    "memberSince": "Member since",
+    "datingUnavailable": "Not available yet",
+    "thisRun": "This run",
+    "replay": "Replay (original response)",
+    "replayNote": "Replay re-parses the archived raw response; it never calls the vendor again.",
+    "noReplay": "This observation has no value to replay.",
+    "reproduced": "Reproduced",
+    "notReproduced": "Not reproduced",
+    "noParsedText": "No parsed value",
+    "replayFailed": "Replay is unavailable for this run.",
+    "checking": "Replaying archive",
+    "copyFailed": "Could not copy",
+    "kindMembership": "Industry membership",
+    "datamap": "Datamap",
+    "mobileReplay": "Replay (original)"
+  },
+  "cnDetail": {
+    "latest": "Latest values",
+    "latestNote": "Each number opens its source. We derive revenue YoY from the vendor’s cumulative figures.",
+    "series": "Series",
+    "cagr": "3-year CAGR",
+    "memberSet": "Member set",
+    "availableAt": "Available at",
+    "changed": "members {previous} → {current}, set changed",
+    "chartCaption": "A break is a missing value. Nothing is interpolated. The dashed line marks zero.",
+    "unrecorded": "Not recorded yet",
+    "valuation": "Valuation and percentiles",
+    "valuationBody": "Valuation is not provided for this industry. No valuation is shown and no other source stands in for it.",
+    "prosperity": "Prosperity dimensions",
+    "prosperityBody": "Prosperity dimensions and historical percentiles are not provided for this industry.",
+    "judgments": "Judgments",
+    "noJudgment": "No judgment for this industry. No method is registered for this scope. Facts are shown as usual.",
+    "preview": "Constituents preview",
+    "snapshot": "{total} listed · snapshot {date}",
+    "allMembers": "All constituents",
+    "previewNote": "The vendor returns no weights, so a top ten by weight cannot be shown. The first five by code are listed."
+  },
+  "cnConstituents": {
+    "weight": "Weight",
+    "weightMissing": "not provided by vendor",
+    "currentOnly": "The vendor returns the current list only. Entry and exit dating is not available yet. Snapshot fetched on {date}.",
+    "rowSource": "{company} · membership snapshot source",
+    "snapshotSource": "Gildata · member snapshot ▸",
+    "rowCount": "{total} listed · rows {from}–{to}",
+    "pages": "Constituent pages",
+    "noRows": "No constituents are listed for this industry in this snapshot.",
+    "emptyBody": "The membership sync has not completed its first run. Constituents will be listed here afterwards."
   }
 }

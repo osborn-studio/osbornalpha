@@ -14,6 +14,7 @@ describe('industry pages are dynamic server components',()=>{
   expect(src.includes("'use client'")).toBe(false);
   expect(src).toMatch(/export const dynamic\s*=\s*'force-dynamic'/);
   expect(src).toContain('SourceDrawerProvider');
+  expect(src).not.toContain('generateMetadata');
  });
 });
 

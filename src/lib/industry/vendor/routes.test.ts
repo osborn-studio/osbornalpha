@@ -3,7 +3,8 @@ import {AdminForbidden,AdminUnauthenticated} from '../../admin/auth';
 import {memoryTableClient} from '../../db/memory-table-client';
 import {GET as cron} from '../../../app/api/cron/industry-vendor-sync/route';
 import {GET as admin} from '../../../app/api/admin/industries/vendor/route';
-const mocks=vi.hoisted(()=>({auth:vi.fn(),run:vi.fn(),supabase:vi.fn(()=>({})),version:vi.fn()}));
+const mocks=vi.hoisted(()=>({auth:vi.fn(),cookies:vi.fn(),run:vi.fn(),supabase:vi.fn(()=>({})),version:vi.fn()}));
+vi.mock('next/headers',()=>({cookies:mocks.cookies}));
 vi.mock('@/lib/admin/auth',async original=>({...await original<typeof import('../../admin/auth')>(),requireAdminUser:mocks.auth}));
 vi.mock('@/lib/supabase/admin',()=>({getAdminSupabase:mocks.supabase}));
 vi.mock('@/lib/facts/deps',()=>({resolveCodeVersion:mocks.version}));
@@ -51,4 +52,24 @@ it('keeps unexpected errors uncached and omits internal details',async()=>{
  const res=await admin(req('view=grid'));
  expect(res.status).toBe(500);expect(res.headers.get('cache-control')).toBe('no-store');
  expect(await res.json()).toEqual({error:{code:'read_failed',message:'Vendor read failed'}});
+});
+
+it('replays a fixture observation for a local admin and refuses the unlicensed cookie',async()=>{
+ vi.stubEnv('INDUSTRY_E2E_FIXTURES','1');vi.stubEnv('NODE_ENV','test');
+ for(const key of ['VERCEL','NEXT_PUBLIC_SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY'])vi.stubEnv(key,'');
+ const jar=(value:string)=>({get:()=>({value})});
+ const replay=req('view=replay&code=801080.SI&metric=revenue_cum&duration=YTD&period_end=2025-12-31');
+ mocks.cookies.mockResolvedValue(jar('unlicensed'));
+ expect((await admin(replay)).status).toBe(403);
+ mocks.cookies.mockResolvedValue(jar(''));
+ const response=await admin(replay);
+ expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store');
+ const payload=await response.json();
+ expect(payload.match).toBe(true);expect(payload.replayed_text).toBe(payload.observation.value_text);
+ // Next can serve page and route modules in different workers.
+ vi.resetModules();
+ const {vendorPageDeps}=await import('./page-deps');
+ const page=await vendorPageDeps();
+ expect((await page.db.activeRun('financials'))?.run_id).toEqual(payload.run.run_id);
+ expect(mocks.supabase).not.toHaveBeenCalled();
 });

@@ -35,34 +35,6 @@ const render=async(search:Record<string,string>={})=>renderToStaticMarkup(await 
 beforeEach(()=>{state.locale='en';state.view={state:'empty',kind:'aggregate',datasetKey:'scheme:sw2021:2021',preview:false,freshness:'missing',nodes:[node]};});
 
 describe('base industry navigation without aggregate publication',()=>{
-  it.each([1,2,3])('exposes classification and constituent links at SW level %s without an active run',async level=>{
-    if(state.view?.state==='empty')state.view.nodes=[{...node,level}];
-    const html=await render({scheme:'sw2021',level:String(level)});
-    expect(html).toContain('href="/intel/industries/sw2021/801120.SI"');
-    expect(html).toContain('href="/intel/industries/sw2021/801120.SI/constituents"');
-    expect(html).toContain('食品饮料');
-    expect(html).toContain('data-state="empty"');
-    expect(html).not.toContain('data-state="currentOnly"');
-    expect(html).not.toContain('judgments.title');
-  });
-  it('labels an internal no-run preview without claiming a public licence',async()=>{
-    if(state.view?.state==='empty')state.view.preview=true;
-    const html=await render({scheme:'sw2021'});
-    expect(html).toContain('data-state="adminPreview"');
-    expect(html).toContain('href="/intel/industries/sw2021/801120.SI"');
-  });
-  it('does not invent rows when classifications have not loaded',async()=>{
-    if(state.view?.state==='empty')state.view.nodes=[];
-    const html=await render({scheme:'sw2021'});
-    expect(html).not.toContain('<tbody>');
-    expect(html).toContain('data-state="empty"');
-  });
-  it('keeps unlicensed SW hidden and provides the public SIC switch',async()=>{
-    state.view={state:'unlicensed',datasetKey:'scheme:sw2021:2021'};
-    const html=await render({scheme:'sw2021'});
-    expect(html).not.toContain('801120.SI');
-    expect(html).toContain('href="/intel/industries?scheme=sic"');
-  });
   it('preserves SIC current-only navigation and observed counts',async()=>{
     state.view={state:'ok',kind:'navigation',datasetKey:'scheme:sic:sec-current',preview:false,freshness:'fresh',nodes:[{...node,code:'3674',members:62}]};
     const html=await render({scheme:'sic'});
@@ -72,7 +44,7 @@ describe('base industry navigation without aggregate publication',()=>{
   });
 });
 
-it.each(['sw2021','sic'])('constituents breadcrumb preserves %s',async scheme=>{
+it.each(['sic'])('constituents breadcrumb preserves %s',async scheme=>{
  state.view=null;
  const html=renderToStaticMarkup(await ConstituentsPage({params:Promise.resolve({scheme,code:scheme==='sic'?'3674':'801120.SI'}),searchParams:Promise.resolve({})}));
  expect(html).toContain(`href="/intel/industries?scheme=${scheme}"`);

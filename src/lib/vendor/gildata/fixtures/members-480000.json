@@ -1,0 +1,6 @@
+{
+ "synthetic": true,
+ "note": "Invented bank constituent for the offline industry page fixture.",
+ "industry": "银行",
+ "response_text": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"code\\\":0,\\\"results\\\":[{\\\"api_name\\\":\\\"行业成分股\\\",\\\"table_markdown\\\":\\\"|股票名称|股票代码|行业名称|行业级别|行业类别|\\\\n|----------|----------|----------|----------|----------\\\\n|样本银行甲|000207|银行|一级行业|申万行业分类|\\\"}]}\"}],\"isError\":false}}"
+}

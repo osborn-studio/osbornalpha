@@ -142,6 +142,25 @@
     "notPublished": {
       "title": "尚未发布",
       "body": "自算估值要等口径核对完成才计算与发布。在此之前不显示任何自算估值，也不用其他来源的值顶替。分位未启用。"
+    },
+    "withheldCn": {
+      "title": "中国行业数据授权待确认",
+      "body": "这部分数据来自商业数据服务，展示条款确认前不对外显示任何数字、名单或图表。美股行业（SIC，SEC 公开数据）可以正常查看。"
+    },
+    "adminPreviewVendor": {
+      "title": "仅管理员可见 · 供应商数据尚未获准对外展示",
+      "body": "数据集“{dataset}”的许可状态是“内部”。只有管理员看到这些数字；其他已登录用户看到“数据授权待确认”，并被引到 SIC 方案。公开前，须由 owner 在许可表登记合同条款。"
+    },
+    "noStageMethod": {
+      "title": "尚未发布阶段判断方法",
+      "body": "只列事实，不分组。"
+    },
+    "notServed": {
+      "title": "未服务",
+      "body": "不显示任何估值，也不用其他来源的值顶替。"
+    },
+    "notYetAvailable": {
+      "title": "尚不可用"
     }
   },
   "missing": {
@@ -151,7 +170,11 @@
     "financial_excluded": "方法排除：金融业不算毛利率",
     "unresolved_over_limit": "未解析超限",
     "manifest_mismatch": "清单自检失败",
-    "absent": "期望网格缺行"
+    "absent": "期望网格缺行",
+    "not_in_run": "本次运行未包含",
+    "vendor_not_provided": "供应商未提供",
+    "no_prior_period": "无对比期",
+    "invalid_denominator": "分母无效"
   },
   "roles": {
     "included": "计入",
@@ -306,7 +329,9 @@
       "aggregate": "聚合数字",
       "valuation": "估值数字",
       "fact": "披露事实",
-      "membership": "成分行"
+      "membership": "成分行",
+      "vendor": "供应商观测",
+      "derived": "本站推算"
     },
     "sections": {
       "value": "值与方法",
@@ -415,5 +440,152 @@
     "revenue_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y|，同一可比集合",
     "net_income_yoy": "(Σ_t − Σ_t−1y) / |Σ_t−1y|，同一可比集合",
     "member_count": "n_members（另给 n_unresolved）"
+  },
+  "origin": {
+    "vendor": "供应商口径",
+    "derived": "本站推算"
+  },
+  "cnDatasets": {
+    "financials": "恒生聚源 · 行业财务（供应商口径）",
+    "memberships": "申万 2021 分类与成分"
+  },
+  "cnBasis": {
+    "annual": "年度",
+    "quarter": "季末（累计口径）",
+    "single": "单季"
+  },
+  "cnMetrics": {
+    "member_count": "成分",
+    "revenue_cum": "营业收入（累计）",
+    "revenue_ttm": "营业收入（TTM）",
+    "net_income_parent_cum": "归母净利（累计）",
+    "net_income_parent_ttm": "归母净利（TTM）",
+    "net_income_parent_yoy": "归母净利同比",
+    "net_assets": "净资产",
+    "roe_avg": "ROE（平均）",
+    "roe_ttm": "ROE（TTM）",
+    "gross_margin": "毛利率",
+    "gross_margin_ttm": "毛利率（TTM）",
+    "ocf_to_revenue": "经营现金净流量 / 营业收入",
+    "revenue_yoy": "营收同比"
+  },
+  "cnList": {
+    "scope": "申万一级 · {n} 个行业 · {basis}。",
+    "detailScope": "申万 2021 一级行业。中文名来自分类来源；英文名取自仓库里人工审过的对照表，不做运行时机器翻译。",
+    "membersScope": "成分归属是事实，但历史只从首次观察日起。",
+    "preview": "内部预览",
+    "withheld": "受限",
+    "run": "供应商运行",
+    "generation": "第 {n} 代",
+    "activated": "激活",
+    "reconstruction": "供应商没有公布聚合方法和成分名单，所以历史值不是当时可见的数字。每格的可得时刻是本次运行的激活时刻，不回溯到期间。",
+    "source": "恒生聚源 Gildata · 数据地图（内部，未公开署名）",
+    "memberships": "成分",
+    "financials": "财务",
+    "valuation": "估值",
+    "missing": "缺失",
+    "positive": "正",
+    "negative": "负",
+    "grid": "网格",
+    "stages": "阶段",
+    "display": "显示",
+    "judgments": "判断在哪里",
+    "judgmentBody": "该范围下没有已登记的判断。事实照常显示。",
+    "caption": "铜色 = 正值，灰色加细框 = 负值；符号始终印出，深浅只表示幅度，不表示好坏，也不是涨跌色。点击格 → 来源抽屉；点击行名 → 行业详情。",
+    "empty": "中国行业数据还没有完成首次同步，所以没有可显示的数值。首次运行激活后这里出现网格。",
+    "emptyTitle": "尚无数据",
+    "period": "期间",
+    "industryCount": "{n} 个行业"
+  },
+  "cnDrawer": {
+    "industry": "行业",
+    "metric": "指标",
+    "period": "期间",
+    "value": "值",
+    "window": "跨度",
+    "publisher": "发布机构",
+    "gildata": "恒生聚源 Gildata",
+    "product": "产品",
+    "interface": "接口",
+    "dataset": "数据集 / 字段",
+    "templateNote": "供应商未提供；改记查询模板",
+    "templateUnavailable": "供应商未提供；此观测没有记录查询模板",
+    "locator": "行定位",
+    "blockRow": "结果块 {block} · 第 {row} 行",
+    "sha": "响应 SHA-256",
+    "url": "网址",
+    "noUrl": "无公开网址",
+    "asOf": "供应商数据截至",
+    "fetched": "取数时间",
+    "activated": "可得时间（激活）",
+    "parser": "解析器",
+    "mapping": "映射版本",
+    "method": "方法",
+    "codeVersion": "代码版本",
+    "aggregation": "聚合方法",
+    "notPublished": "供应商未公布",
+    "status": "状态",
+    "internal": "内部（仅管理员）",
+    "attribution": "署名",
+    "notRecorded": "尚未记录",
+    "note": "说明",
+    "terms": "个人账户条款不允许向第三方提供数据。",
+    "formula": "公式",
+    "formulaVersion": "公式版本",
+    "rule": "规则",
+    "missingRule": "两期均有值且上年同期值为正时计算。缺少同期时标记为缺少上年同期，缺少输入时沿用缺失原因，分母为零或负数时标记为分母无效。本次运行中没有对应记录的数值标记为“本次运行未包含”。",
+    "inputs": "输入",
+    "setChanged": "两期成员数不同，成员集合已变化。",
+    "inputsNote": "点击任一输入可打开该条供应商观测的来源。许可跟随输入（内部）。",
+    "sourceRow": "来源行",
+    "snapshot": "快照取数时间",
+    "entryDate": "供应商纳入日期",
+    "memberSince": "何时纳入",
+    "datingUnavailable": "暂不可用",
+    "thisRun": "本次运行",
+    "replay": "重放（原始响应）",
+    "replayNote": "重放只读存档的原始响应并重新解析，不再调用供应商。",
+    "noReplay": "这条观测没有可重放的数值。",
+    "reproduced": "已复现",
+    "notReproduced": "未复现",
+    "noParsedText": "未解析到数值",
+    "replayFailed": "无法重放本次运行的观测。",
+    "checking": "正在重放存档",
+    "copyFailed": "未能复制",
+    "kindMembership": "行业成员",
+    "datamap": "数据地图",
+    "mobileReplay": "重放（原始）"
+  },
+  "cnDetail": {
+    "latest": "最新值",
+    "latestNote": "每个数字点开来源抽屉；营收同比为本站由供应商累计值推算。",
+    "series": "序列",
+    "cagr": "三年复合增长率",
+    "memberSet": "成分口径",
+    "availableAt": "可得时刻",
+    "changed": "成分 {previous} → {current}，口径有变",
+    "chartCaption": "断开处是缺失，不插值。虚线是 0。",
+    "unrecorded": "尚未记录",
+    "valuation": "估值与分位",
+    "valuationBody": "这个行业暂不提供估值。不显示任何估值，也不用其他来源的值顶替。",
+    "prosperity": "景气分项",
+    "prosperityBody": "这个行业暂不提供景气分项和历史分位。",
+    "judgments": "判断",
+    "noJudgment": "该行业暂无判断。该范围下没有已登记的判断方法。事实照常显示。",
+    "preview": "成分预览",
+    "snapshot": "{total} 家在册 · 快照 {date}",
+    "allMembers": "全部成分",
+    "previewNote": "供应商不返回权重，所以不能按权重取前十；这里按代码顺序列前 5 家。"
+  },
+  "cnConstituents": {
+    "weight": "权重",
+    "weightMissing": "供应商未提供",
+    "currentOnly": "供应商只返回当前成分。暂不提供纳入和剔除日期。快照抓取于 {date}。",
+    "rowSource": "{company} · 成分快照来源",
+    "snapshotSource": "恒生聚源 · 成分快照 ▸",
+    "rowCount": "{total} 家在册 · 第 {from}–{to} 行",
+    "pages": "成分列表分页",
+    "noRows": "本次快照未列出该行业成分。",
+    "emptyBody": "成分同步尚未完成首次运行。完成后这里列出成分；现在可以先看行业数值。"
   }
 }

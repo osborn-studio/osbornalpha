@@ -5,7 +5,29 @@
 import type {FactCellView,MembershipView,NodeView,PublicCell,PublicValuation,ReplayDiff,RunHeader} from '@/lib/industry/read';
 import type {AggregateManifest,ManifestCell,Scheme} from '@/lib/industry/types-us';
 
-export type DrawerPayload=
+import type {RunHeader as VendorRunHeader,VendorCell,ConstituentRow} from '@/lib/industry/vendor/page-read';
+
+export type VendorDrawerPayload =
+ | {kind:'vendor_observation';nodeName:string;header:VendorRunHeader;cell:VendorCell}
+ | {kind:'vendor_derived';nodeName:string;header:VendorRunHeader;cell:VendorCell;derived:NonNullable<VendorCell['derived']>}
+ | {kind:'vendor_membership';nodeName:string;header:VendorRunHeader;row:ConstituentRow};
+
+export function vendorCellPayload(nodeName:string,cell:VendorCell,header:VendorRunHeader):VendorDrawerPayload {
+ return cell.derived ? {kind:'vendor_derived',nodeName,cell,header,derived:cell.derived} : {kind:'vendor_observation',nodeName,cell,header};
+}
+export function vendorMembershipPayload(nodeName:string,row:ConstituentRow,header:VendorRunHeader):VendorDrawerPayload {
+ return {kind:'vendor_membership',nodeName,row,header};
+}
+export function vendorReplayUrl(cell:VendorCell):string {
+ const params=new URLSearchParams({view:'replay',code:cell.code,metric:cell.metric,duration:cell.duration,period_end:cell.periodEnd});
+ return `/api/admin/industries/vendor?${params}`;
+}
+export function readReplayResult(data:unknown,runId:string) {
+ if(!isObj(data)||!isObj(data.run)||data.run.run_id!==runId||typeof data.match!=='boolean')return null;
+ if(data.replayed_text!==null&&typeof data.replayed_text!=='string')return null;
+ return {match:data.match,text:data.replayed_text};
+}
+export type DrawerPayload=VendorDrawerPayload
  |{kind:'aggregate';scheme:Scheme;code:string;nodeName:string;cell:PublicCell;header:RunHeader;preview:boolean}
  |{kind:'valuation';scheme:Scheme;code:string;nodeName:string;runId:string;methodVersion?:string;cell:PublicValuation;preview:boolean}
  |{kind:'fact';issuerName:string;ticker:string|null;fact:FactCellView}
