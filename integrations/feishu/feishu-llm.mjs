@@ -101,9 +101,9 @@ class ModelFailure extends Error {
   }
 }
 
-async function readCompletion(response) {
+async function readCompletion(response,signal) {
   if (!response.ok) {
-    await response.body?.cancel().catch(()=>{});
+    void response.body?.cancel().catch(()=>{});
     throw new ModelFailure('MODEL_HTTP',response.status);
   }
   const reader = response.body?.getReader();
@@ -111,15 +111,23 @@ async function readCompletion(response) {
   const decoder = new TextDecoder();
   let size = 0;
   let body = '';
-  for (;;) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > 256_000) {
-      await reader.cancel().catch(()=>{});
-      throw new ModelFailure('MODEL_OUTPUT');
+  const stopReading = () => { void reader.cancel().catch(()=>{}); };
+  signal.addEventListener('abort',stopReading,{once:true});
+  try {
+    for (;;) {
+      const {done,value} = await reader.read();
+      signal.throwIfAborted();
+      if (done) break;
+      size += value.byteLength;
+      if (size > 256_000) {
+        stopReading();
+        throw new ModelFailure('MODEL_OUTPUT');
+      }
+      body += decoder.decode(value,{stream:true});
     }
-    body += decoder.decode(value, {stream:true});
+  } finally {
+    signal.removeEventListener('abort',stopReading);
+    reader.releaseLock();
   }
   let choice;
   try { choice = JSON.parse(body + decoder.decode())?.choices?.[0]; }
@@ -271,22 +279,38 @@ async function infer(primary, backup, fetchImpl, localRequest, makeCloudRequest,
 }
 
 async function requestCompletion({url,bailian,model,timeoutMs,headers},fetchImpl,options) {
+  const expiresAt = performance.now() + timeoutMs;
   const signal = AbortSignal.timeout(timeoutMs);
+  let onTimeout;
+  const deadline = new Promise((_,reject) => {
+    onTimeout = () => reject(new ModelFailure('MODEL_TIMEOUT'));
+    signal.addEventListener('abort',onTimeout,{once:true});
+  });
   try {
-    const response = await fetchImpl(url.href, {
+    const completion = Promise.resolve(fetchImpl(url.href, {
       method:'POST', headers, signal, redirect:'error',
       body:JSON.stringify({model,stream:false,
         ...(bailian ? {enable_thinking:false} : {reasoning_effort:'none'}),
         ...options,
       }),
+    })).then(response => {
+      if (signal.aborted) {
+        void response.body?.cancel().catch(() => {});
+        signal.throwIfAborted();
+      }
+      return readCompletion(response,signal);
     });
-    const answer = await readCompletion(response);
-    signal.throwIfAborted();
+    // A transport or body stream can finish after cancellation. Only this race's winner reaches the parser.
+    const answer = await Promise.race([completion,deadline]);
+    // The event loop may deliver a buffered response before servicing an already-due timer.
+    if (performance.now() >= expiresAt) throw new ModelFailure('MODEL_TIMEOUT');
     return answer;
   } catch (error) {
     if (signal.aborted) throw new ModelFailure('MODEL_TIMEOUT');
     if (error instanceof ModelFailure) throw error;
     throw new ModelFailure('MODEL_TRANSPORT');
+  } finally {
+    signal.removeEventListener('abort',onTimeout);
   }
 }
 

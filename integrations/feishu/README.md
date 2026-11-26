@@ -16,11 +16,11 @@ PM 查询分析师名单后，可以接着问「第二位说准的比例是多�
 FEISHU_LLM_FALLBACK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 FEISHU_LLM_FALLBACK_MODEL=qwen-plus
 FEISHU_LLM_FALLBACK_API_KEY=
-FEISHU_LLM_FALLBACK_AFTER_MS=12000
+FEISHU_LLM_FALLBACK_AFTER_MS=3000
 FEISHU_LLM_FALLBACK_TIMEOUT_MS=10000
 ```
 
-重启本机连接器后生效。本地服务无法连接时立即切换；按以上配置，符合切换条件的请求最多先等本机 12 秒，再给云端最多 10 秒，两次合计仍受 `FEISHU_LLM_TIMEOUT_MS` 限制。云端接收本轮问题或建议正文以及必要的结构化提示，可能产生百炼用量。聊天历史、报表正文和既有提案明细保存在本机。正式报表取数、身份核对、PM 确认和登记仍由连接器执行。GEPA 评测只使用本地模型。
+重启本机连接器后生效。本地服务无法连接时立即切换。按以上配置，可转云端的单次模型调用在 3 秒内未收到完整本地结果时，会取消本地请求并转给百炼。迟到的结果会被丢弃。云端最多等待 10 秒，两次合计仍受 `FEISHU_LLM_TIMEOUT_MS` 限制。云端接收本轮问题或建议正文以及必要的结构化提示，可能产生百炼用量。聊天历史、报表正文和既有提案明细保存在本机。正式报表取数、身份核对、PM 确认和登记仍由连接器执行。GEPA 评测只使用本地模型。
 
 审批人和提案作者可以直接回复已发出的摘要提问，例如「这个是每股成交价吗？」。机器人按该条摘要的标的、动作、模拟成交参数和记录状态回答。提问和继续追问不会触发登记。
 

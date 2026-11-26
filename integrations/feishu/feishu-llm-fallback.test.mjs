@@ -85,6 +85,23 @@ test('a slow primary yields to one cloud chat request within the configured tota
   }
 });
 
+test('an unfinished response body is cancelled when its model attempt expires',async()=>{
+  const settings={...env,FEISHU_LLM_FALLBACK_AFTER_MS:'60'};
+  let cancelled=false;
+  const local=new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"choices":')); },
+    cancel() { cancelled=true; },
+  }));
+  const mock=modelStub(()=>local,()=>completion({reply:'收到。'}));
+  // A real socket keeps the event loop alive while the response body is open.
+  const keepAlive=setTimeout(()=>{},2000);
+  try {
+    assert.equal(await createFeishuChatResponder(settings,mock)({text:'在吗？'}),'收到。');
+    assert.equal(cancelled,true);
+    assert.deepEqual(mock.calls.map(c=>c.url),[localBase+'/chat/completions',cloudBase+'/chat/completions']);
+  } finally { clearTimeout(keepAlive); }
+});
+
 test('provider output and model authorization errors fail closed',async()=>{
   for (const [factory,input,unsafe] of [
     [createFeishuChatResponder,{text:'了解了',isApprover:true},'我已经为你登记了这条建议。'],
@@ -275,4 +292,86 @@ test('formal workflow executes a scoped read and registers a cloud-extracted pro
   assert.doesNotMatch(JSON.stringify(diagnostics),/怎么|00700|fixture|留着|听到|主意/);
   assert.deepEqual(model.calls.map(c=>[c.body.model,c.input.text]),
     [chatText,readText,selfOnly,proposalText].flatMap(text=>[['local-fixture',text],['qwen-flash',text]]));
+});
+
+test('a late local completion cannot delay either receipt or duplicate a cloud-extracted fill',async t=>{
+  const directory=mkdtempSync(join(tmpdir(),'feishu-late-local-'));
+  const chatId='oc_receipts',author='ou_author',pm='ou_pm';
+  const formalOrigin='https://formal-fixture.invalid';
+  const thresholdMs=80;
+  const releaseLocal=Promise.withResolvers();
+  const localStarted=Promise.withResolvers();
+  const writeStarted=Promise.withResolvers();
+  const releaseWrite=Promise.withResolvers();
+  // Release even a transport that ignores AbortSignal so a broken deadline fails without hanging the suite.
+  const watchdog=setTimeout(releaseLocal.resolve,thresholdMs+1000);
+  let localReturned=false,flow;
+  const messages=[],writes=[];
+  const model=modelStub(async()=>{
+    localStarted.resolve();
+    await releaseLocal.promise;
+    localReturned=true;
+    return completion({intent:'other',fields:{}});
+  },()=>completion({intent:'proposal',fields:{
+    action:{value:'buy',evidence:'买入'},ticker:{value:'NVDA',evidence:'NVDA'},
+    quantity:{value:2,evidence:'2 股'},price:{value:150,evidence:'150 美元'},
+    currency:{value:'USD',evidence:'美元'},executionMode:{value:'simulate',evidence:'模拟买入'},
+  }}));
+  t.mock.method(globalThis,'fetch',async(url,options)=>{
+    if (String(url)!==formalOrigin+'/api/integrations/feishu/simulation') return model.fetchImpl(url,options);
+    writes.push(JSON.parse(options.body));
+    writeStarted.resolve();
+    await releaseWrite.promise;
+    return Response.json({recommendationId:'91000000-0000-4000-8000-00000000000c',
+      decisionId:'91000000-0000-4000-8000-00000000000d',tradeId:'91000000-0000-4000-8000-00000000000e'});
+  });
+  t.after(async()=>{
+    clearTimeout(watchdog);
+    releaseLocal.resolve();releaseWrite.resolve();
+    try { await flow?.close(); } finally { rmSync(directory,{recursive:true,force:true}); }
+  });
+  writeFileSync(join(directory,'feishu-bindings.json'),JSON.stringify({chatId,approverIds:[pm],
+    analystBySender:{[author]:'analyst-a'},analystNamesByRole:{'analyst-a':'示例分析师'},
+    simulationAccount:{id:'91000000-0000-4000-8000-00000000000a',confirmed:true}}));
+  flow=createFormalFeishuWorkflow({wake:()=>{},searchSecurity:async()=>[],
+    env:{...env,FEISHU_DATA_DIR:directory,FEISHU_LLM_TIMEOUT_MS:'35000',FEISHU_LLM_FALLBACK_AFTER_MS:String(thresholdMs),
+      FEISHU_SIMULATION_ORIGIN:formalOrigin,FEISHU_SIMULATION_INGEST_TOKEN:'fixture-ingest-key'},
+    sendMessage:async({text})=>{messages.push(text);return {messageId:'om_sent_'+messages.length};},
+  });
+  const submission={eventId:'ev_s',messageId:'om_s',chatId,senderId:author,createdAt:receivedAt,
+    directedToBot:true,text:'我建议模拟买入 NVDA 2 股，每股模拟成交价 150 美元。'};
+  assert.equal(flow.receive(submission).duplicate,false);
+  const interpreting=flow.drainPrimary();
+  await localStarted.promise;
+  assert.equal(flow.receive(submission).duplicate,true);
+  await flow.drainReceipts();
+  assert.deepEqual(messages,['收到，正在处理这条消息。']);
+  assert.equal(model.calls.length,1);
+  await interpreting;
+  await flow.drainProposalReplies();
+  assert.equal(localReturned,false);
+  assert.equal(model.calls[0].options.signal.aborted,true);
+  assert.match(messages.at(-1),/待确认提案/);
+  const [pending]=flow.view().proposals;
+  assert.equal(writes.length,0);
+
+  const approval={...submission,eventId:'ev_a',messageId:'om_a',senderId:pm,
+    parentId:pending.summaryId,directedToBot:false,text:'同意'};
+  assert.equal(flow.receive(approval).duplicate,false);
+  const writing=flow.drainFormal();
+  await writeStarted.promise;
+  assert.equal(flow.receive(approval).duplicate,true);
+  await flow.drainReceipts();
+  assert.match(messages.at(-1),/已收到你的确认/);
+  assert.equal(flow.view().proposals[0].formalStatus,'pending_formal_sync');
+  releaseLocal.resolve();releaseWrite.resolve();
+  await writing;
+  await flow.drain();
+  assert.equal(localReturned,true);
+  assert.deepEqual(model.calls.map(call=>call.url),[localBase+'/chat/completions',cloudBase+'/chat/completions']);
+  assert.deepEqual(writes.map(write=>write.sourceId),[pending.id]);
+  assert.equal(writes[0].execution.quantity,2);
+  assert.deepEqual(flow.view().proposals.map(p=>p.formalStatus),['registered']);
+  assert.equal(messages.length,4); // Input receipt, summary, confirmation receipt, formal result.
+  assert.match(messages.at(-1),/模拟成交已登记/);
 });

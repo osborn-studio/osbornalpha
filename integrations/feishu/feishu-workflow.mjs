@@ -199,6 +199,8 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
   const moveToChat = db.prepare("UPDATE feishu_workflow_events SET kind='chat' WHERE seq=?");
   const finishEvent = db.prepare('UPDATE feishu_workflow_events SET status=?,text=\'\' WHERE seq=?');
   const inputById = db.prepare('SELECT * FROM feishu_workflow_events WHERE event_id=?');
+  const approvalsForSummary = db.prepare(`SELECT * FROM feishu_workflow_events
+    WHERE chat_id=? AND parent_id=? AND kind='approval' AND status='pending' ORDER BY seq`);
   const earlierReply = db.prepare(`SELECT 1 FROM feishu_workflow_events WHERE chat_id=? AND parent_id=? AND
     seq<? AND status='pending' AND kind IN ('proposal_followup','assistant_command','approval') LIMIT 1`);
   const nextFormalWrite = db.prepare(`SELECT * FROM feishu_workflow_proposals WHERE formal_status='pending_formal_sync'
@@ -361,13 +363,7 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       if (result.changes && wake && (proposalKinds.has(kind) || kind === 'approval')) {
         const stored = inputById.get(event.eventId);
         if (kind === 'approval') {
-          const proposal = proposalBySummary.get(event.chatId,anchor);
-          if (proposal && !(proposal.demo_only && current.demoMembershipUnavailable) &&
-              !earlierReply.get(event.chatId,anchor,stored.seq)) {
-            finishEvent.run(handleEvent(stored,null),stored.seq);
-          } else if (proposal && !proposal.approval && proposal.sender_id !== event.senderId) {
-            notice(stored,'input_receipt','收到确认请求，正在核对这条摘要。');
-          }
+          processKnownApproval(stored,current);
         } else {
           // Intent is not known until inference. A receipt must never claim a proposal or trade exists.
           notice(stored,'input_receipt',kind === 'supplement' ? '收到补充，正在核对。' : '收到，正在处理这条消息。');
@@ -375,6 +371,18 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
       }
       return {accepted:true, duplicate:result.changes === 0};
     });
+  }
+
+  function processKnownApproval(event,current) {
+    const proposal = proposalBySummary.get(event.chat_id,event.parent_id);
+    if (!proposal) return;
+    if (!(proposal.demo_only && current.demoMembershipUnavailable) &&
+        !earlierReply.get(event.chat_id,event.parent_id,event.seq)) {
+      finishEvent.run(handleEvent(event,null),event.seq);
+    } else if (current.chatId===event.chat_id && isApprover(current,event.sender_id) &&
+        !proposal.approval && proposal.sender_id!==event.sender_id && roleFor(current,proposal.sender_id)===proposal.role) {
+      notice(event,'input_receipt','收到确认请求，正在核对这条摘要。');
+    }
   }
 
   function notice(event, kind, text, proposalId = null) {
@@ -1128,8 +1136,14 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
     transaction(() => {
       db.prepare(`UPDATE feishu_workflow_messages SET message_id=?,status='sent',error=NULL,
         chat_at=CASE WHEN chat_source_id=id THEN ? END WHERE seq=?`).run(result.messageId ?? null,now(),message.seq);
-      if (message.kind === 'summary') db.prepare('UPDATE feishu_workflow_proposals SET summary_id=?,reminder_due_at=? WHERE id=?')
-        .run(result.messageId, classifyAssistantCommand && reminderAfterMs > 0 ? now()+reminderAfterMs : null,message.proposal_id);
+      if (message.kind === 'summary') {
+        db.prepare('UPDATE feishu_workflow_proposals SET summary_id=?,reminder_due_at=? WHERE id=?')
+          .run(result.messageId, classifyAssistantCommand && reminderAfterMs > 0 ? now()+reminderAfterMs : null,message.proposal_id);
+        // Feishu can show the summary and deliver a PM reply before returning its outgoing message ID.
+        if (wake) for (const event of approvalsForSummary.all(message.chat_id,result.messageId)) {
+          processKnownApproval(event,settings());
+        }
+      }
     });
     observeSafely(()=>{
       const observation=readObservations.get(message.id);
@@ -1176,6 +1190,7 @@ export function openFeishuWorkflow(db, transaction, {register, sendMessage, sync
         const interpretation = await getInterpretation(event,trace);
         let outcome;
         transaction(() => {
+          if (event.kind==='approval' && inputById.get(event.event_id)?.status!=='pending') return;
           if (event.kind === 'supplement' && !draftForAnchor(event.chat_id,event.parent_id) &&
               pendingClarification.get(event.chat_id,event.sender_id)) return;
           if (event.kind !== 'approval' || proposalBySummary.get(event.chat_id,event.parent_id)) {
