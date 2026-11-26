@@ -19,7 +19,7 @@ export const criticalSuites = [
 ;
 criticalSuites.push('src/lib/evals/f3-hook.integration.test.ts');
 // INDUSTRY:BEGIN — appended without touching the list above (parallel plans edit that line)
-criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts', 'src/lib/industry/csi300.integration.test.ts', 'src/lib/industry/judgments-bridge.integration.test.ts');
+criticalSuites.push('src/lib/industry/industry.integration.test.ts', 'src/lib/industry/functions.integration.test.ts', 'src/lib/industry/sync.integration.test.ts', 'src/lib/industry/index-memberships.integration.test.ts', 'src/lib/industry/judgments-bridge.integration.test.ts');
 // INDUSTRY:END
 // INDUSTRY-VENDOR ↓
 criticalSuites.push('src/lib/industry/vendor/vendor.integration.test.ts');

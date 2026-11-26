@@ -240,7 +240,7 @@ EDGAR 夹具裁剪到 §3 概念标签与 `end >= 2019-01-01` 的条目，顶层
 
 ### 8.8 运行同步与物化
 
-CN 事实范围按发行人取并集：已挂接发行人的研究队列（`cohort`）、沪深 300 有效成员（`universe:csi300`），以及开启 `FACTS_CN_INDUSTRY_UNIVERSE=1` 后的行业范围（`universe:a_stock`、`universe:sw2021`）。一个发行人可以有多个来源，抓取使用其 A 股代码。
+CN 事实范围按发行人取并集：已挂接发行人的研究队列（`cohort`）、沪深 300 与科创 50 的有效成员（`universe:csi300`、`universe:star50`），以及开启 `FACTS_CN_INDUSTRY_UNIVERSE=1` 后的行业范围（`universe:a_stock`、`universe:sw2021`）。一个发行人可以有多个来源，抓取使用其 A 股代码。
 
 环境：`NEXT_PUBLIC_SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`；`EDGAR_USER_AGENT`（SEC 要求带联系方式；缺省 `DEFAULT_USER_AGENT`，生产务必设置真实值）；`TUSHARE_TOKEN`（CN 必需；Vercel 必须配置，否则 CN cron 每次失败）；`CRON_SECRET`（cron；缺失 → 503 `cron_unavailable`）；`FACTS_CN_ENABLED`（缺省开启 CN；设为 `0` 关闭 CN `--apply` 与 CN cron 的开关）；`VERCEL_GIT_COMMIT_SHA`（Vercel 自动注入；cron 路由只认它，缺失 → 503 `code_version_unavailable`；脚本回退到 `git rev-parse HEAD`，脏树加 `-dirty`；取不到则拒绝 `--apply`）。
 
@@ -536,13 +536,20 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
 - 当时的 CN 事实范围 = `research_entity_keys.in_scope` 且已挂接发行人（`issuer_id`），因此还要先跑 `link-research-entities.ts --apply`。在这两步之前，CN cron 运行只会空转。
 - Vercel `TUSHARE_TOKEN`：**已存在**（production，56 字符）；本会话未设置、未改动。
 
-### 10.6a A 股首批范围：沪深 300（#336）
+### 10.6a A 股首批范围：沪深 300 与科创 50（#336）
 
-0. 按 10.2 对 `20261215090000_universe_csi300.sql` 做 `begin … rollback` 演练。通过后在同一事务中应用迁移并登记历史行，再部署含本次改动的提交：
+0. 按 10.2 核对迁移历史，确定本次要执行的文件：
+
+   - 若尚未应用 `20261215090000_universe_csi300.sql`，先执行该文件，再执行 `20261216090000_index_universe_memberships.sql`。
+   - 若已应用 `20261215090000_universe_csi300.sql`，只执行 `20261216090000_index_universe_memberships.sql`。
+
+   先按上述顺序做 `begin … rollback` 演练。通过后，在同一事务中应用所选迁移并逐个登记历史行，再部署含本次改动的提交：
 
    ```bash
    vercel deploy --prod --yes --env VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD)
    ```
+
+   部署 #336 合并后、本次变更前的 `main` 时，cron 运行 `memberships-csi300` 作业；部署本次变更后，cron 路径为 `/api/cron/industry-sync?job=memberships-index`。
 
 1. 装载发行人和 A 股证券。先预览，再写入；逐行写入耗时较长，让进程跑完，不设超时（见 10.4）。
 
@@ -551,11 +558,11 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
    node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job load-a-share --apply
    ```
 
-2. 预览沪深 300 最新成分快照，预期 `fetched=300`、`unknown=0`。核对日期和计数后写入，后续由每月 3 日 03:00 UTC 的 cron 更新。
+2. 预览两个指数各自的最新成分快照，预期 `csi300.fetched=300`、`star50.fetched=50`，两者均为 `*.unknown=0`。核对日期和计数后写入，后续由每月 3 日 03:00 UTC 的 cron 更新。
 
    ```bash
-   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job memberships-csi300
-   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job memberships-csi300 --apply
+   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job memberships-index
+   node --env-file=<仓库外> --import tsx scripts/industry/sync.ts --job memberships-index --apply
    ```
 
 3. 每次 CN 定时同步先对账。手工执行下列命令可立即对账，并同步至多一家到期发行人。
@@ -568,7 +575,7 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
    select count(*) from fact_sync_scope where market='CN' and priority>0;
    ```
 
-   首批预计约 300 家；研究队列或行业范围可能带来额外发行人。核对跳过计数：成分快照回执的 `unknown` 表示证券主表缺票；若对账后范围为空，事实批次的 `empty_scope` 消息内有按原因汇总的 `skipped`。
+   两个指数的成分可能重叠，首批活跃范围预计约 300–350 家；研究队列或行业范围可能带来额外发行人。核对跳过计数：成分快照回执的 `unknown` 表示证券主表缺票；若对账后范围为空，事实批次的 `empty_scope` 消息内有按原因汇总的 `skipped`。
 
 4. 首轮同步至多五家，再由 `35 */4 * * *` 的 CN cron 接续。
 
@@ -576,13 +583,13 @@ node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market US --iss
    node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market CN --limit 5 --apply
    ```
 
-吞吐估算：每家 9 次 Tushare 请求（3 张报表 × `report_type` 1/4/5），按 400 ms 间隔预算至少 3.6 s；2026-11-25 测得抓取约 4.7 s/家。以下为容量估算，生产吞吐量尚待实测。cron 在 240 s 预算剩余不足 90 s 时停止启动下一家，预计每轮 12–20 家，每天 6 轮，300 家约需 15–25 轮（约 3–4 天）。预计先触及截止时间，保留 `vercel.json` 的 `limit=25`。需更快补录时，可在工作站运行无 cron 截止时间的命令：
+吞吐估算：每家 9 次 Tushare 请求（3 张报表 × `report_type` 1/4/5），按 400 ms 间隔预算至少 3.6 s；2026-11-25 测得抓取约 4.7 s/家。以下为容量估算，生产吞吐量尚待实测。cron 在 240 s 预算剩余不足 90 s 时停止启动下一家，预计每轮 12–20 家，每天 6 轮，按 350 家估算约需 18–30 轮（约 3–5 天）。预计先触及截止时间，保留 `vercel.json` 的 `limit=25`。需更快补录时，可在工作站运行无 cron 截止时间的命令：
 
 ```bash
 node --env-file=<仓库外> --import tsx scripts/facts/sync.ts --market CN --limit 200 --apply
 ```
 
-CN 文档同步（`document_sync_scope`，巨潮 cninfo）目前仅取研究队列；将沪深 300 纳入文档范围留待后续 PR。
+CN 文档同步（`document_sync_scope`，巨潮 cninfo）目前仅取研究队列；将这两个指数纳入文档范围留待后续 PR。
 
 ### 10.7 Vercel
 

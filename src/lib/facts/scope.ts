@@ -7,7 +7,7 @@
 //      ticker (issuer_securities row current at `today` by the landed predicate of
 //      entities/resolve.ts — a scheduled future end keeps the owner current, round-1 #22) that has
 //      a CIK; fetch_key = 10-digit CIK; priority 10.
-//  CN: in-scope cohort issuers and current owners of active CSI 300 tickers, plus the optional
+//  CN: in-scope cohort issuers and current owners of active tickers in index universes (CSI 300, STAR 50), plus the optional
 //      industry universe. Reasons are merged per issuer; a cohort row keeps its A-share fetch key.
 //  Watchlists are never a source (owner decision B).
 // scopeRowFor derives ONE issuer's row the same way for explicit --issuer / replay runs (round-1
@@ -22,7 +22,7 @@ import {isCurrentSecurity} from '../entities/resolve';
 import type {FactsDb,Market} from './types';
 
 export const US_UNIVERSES=['sp500','nasdaq_top500','us_china'] as const;
-export const CN_UNIVERSES=['csi300'] as const;
+export const CN_UNIVERSES=['csi300','star50'] as const;
 export const SCOPE_PRIORITY=10;
 const CN_TICKER=/\.(SH|SZ|BJ)$/;
 // B shares trade under A-share-looking codes but are another class (same pattern as entities/link-research.ts, not exported there).
@@ -149,6 +149,7 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
   if('reason' in c){bump(skipped,c.reason);continue;}
   desired.set(id,{issuer_id:id,reasons:['cohort'],priority:SCOPE_PRIORITY,fetch_key:fetchKey('CN',{ticker:c.ticker})});
  }
+ let status:Map<string,unknown>|undefined;
  for(const u of CN_UNIVERSES){
   const members=await selectAll(tables,'security_universe_memberships',{universe:u,is_active:true},'ticker');
   if(!members.length)continue;
@@ -157,8 +158,7 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
    const id=ownerByTicker.get(normTicker(String(m.ticker)));
    if(id)owners.add(id);else bump(skipped,`${u}_unknown_ticker`);
   }
-  const issuers=await selectAll(tables,'issuers',{},'issuer_id');
-  const status=new Map(issuers.map(i=>[String(i.issuer_id),i.status]));
+  status??=new Map((await selectAll(tables,'issuers',{},'issuer_id')).map(i=>[String(i.issuer_id),i.status]));
   for(const id of owners){
    if(!status.has(id)){bump(skipped,`${u}_unknown_issuer`);continue;}
    if(status.get(id)==='merged'){bump(skipped,`${u}_issuer_merged`);continue;}
@@ -171,7 +171,7 @@ async function desiredCn(tables:TableClient,today:string,skipped:Record<string,n
  }
  const out=[...desired.values()];
  // INDUSTRY:BEGIN — industry fact universe (industry spec §4.10, V3; owner decision E). Only with FACTS_CN_INDUSTRY_UNIVERSE=1;
- // The industry rows merge onto cohort and CSI 300. Dynamic import avoids a load-time cycle.
+ // The industry rows merge onto cohort and index universe rows. Dynamic import avoids a load-time cycle.
  if(process.env.FACTS_CN_INDUSTRY_UNIVERSE==='1'){
   const {industryCnUniverse,mergeDesired}=await import('../industry/facts-scope');
   return mergeDesired(out,await industryCnUniverse(tables,today,skipped));

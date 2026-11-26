@@ -123,19 +123,26 @@ describe('reconcileScope: CN ticker choice, skips and paging',()=>{
  const key=(c:Awaited<ReturnType<typeof seed>>,entity:string,issuer:string|null)=>c.insert('research_entity_keys',{user_id:'u',entity_id:entity,in_scope:true,issuer_id:issuer,home_market:'A'});
  const I1='55555555-5555-4555-8555-555555555555',I2='66666666-6666-4666-8666-666666666666',I3='77777777-7777-4777-8777-777777777777';
  const member=(tables:ReturnType<typeof memoryTableClient>,ticker:string,is_active=true,universe='csi300')=>tables.insert('security_universe_memberships',{ticker,universe,is_active,as_of_date:TODAY});
- it('resolves active CSI 300 tickers to issuers, merges cohort reasons and retires a departing member',async()=>{
+ it('unions the two index reasons with cohort and retires an issuer after it leaves both',async()=>{
   const tables=memoryTableClient();const {db}=recordingDb();
   for(const id of [I1,I2,I3])await tables.insert('issuers',{issuer_id:id,status:'active'});
   await sec(tables,I1,'777101.SH',true);await sec(tables,I2,'777102.SZ',false);
   await sec(tables,I2,'777103.SZ',true);await sec(tables,I3,'777104.BJ',true);
   await key(tables,'cohort-2',I2);
   await member(tables,'777101.SH');await member(tables,'777102.SZ');await member(tables,'777104.BJ',false);
+  for(const ticker of ['777101.SH','777103.SZ','777104.BJ'])await member(tables,ticker,true,'star50');
+  const select=vi.spyOn(tables,'select');
   await reconcileScope({db,tables},'CN',{today:TODAY});
   expect((await db.scopeAll('CN')).map(s=>[s.issuer_id,s.fetch_key,s.reasons,s.priority])).toEqual([
-   [I1,'777101.SH',['universe:csi300'],10],[I2,'777103.SZ',['cohort','universe:csi300'],10],
+   [I1,'777101.SH',['universe:csi300','universe:star50'],10],
+   [I2,'777103.SZ',['cohort','universe:csi300','universe:star50'],10],[I3,'777104.BJ',['universe:star50'],10],
   ]);
-  await tables.update('security_universe_memberships',{ticker:'777101.SH'},{is_active:false});
-  expect(await reconcileScope({db,tables},'CN',{today:TODAY,snapshotAt:NOW_ISO})).toMatchObject({desired:1,retired:1});
+  expect(select.mock.calls.filter(([table,,page])=>table==='issuers'&&page?.offset===0)).toHaveLength(1);
+  await tables.update('security_universe_memberships',{ticker:'777101.SH',universe:'csi300'},{is_active:false});
+  await reconcileScope({db,tables},'CN',{today:TODAY});
+  expect((await db.scopeRows('CN',[I1]))[0]).toMatchObject({priority:10,reasons:['universe:star50']});
+  await tables.update('security_universe_memberships',{ticker:'777101.SH',universe:'star50'},{is_active:false});
+  expect(await reconcileScope({db,tables},'CN',{today:TODAY,snapshotAt:NOW_ISO})).toMatchObject({desired:2,retired:1});
   expect((await db.scopeRows('CN',[I1]))[0]).toMatchObject({priority:0,reasons:[]});
  });
  it('counts CSI 300 resolution failures by reason',async()=>{
