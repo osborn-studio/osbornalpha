@@ -37,8 +37,15 @@ for(const mode of ['app','webhook']){
     const reads=[],messages=[],posts=[],unexpected=[];
     let bulletinFixture=false;
     const server=createServer((req,res)=>{
-      reads.push({method:req.method,url:new URL(req.url,'http://localhost'),authorization:req.headers.authorization});
+      const url=new URL(req.url,'http://localhost');
+      reads.push({method:req.method,url,authorization:req.headers.authorization});
       res.writeHead(200,{'content-type':'application/json'});
+      if(url.searchParams.get('sections')==='positions'){
+        const name=url.searchParams.get('analyst'),ticker=name==='analyst_a'?'ACME':'DEMO';
+        const quantity=name==='analyst_a'?3:1;
+        return res.end(JSON.stringify({text:'正式模拟账户查询（分析师 '+name+'，北京时间）\n\n分析师持仓（按成本，按币种分别计算）\n'+
+          ticker+'｜净股数 '+quantity+'｜均价 10｜持仓成本 '+10*quantity+' USD｜已实现盈亏 0 USD｜占比 100%'}));
+      }
       const emptyReport=['正式模拟账户查询（指定分析师，北京时间）','正式分析建议（共 0 条）',
         '正式建议评分\n有效建议 0 条｜暂无可判定命中的样本｜暂无已评分样本','分析师建议关联的模拟成交（共 0 条）'].join('\n\n');
       res.end(JSON.stringify({text:bulletinFixture?emptyReport:fixtureReport}));
@@ -124,6 +131,16 @@ for(const mode of ['app','webhook']){
     const published=mode==='app'?messages.at(-1).text:posts.at(-1).body.content.text;
     assert.match(published,/全组正式报告/); assert.match(published,/暂无已评分样本/);
     assert.equal((mode==='app'?messages:posts).length,2);
+    workflow.receive(mentionedReport(pmId,'仓位占比各自是多少','om_positions_group'));
+    await workflow.drain();
+    const group=mode==='app'?messages.at(-1).text:posts.at(-1).body.content.text;
+    assert.match(group,/ACME[^\n]+USD｜占比 75%\nDEMO[^\n]+USD｜占比 25%/u);
+    assert.deepEqual(reads.slice(-2).map(r=>r.url.searchParams.get('analyst')).sort(),['analystB','analyst_a']);
+    workflow.receive(mentionedReport(pmId,'后者','om_positions_followup'));
+    await workflow.drain();
+    assert.equal(reads.at(-1).url.searchParams.get('analyst'),'analystB');
+    const named=mode==='app'?messages.at(-1).text:posts.at(-1).body.content.text;
+    assert.match(named,/分析师 analystB，北京时间/u);assert.doesNotMatch(named,/ACME/u);
     assert.deepEqual(unexpected,[]);assert.deepEqual(workflow.view().proposals,[]);
   });
 }

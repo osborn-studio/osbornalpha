@@ -1,13 +1,12 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { parseRecommendationInput } from '@/lib/analyst/validate';
 import { isUuid, parseTradeInput } from '@/lib/portfolio/validate';
 import { getAdminSupabase } from '@/lib/supabase/admin';
+import {getFeishuAccountConfig, hasFeishuAccountToken, sourceKey} from '@/lib/feishu/integration-auth';
 
 export const dynamic = 'force-dynamic';
 
-const sourceKey = /^[A-Za-z0-9._:-]{1,200}$/;
-const tokenFormat = /^[A-Za-z0-9._~-]{32,256}$/;
 const requestFields = ['sourceId', 'expectedOwnerId', 'analystKey', 'approvedAt', 'recommendation', 'execution'];
 const recommendationFields = ['ticker', 'market', 'action', 'reference_price', 'confidence', 'target_price', 'stop_loss', 'horizon', 'thesis_ref', 'recommended_at', 'rationale'];
 const executionFields = ['price', 'quantity', 'fee', 'executed_at', 'note'];
@@ -35,24 +34,6 @@ function digest(value: string): Buffer {
 
 function error(status: number, code: string) {
   return NextResponse.json({ error: code }, { status });
-}
-
-function getConfig() {
-  const token = process.env.FEISHU_SIMULATION_INGEST_TOKEN ?? '';
-  const ownerId = process.env.FEISHU_SIMULATION_OWNER_ID;
-  if (!tokenFormat.test(token) || !isUuid(ownerId)) return null;
-  try {
-    const value: unknown = JSON.parse(process.env.FEISHU_SIMULATION_ANALYSTS ?? '{}');
-    if (!object(value)) return null;
-    const analysts = new Map<string, string>();
-    for (const [key, id] of Object.entries(value)) {
-      if (!sourceKey.test(key) || !isUuid(id)) return null;
-      analysts.set(key, id.toLowerCase());
-    }
-    return { token, ownerId:ownerId.toLowerCase(), analysts };
-  } catch {
-    return null;
-  }
 }
 
 function parsePayload(body: Record<string, unknown>, ownerId: string) {
@@ -111,10 +92,9 @@ interface IngestRpc {
 
 export async function POST(request: Request) {
   if (process.env.FEISHU_SIMULATION_INGEST_ENABLED !== 'true') return error(404, 'not_found');
-  const config = getConfig();
+  const config = getFeishuAccountConfig();
   if (!config) return error(503, 'integration_unavailable');
-  const token = request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9._~-]{32,256})$/)?.[1];
-  if (!token || !timingSafeEqual(digest(token), digest(config.token))) return error(401, 'unauthorized');
+  if (!hasFeishuAccountToken(request, config.token)) return error(401, 'unauthorized');
   const type = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
   if (type !== 'application/json') return error(415, 'invalid_content_type');
   let body: unknown;

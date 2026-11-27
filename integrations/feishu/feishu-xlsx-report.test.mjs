@@ -8,7 +8,7 @@ import {beijingClock, createXlsxReporter, isExportCommand, reportCard} from './f
 const hook = {mode: 'webhook', chatId: 'oc_bound', url: 'https://open.feishu.cn/open-apis/bot/v2/hook/fixture-123456'};
 const groups = [
   {label: '全组', long: 0.000042, held: 1, notional: 8729.91, unrealized: -8.5, realized: 0, valid: 3, adopted: 1, withdrawn: 0, trades: 1, hitRate: null, score: null},
-  {label: '陈利娜（lina）', long: 0.000042, held: 1, notional: 8729.91, unrealized: -8.5, realized: 0, valid: 3, adopted: 1, withdrawn: 0, trades: 1, hitRate: 0.5, score: 14.7},
+  {label: '示例分析师甲（lina）', long: 0.000042, held: 1, notional: 8729.91, unrealized: -8.5, realized: 0, valid: 3, adopted: 1, withdrawn: 0, trades: 1, hitRate: 0.5, score: 14.7},
 ];
 const ok = file => ({code: 0, result: {status: 'ok', name: '2026-11-27.xlsx', file, tradeDate: '2026-11-27', groups}});
 
@@ -50,7 +50,7 @@ test('the card carries the key figures and two links within the custom bot limit
   const text = JSON.stringify(card);
   assert.equal(card.msg_type, 'interactive');
   assert.match(card.card.body.elements[0].content, /Long 0\.0042%｜持仓 1 只｜名义 ¥8,730/u);
-  assert.match(card.card.body.elements[0].content, /陈利娜（lina）\*\*　Long 0\.0042%.*命中率 50\.0%/u);
+  assert.match(card.card.body.elements[0].content, /示例分析师甲（lina）\*\*　Long 0\.0042%.*命中率 50\.0%/u);
   assert.match(text, /正式系统/u); // the group bot's keyword
   assert.deepEqual(card.card.body.elements.slice(1).map(b => b.behaviors[0].default_url), ['https://x/d', 'https://x/s']);
   assert.ok(Buffer.byteLength(text) < 18000);

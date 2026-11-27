@@ -18,8 +18,8 @@ HERE = Path(__file__).resolve().parent
 OWNER = '11111111-2222-4333-8444-555555555555'
 BINDINGS = {
     'simulationAccount': {'id': OWNER, 'confirmed': True},
-    'analystNamesByRole': {'analyst-a': 'lina', 'analyst-b': 'bin'},
-    'analystAliasesByRole': {'analyst-a': ['陈利娜'], 'analyst-b': ['陈斌']},
+    'analystNamesByRole': {'analyst-a': 'analyst-a', 'analyst-b': 'analyst-b'},
+    'analystAliasesByRole': {'analyst-a': ['示例分析师甲'], 'analyst-b': ['示例分析师乙']},
 }
 
 
@@ -42,8 +42,8 @@ def export(trades=True):
     tr = [{'id': '2279fcd0-dddd', 'recommendationId': '4cfcddf4-bbbb', 'analystKey': 'analyst-a', 'ticker': '00300.HK',
            'direction': 'buy', 'price': 102.8, 'quantity': 100, 'fee': 5, 'currency': 'HKD', 'executedAt': '2026-11-26T08:00:44Z'}]
     pos = [{'ticker': '00300.HK', 'shares': 100, 'avgCost': 102.85, 'realizedPnl': 0, 'currency': 'HKD', 'attributedOnly': True}]
-    return {'ownerId': OWNER, 'analysts': [{'key': 'analyst-a', 'analystId': 'x', 'displayName': 'lina'},
-                                           {'key': 'analyst-b', 'analystId': 'y', 'displayName': 'bin'}],
+    return {'ownerId': OWNER, 'analysts': [{'key': 'analyst-a', 'analystId': 'x', 'displayName': 'analyst-a'},
+                                           {'key': 'analyst-b', 'analystId': 'y', 'displayName': 'analyst-b'}],
             'recommendations': recs, 'trades': tr if trades else [], 'positions': pos if trades else []}
 
 
@@ -107,8 +107,8 @@ class GatherTest(unittest.TestCase):
 
     def test_maps_formal_records_with_fallback_prices_manual_fx_and_daoplatform_nav(self):
         size = {'fund': '1', 'report_date': '2026-11-27', 'fund_size_rmb': 203817593.7}
-        d = gather.gather(FakeSources(size=size), BINDINGS, self.day, fx_override='HKD=0.85004,USD=6.6643', approver='欧阳（PM）')
-        self.assertEqual(d['analysts'], ['陈利娜（lina）', '陈斌（bin）'])
+        d = gather.gather(FakeSources(size=size), BINDINGS, self.day, fx_override='HKD=0.85004,USD=6.6643', approver='示例 PM（PM）')
+        self.assertEqual(d['analysts'], ['示例分析师甲（analyst-a）', '示例分析师乙（analyst-b）'])
         self.assertEqual(d['nav'], 203817593.7)
         self.assertIn('DaoPlatform（2026-11-27）', d['navNote'])
         self.assertEqual(d['fx'], [['CNY', 1.0], ['HKD', 0.85004], ['USD', 6.6643]])
@@ -126,8 +126,8 @@ class GatherTest(unittest.TestCase):
         self.assertEqual(by['4cfcddf4']['approvedAt'], '2026-11-26 16:00:44')
         self.assertEqual((by['9f00aa11']['status'], by['9f00aa11']['adopted']), ('已撤回', '是'))
         self.assertEqual(d['trades'], [{'id': '2279fcd0', 'time': '2026-11-26 16:00:44', 'ticker': '300 HK', 'direction': 'Buy',
-                                        'quantity': 100, 'price': 102.8, 'close': 102.7, 'fee': 5, 'analyst': '陈利娜（lina）',
-                                        'recommendationId': '4cfcddf4', 'approver': '欧阳（PM）'}])
+                                        'quantity': 100, 'price': 102.8, 'close': 102.7, 'fee': 5, 'analyst': '示例分析师甲（analyst-a）',
+                                        'recommendationId': '4cfcddf4', 'approver': '示例 PM（PM）'}])
 
     def test_prefers_datagateway(self):
         sources = FakeSources(gateway={'0300.HK': (104.0, '2026-11-27', 'wind'), 'NVDA.N': (190.0, '2026-11-27', 'wind')},

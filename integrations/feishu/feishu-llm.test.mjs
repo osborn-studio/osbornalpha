@@ -221,7 +221,7 @@ test('group chat sends bounded history as untrusted text and returns a plain rep
     assert.equal(request.response_format,undefined);
     assert.deepEqual(request.messages.map(item=>item.role),['system','user']);
     assert.match(request.messages[0].content,/只回答聊天问题/);
-    assert.match(request.messages[0].content,/看不到实时行情/);
+    assert.match(request.messages[0].content,/持仓用 positions 查询，没有实时价格/);
     assert.match(request.messages[0].content,/问「哑巴？」时，轻松应一声/);
     const captured = JSON.parse(request.messages[1].content);
     assert.equal(captured.text,'[飞书标识] 成交登记怎么用？');
@@ -495,4 +495,24 @@ test('chat diagnostics expose fixed categories and HTTP status without provider 
       return true;
     });
   }
+});
+
+test('exchange-qualified numeric evidence grounds the selected listing without changing the issuer or the intent',async()=>{
+  async function read(text,fields,intent='proposal') {
+    const extract=createFeishuLlmExtractor(local,{formalTrades:true,fetchImpl:async()=>
+      completion(JSON.stringify({intent,fields}))});
+    return extract({...input,text,isSupplement:true,priorFields:{action:'buy',quantity:100}});
+  }
+  const name={value:'美的集团',evidence:'美的集团'};
+  const digits={value:'000333',evidence:'000333'};
+  const fields={ticker:digits,market:{value:'HK',evidence:'ch'},securityName:name};
+  assert.deepEqual((await read('000333 ch 美的集团',fields)).fields,
+    {ticker:digits,market:{value:'A',evidence:'000333 ch'},securityName:name});
+  assert.deepEqual((await read('300 HK 美的集团',{ticker:{value:'300 HK',evidence:'300 HK'},securityName:name})).fields,
+    {ticker:{value:'300',evidence:'300'},market:{value:'HK',evidence:'300 HK'},securityName:name});
+  for (const text of ['000333 后来提到 ch','1000333 ch','000333 cheap','000333 chengdu']) {
+    assert.equal((await read(text,{ticker:digits})).fields.market,undefined,text);
+  }
+  assert.equal((await read('港股 000333 CH',{ticker:digits,market:{value:'HK',evidence:'港股'}})).intent,'ambiguous');
+  assert.deepEqual(await read('000333 ch 美的集团',fields,'other'),{intent:'other',fields:{}});
 });

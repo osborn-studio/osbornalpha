@@ -9,6 +9,7 @@ import { openFeishuRuntime, readFeishuBindings } from './feishu-runtime.mjs';
 import { validateAnalystAliases } from './feishu-pairing.mjs';
 import {createPublishedPromptReader} from './feishu-prompt.mjs';
 import {startFeishuModelWarmth} from './feishu-model-warmth.mjs';
+import {createFeishuNavigation} from './feishu-navigation.mjs';
 import {createSiteLinks, withSiteLinks} from './feishu-shared-link.mjs';
 import {createXlsxReporter} from './feishu-xlsx-report.mjs';
 
@@ -35,7 +36,7 @@ export function createFormalFeishuWorkflow({sendMessage,wake,env = process.env,e
   const queryFormal=reportConfig?.chatId===config.chatId ? createFormalReader(env) : undefined;
   // Site links in every reply open as the simulation account once FEISHU_SHARED_LOGIN_URL is set.
   const send = withSiteLinks(makeReportSender(sendMessage,reportConfig),createSiteLinks(env));
-  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,sendMessage:send,
+  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,navigation:createFeishuNavigation(env),sendMessage:send,
     queryFormal,syncFormal,extractWithModel:extractor,respondToChat:chat,
     ...(searchSecurity && {searchSecurity})});
   const stopWarmth = startFeishuModelWarmth(env);

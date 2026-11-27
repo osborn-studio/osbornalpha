@@ -42,6 +42,8 @@ export interface DatagatewayKlineOptions {
   endDate?: string;
   /** Called once when the response is the close-only MarketDataItem shape (OHLC synthesised from closes, volume 0). */
   onCloseOnly?: () => void;
+  /** Scoring must verify the response's price basis instead of accepting an inferred default. */
+  requireExplicitAdjustment?: boolean;
   // /F4
 }
 
@@ -132,15 +134,21 @@ export function datagatewayDailyKlineBody(input: {
   const symbol = datagatewayWireSymbol(input.ticker, input.market);
   if (!symbol) return null;
   // F4: optional historical window; without startDate/endDate the body is exactly the previous one
-  const day = /^\d{4}-\d{2}-\d{2}$/;
-  if ((input.startDate !== undefined && !day.test(input.startDate)) || (input.endDate !== undefined && !day.test(input.endDate))) return null;
+  const isDay = (value: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const instant = new Date(value + 'T00:00:00Z');
+    return Number.isFinite(instant.getTime()) && instant.toISOString().slice(0, 10) === value;
+  };
+  if ((input.startDate !== undefined && !isDay(input.startDate)) || (input.endDate !== undefined && !isDay(input.endDate))) return null;
   const end = input.endDate !== undefined ? new Date(`${input.endDate}T00:00:00Z`) : new Date();
   const start = new Date(end);
   // The history API accepts calendar dates, so request a generous window to
   // obtain the requested number of trading sessions around holidays.
   start.setUTCDate(start.getUTCDate() - Math.max(30, input.limit * 3));
   const date = (value: Date) => value.toISOString().slice(0, 10);
-  return { symbols: [symbol], startDate: input.startDate ?? date(start), endDate: date(end), mode: 'strict_sync' };
+  const startDate = input.startDate ?? date(start);
+  const endDate = date(end);
+  return startDate <= endDate ? { symbols: [symbol], startDate, endDate, mode: 'strict_sync' } : null;
   // /F4
 }
 
@@ -215,7 +223,7 @@ export function parseDatagatewayDailyKline(
   payload: unknown,
   expectedAdjustment: KlineAdjustment,
   // F4
-  hooks: { onCloseOnly?: () => void } = {},
+  hooks: Pick<DatagatewayKlineOptions, 'onCloseOnly' | 'requireExplicitAdjustment'> & { acceptedSymbols?: string[] } = {},
   // /F4
 ): SourceKlineSeries {
   const root = record(payload);
@@ -229,27 +237,7 @@ export function parseDatagatewayDailyKline(
     : Array.isArray(payload)
       ? payload
       : field(data!, 'bars', 'items', 'kline', 'rows', 'records');
-  // The production DataGateway history contract returns MarketDataItem rows
-  // ({ symbol, date, value }) rather than OHLCV bars. Preserve that close
-  // history as a conservative candle series with zero volume.
-  if (Array.isArray(barsValue) && barsValue.some((item) => {
-    const row = record(item);
-    return !!row && field(row, 'value', 'value_date', 'close_price') !== undefined;
-  })) {
-    const closes = barsValue.map(parseCloseHistory).filter((bar): bar is SourceKlineBar => !!bar);
-    if (closes.length > 0) {
-      // F4
-      hooks.onCloseOnly?.();
-      // /F4
-      let previous = closes[0].close;
-      barsValue = closes.map((bar) => {
-        const open = previous;
-        const next = { ...bar, open, high: Math.max(open, bar.close), low: Math.min(open, bar.close) };
-        previous = bar.close;
-        return next;
-      });
-    }
-  }
+  const rawHistory: unknown[] = Array.isArray(barsValue) ? barsValue : [];
   if (data && !Array.isArray(barsValue) && barsValue === undefined) {
     const keyedRows = Object.entries(data).filter(([, value]) => record(value));
     if (keyedRows.length > 0) {
@@ -263,19 +251,54 @@ export function parseDatagatewayDailyKline(
       : item);
   }
   if (!Array.isArray(barsValue)) throw new KlineProviderError('protocol', 'Datagateway response is missing bars');
+  let rows: unknown[] = barsValue;
+  if (hooks.acceptedSymbols) {
+    for (const item of rows) {
+      const row = record(item);
+      const symbol = row && field(row, 'symbol', 'ticker', 'windcode', 's_info_windcode');
+      if (symbol != null && !hooks.acceptedSymbols.includes(String(symbol).trim().toUpperCase())) {
+        throw new KlineProviderError('invalid_data', 'Datagateway returned a different security');
+      }
+    }
+  }
+  // The production DataGateway history contract returns MarketDataItem rows
+  // ({ symbol, date, value }) rather than OHLCV bars. Preserve that close
+  // history as a conservative candle series with zero volume.
+  if (rawHistory.some((item) => {
+    const row = record(item);
+    return !!row && field(row, 'value', 'value_date', 'close_price') !== undefined;
+  })) {
+    const closes = rawHistory.map(parseCloseHistory).filter((bar): bar is SourceKlineBar => !!bar);
+    if (hooks.requireExplicitAdjustment && closes.length !== rawHistory.length) {
+      throw new KlineProviderError('invalid_data', 'Datagateway scoring history contains a missing or invalid close');
+    }
+    if (closes.length > 0) {
+      // F4
+      hooks.onCloseOnly?.();
+      // /F4
+      let previous = closes[0].close;
+      rows = closes.map((bar) => {
+        const open = previous;
+        const next = { ...bar, open, high: Math.max(open, bar.close), low: Math.min(open, bar.close) };
+        previous = bar.close;
+        return next;
+      });
+    }
+  }
   const volumeUnit = (data ? field(data, 'volume_unit', 'volumeUnit') : undefined)
     ?? (root ? field(root, 'volume_unit', 'volumeUnit') : undefined);
   if (volumeUnit !== undefined && String(volumeUnit).toLowerCase() !== 'shares') {
     throw new KlineProviderError('invalid_data', 'Datagateway volume must be denominated in shares');
   }
-  const adjustment = normalizeAdjustment(
-    (data ? field(data, 'adjustment') : undefined) ?? (root ? field(root, 'adjustment') : undefined),
-    expectedAdjustment,
-  );
+  const reportedAdjustment = (data ? field(data, 'adjustment') : undefined) ?? (root ? field(root, 'adjustment') : undefined);
+  if (hooks.requireExplicitAdjustment && (typeof reportedAdjustment !== 'string' || !reportedAdjustment.trim())) {
+    throw new KlineProviderError('invalid_data', 'Datagateway did not report the price adjustment');
+  }
+  const adjustment = normalizeAdjustment(reportedAdjustment, expectedAdjustment);
   if (adjustment !== expectedAdjustment) {
     throw new KlineProviderError('invalid_data', 'Datagateway adjustment does not match the requested series');
   }
-  return { source: 'datagateway', adjustment, volumeUnit: 'shares', bars: barsValue.map(parseBar) };
+  return { source: 'datagateway', adjustment, volumeUnit: 'shares', bars: rows.map(parseBar) };
 }
 
 async function readLimitedText(response: Response, maximumBytes: number): Promise<string> {
@@ -334,6 +357,7 @@ export async function fetchDatagatewayDailyKline(
       body: JSON.stringify(body),
       signal,
       cache: 'no-store',
+      ...(options.requireExplicitAdjustment && { redirect: 'error' }),
     });
     if (!response.ok) {
       const retryable = response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500;
@@ -355,7 +379,11 @@ export async function fetchDatagatewayDailyKline(
       throw new KlineProviderError('protocol', 'Datagateway response is invalid JSON');
     }
     // F4: forward the close-only signal
-    return parseDatagatewayDailyKline(payload, adjustment, { onCloseOnly: options.onCloseOnly });
+    return parseDatagatewayDailyKline(payload, adjustment, {
+      onCloseOnly: options.onCloseOnly,
+      requireExplicitAdjustment: options.requireExplicitAdjustment,
+      acceptedSymbols: options.requireExplicitAdjustment ? [ticker.trim().toUpperCase(), ...body.symbols] : undefined,
+    });
     // /F4
   } catch (error) {
     if (error instanceof KlineProviderError) throw error;

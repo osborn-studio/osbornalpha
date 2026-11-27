@@ -185,13 +185,16 @@ test('an explicit group publication can be requested by any mentioned human, inc
   assert.equal(first.receive(h.event(9,'同意','guest',{parentId:'old_pm_summary',directedToBot:false})).accepted,false);
   const resumed=flow(); await resumed.drain(); await resumed.drain();
   assert.equal(requests.length,4);
-  for (const q of requests) assert.deepEqual(q,{chatId:'group',expectedOwnerId:account,analystKeys:['analystB','analystC','analyst_a']});
+  const base={chatId:'group',expectedOwnerId:account,analystKeys:['analystB','analystC','analyst_a']};
+  assert.deepEqual(requests,[base,base,base,{...base,requesterId:'pm',includePositions:true}]);
   assert.equal(h.calls.length,0);assert.equal(h.sent.length,4);
   for (const reply of h.sent) assert.equal(reply.formalReport,true);
-  assert.equal(h.db.prepare("SELECT count(*) n FROM feishu_workflow_messages WHERE kind='group_report' AND status='sent' AND message_id IS NULL AND chat_source_id IS NULL").get().n,4);
+  assert.equal(h.db.prepare("SELECT count(*) n FROM feishu_workflow_messages WHERE kind='group_report' AND status='sent' AND message_id IS NULL AND chat_source_id IS NULL").get().n,3);
   assert.equal(observations.length,4);
   assert.ok(observations.every(row=>row.text==='生成一份报告' && row.readAction==='group_report' && !JSON.stringify(row).includes('群汇总')));
   assert.deepEqual(resumed.view().proposals,[]);
+  resumed.receive(h.event(11,'那 analystB 呢','pm'));await resumed.drain();
+  assert.deepEqual(h.calls,[{expectedOwnerId:account,analystKey:'analystB',sections:['recommendations','scores','trades','positions']}]);
 });
 
 test('an aggregate public job cannot outlive group membership changes, disabled reporting, or an uncertain webhook dispatch',async t=>{

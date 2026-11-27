@@ -1,4 +1,4 @@
-import { nonTickers, relatedSecurity } from './feishu-symbol-evidence.mjs';
+import { nonTickers, numericListingAt, relatedSecurity } from './feishu-symbol-evidence.mjs';
 import { MOCK_UNIVERSE } from '../../src/lib/data/mock.ts';
 import { inferCoreMarket, normalizeSecurityTicker } from '../../src/lib/securities/ticker.ts';
 import { beijingInputToISO, beijingInputValue } from './beijing-time.mjs';
@@ -219,9 +219,26 @@ export function resolveModelSecurity(text, quote, options = {}, expectedName) {
     const before = source.slice(0,index);
     const after = source.slice(index+evidence.length);
     if (relatedSecurity.test(after)) continue;
+    // A model may quote only the digits of an explicitly exchange-qualified
+    // listing. Verify the entire token in this occurrence before using it.
+    if (/^\d{1,6}$/u.test(evidence) && !/[A-Za-z\d.]$/u.test(before)) {
+      const suffix = /^\.(?:HK|SH|SZ|BJ|SS)(?![A-Za-z\d]|\.[A-Za-z\d])/iu.exec(after);
+      if (suffix && !amountBeforeCode.test(before) && !relatedSecurity.test(after.slice(suffix[0].length))) {
+        return resolveNamedSecurity(evidence + suffix[0],options.market);
+      }
+    }
     if (/^[A-Za-z\d][A-Za-z\d./-]*$/.test(evidence) &&
         (/[A-Za-z\d.]$/.test(before) || /^(?:[A-Za-z\d]|\.[A-Za-z\d])/.test(after))) continue;
-    if (/^\d+$/.test(evidence) && (amountBeforeCode.test(before) || amountAfterCode.test(after))) continue;
+    if (/^\d+$/.test(evidence)) {
+      if (amountBeforeCode.test(before) || amountAfterCode.test(after)) continue;
+      const listing = numericListingAt(source,index);
+      if (listing?.code === evidence) {
+        if (relatedSecurity.test(source.slice(index+listing.evidence.length))) continue;
+        if (options.market && options.market !== listing.market) invalid('证券代码与市场不一致，请明确交易市场及代码。');
+        const ticker = normalizeSecurityTicker(listing.code,listing.market);
+        return ticker ? {ticker,market:listing.market,securityName:undefined} : {};
+      }
+    }
     return resolveNamedSecurity(evidence,options.market);
   }
   return {};

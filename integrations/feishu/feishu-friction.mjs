@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import {formalReadSections,parseFeishuReadTool} from './feishu-read-tool.mjs';
 
 const contextTTL = 30 * 60_000;
 const incidentTTL = 14 * 24 * 60 * 60_000;
@@ -29,6 +30,16 @@ function scrub(value, names) {
   return text.trim().slice(0, 420);
 }
 
+// Reuse the same credential, URL and personal-identifier redaction for short
+// local-model excerpts of conversations already visible to this group.
+export function publicChatExcerpt(value) {
+  if (typeof value !== 'string') return '';
+  const source = value.normalize('NFKC');
+  if (/\bsk-[\w.-]{8,}|\beyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/u.test(source)) return '';
+  const scrubbed = scrub(source.replace(/\b[a-z][a-z\d+.-]*:\/\/[^\s，。；）]+/giu,'[已隐去]'),[]);
+  return scrubbed === '[已隐去敏感内容]' ? '' : scrubbed.slice(0,250);
+}
+
 function aliases(config, redactNames) {
   const values = [...redactNames, ...Object.values(config.analystNamesByRole ?? {}), ...Object.values(config.analystAliasesByRole ?? {}).flat(),
   ...Object.values(config.analystBySender ?? {})];
@@ -54,12 +65,12 @@ function fieldsOf(values, names, model = false) {
 const intents = new Set(['other', 'proposal', 'help', 'ambiguous', 'cancel']);
 const topics = new Set(['missing', 'usage', 'investment']);
 const modelErrorCodes = new Set(['MODEL_TIMEOUT', 'MODEL_TRANSPORT', 'MODEL_HTTP', 'MODEL_OUTPUT', 'MODEL_EMPTY', 'MODEL_TRUNCATED', 'MODEL_REPLY_BLOCKED']);
-const reportSections = new Set(['recommendations','scores','trades']);
 function readCategory(action) {
   if (action === null) return 'chat';
-  if (action === 'analyst_roster' || action === 'pending' || action === 'group_report' || reportSections.has(action)) return action;
-  if (action?.read === 'analyst_roster' || action?.read === 'pending' || action?.read === 'group_report') return action.read;
-  if (action?.read === 'formal_report' && action.sections?.length === 1 && reportSections.has(action.sections[0])) return action.sections[0];
+  if (action === 'analyst_roster' || action === 'pending' || action === 'group_report' || formalReadSections.includes(action)) return action;
+  const tool=parseFeishuReadTool(action);
+  if (tool?.read === 'analyst_roster' || tool?.read === 'pending' || tool?.read === 'group_report') return tool.read;
+  if (tool?.read === 'formal_report' && tool.sections.length === 1) return tool.sections[0];
   return undefined;
 }
 const safeKeys = keys => Array.isArray(keys) ? [...new Set(keys.filter(key => modelFields.has(key)))].sort() : undefined;

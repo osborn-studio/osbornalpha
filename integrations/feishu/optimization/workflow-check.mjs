@@ -107,7 +107,8 @@ function replay(example, packet, catalogues) {
   if (packet.intent==='ambiguous') return {route:'clarify_single_proposal'};
   const query = proposalSecurityQuery(text,packet,priorFields);
   try {
-    const result = evaluateProposal('A','回放分析师',text,receivedAt,[],priorFields,packet,query ? catalogues.get(query) ?? [] : undefined);
+    const result = evaluateProposal('A','回放分析师',text,receivedAt,[],priorFields,packet,
+      query ? catalogues.get(query) ?? [] : undefined, catalogues.get(priorFields.securityName));
     if (!result.body) {
       return {route:'request_details',missing:missingFields(result.fields),labels:result.missing,fields:result.fields};
     }
