@@ -58,6 +58,7 @@ FEISHU_LLM_FALLBACK_TIMEOUT_MS=10000
 
 - **数据。** 建议、PM 决策、成交和评分来自正式站 `/api/integrations/feishu/export`；收盘价和汇率来自本机 DataGateway（缺价时用正式站日线，缺汇率时用 `FEISHU_REPORT_FX`）；分母是 DaoPlatform 中 Fund 1 的规模（缺失时用 `FEISHU_REPORT_NAV`）。所用来源写在说明页。
 - **发送。** 报表存到正式站，群自定义机器人发一张卡片，带「下载 Excel」和「打开正式站」两个按钮，不占用应用接口额度。设置 `FEISHU_SHARED_LOGIN_URL` 后按钮经共享登录入口打开，群成员无需登录。
+- **正式站链接一律以模拟账户打开。** 设置 `FEISHU_SHARED_LOGIN_URL` 后，助手发出的每条消息里的 osbornalpha.com 页面链接（正式站、分析建议、我的投资等）都会改写成共享登录链接：打开时浏览器若登着别的账户，会切换为模拟账户再进入原页面。再设 `FEISHU_OPEN_LINKS_IN_FEISHU=true`，链接通过飞书 AppLink 在飞书独立窗口中打开（桌面端 7.5 及以上），不影响成员自己浏览器里的个人登录；手机端行为未经官方文档说明，启用前请实测。
 - **触发。** 已绑定的分析师或 PM 在群里 @助手「导出报表」，或每个交易日北京时间 16:30 后自动发送一次。手动执行 `npm run feishu:xlsx-report`。
 - **安装。** `sh integrations/feishu/xlsx-report/install.sh --schedule` 建立 Python 环境并安装定时任务。连接器环境中设置 `FEISHU_XLSX_REPORT_ENABLED=true` 后群内指令生效。
 

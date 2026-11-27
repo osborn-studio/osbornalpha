@@ -9,6 +9,7 @@ import { openFeishuRuntime, readFeishuBindings } from './feishu-runtime.mjs';
 import { validateAnalystAliases } from './feishu-pairing.mjs';
 import {createPublishedPromptReader} from './feishu-prompt.mjs';
 import {startFeishuModelWarmth} from './feishu-model-warmth.mjs';
+import {createSiteLinks, withSiteLinks} from './feishu-shared-link.mjs';
 import {createXlsxReporter} from './feishu-xlsx-report.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../../build/feishu/',import.meta.url));
@@ -32,7 +33,9 @@ export function createFormalFeishuWorkflow({sendMessage,wake,env = process.env,e
     console.error('正式查询的群播报配置无效，请重新配置后重启连接器。');
   }
   const queryFormal=reportConfig?.chatId===config.chatId ? createFormalReader(env) : undefined;
-  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,sendMessage:makeReportSender(sendMessage,reportConfig),
+  // Site links in every reply open as the simulation account once FEISHU_SHARED_LOGIN_URL is set.
+  const send = withSiteLinks(makeReportSender(sendMessage,reportConfig),createSiteLinks(env));
+  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,sendMessage:send,
     queryFormal,syncFormal,extractWithModel:extractor,respondToChat:chat,
     ...(searchSecurity && {searchSecurity})});
   const stopWarmth = startFeishuModelWarmth(env);

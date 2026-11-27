@@ -7,6 +7,7 @@ import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readReportDelivery} from './feishu-report-delivery.mjs';
+import {createSiteLinks} from './feishu-shared-link.mjs';
 import {signWebhook, validFeishuWebhook} from './feishu-webhook.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -111,9 +112,9 @@ export function createXlsxReporter({directory, env = process.env, runPython = de
     if (!response.ok || typeof body?.path !== 'string') throw Error(`正式站未保存报表（HTTP ${response.status}）。`);
     return body.path;
   }
+  const siteLinks = createSiteLinks(env);
   function links(path) {
-    const login = String(env.FEISHU_SHARED_LOGIN_URL || '').replace(/\/+$/u, '');
-    if (login) return {downloadUrl: `${login}?next=${encodeURIComponent(path)}`, siteUrl: `${login}?next=%2Fanalyst`};
+    if (siteLinks.active) return {downloadUrl: siteLinks.link(path), siteUrl: siteLinks.link('/analyst')};
     return {downloadUrl: origin + path, siteUrl: origin + '/analyst'};
   }
 

@@ -57,15 +57,23 @@ test('the card carries the key figures and two links within the custom bot limit
 });
 
 test('stores the workbook, then posts the card with shared-login links', async t => {
-  const h = harness(t, {env: {FEISHU_SHARED_LOGIN_URL: 'https://alpha.example/auth/go/' + 'k'.repeat(48)}});
+  const h = harness(t, {env: {FEISHU_SHARED_LOGIN_URL: 'https://osbornalpha.com/auth/go/' + 'k'.repeat(48)}});
   assert.deepEqual(await h.reporter.run(), {status: 'sent', name: '2026-11-27.xlsx'});
   const [put, post] = h.calls.fetch;
   assert.equal(put.url, 'https://alpha.example/api/integrations/feishu/reports/2026-11-27.xlsx');
   assert.equal(put.options.headers.authorization, 'Bearer ' + 'i'.repeat(40));
   assert.equal(post.url, hook.url);
   const [download, site] = post.body.card.body.elements.slice(1).map(b => b.behaviors[0].default_url);
-  assert.equal(download, 'https://alpha.example/auth/go/' + 'k'.repeat(48) + '?next=%2Fanalyst%2Freport%2Ffiles%2F2026-11-27.xlsx');
-  assert.equal(site, 'https://alpha.example/auth/go/' + 'k'.repeat(48) + '?next=%2Fanalyst');
+  assert.equal(download, 'https://osbornalpha.com/auth/go/' + 'k'.repeat(48) + '?next=%2Fanalyst%2Freport%2Ffiles%2F2026-11-27.xlsx');
+  assert.equal(site, 'https://osbornalpha.com/auth/go/' + 'k'.repeat(48) + '?next=%2Fanalyst');
+});
+
+test('with FEISHU_OPEN_LINKS_IN_FEISHU the card buttons open inside a Feishu window', async t => {
+  const h = harness(t, {env: {FEISHU_SHARED_LOGIN_URL: 'https://osbornalpha.com/auth/go/' + 'k'.repeat(48), FEISHU_OPEN_LINKS_IN_FEISHU: 'true'}});
+  await h.reporter.run();
+  const site = h.calls.fetch[1].body.card.body.elements[2].behaviors[0].default_url;
+  assert.equal(site, 'https://applink.feishu.cn/client/web_url/open?mode=window&url=' +
+    encodeURIComponent('https://osbornalpha.com/auth/go/' + 'k'.repeat(48) + '?next=%2Fanalyst'));
 });
 
 test('without a shared login link the card points at the site directly', async t => {
