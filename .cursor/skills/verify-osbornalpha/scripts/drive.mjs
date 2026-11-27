@@ -277,6 +277,19 @@ const journeys = {
     const vsync = await getJson('/api/cron/industry-vendor-sync?job=gildata-memberships');
     save(`auth-api-cron-industry-vendor-sync-${MODE}.json`, vsync);
     check('GET /api/cron/industry-vendor-sync (no CRON_SECRET) → 503 cron_unavailable', vsync.status === 503 && vsync.body?.error?.code === 'cron_unavailable', `${vsync.status} ${JSON.stringify(vsync.body)}`);
+    // Owner-scoped Feishu overview (#339): a machine GET that, like the simulation import, is only served with
+    // FEISHU_SIMULATION_INGEST_ENABLED=true; switched off it answers 404 not_found before any token check, in both modes.
+    const overview = await getJson('/api/integrations/feishu/overview');
+    save(`auth-api-feishu-overview-${MODE}.json`, overview);
+    check('GET /api/integrations/feishu/overview (ingest off) → 404 not_found', overview.status === 404 && overview.body?.error === 'not_found', `${overview.status} ${JSON.stringify(overview.body)}`);
+    // Public SW2021 vendor replay (#335) is licence-gated: with no licence row readable the access check fails closed → 403 unlicensed.
+    const replay = await getJson('/api/industries/vendor/replay');
+    save(`auth-api-industries-vendor-replay-${MODE}.json`, replay);
+    check('GET /api/industries/vendor/replay signed out → 403 unlicensed', replay.status === 403 && replay.body?.error?.code === 'unlicensed', `${replay.status} ${JSON.stringify(replay.body)}`);
+    // Analyst report board API (#341) needs a signed-in owner of the bound Feishu group.
+    const report = await getJson('/api/analyst/report');
+    save(`auth-api-analyst-report-${MODE}.json`, report);
+    check('GET /api/analyst/report signed out → 401 unauthenticated', report.status === 401 && report.body?.error === 'unauthenticated', `${report.status} ${JSON.stringify(report.body)}`);
     // Read-only /admin/sources (#331) is admin-only: signed out it lands on /login?next=/admin/sources in both modes
     // (gate mode: the middleware; guest mode: the page's own admin check redirects).
     await page.goto(BASE + '/admin/sources', { waitUntil: 'networkidle' });
@@ -293,11 +306,16 @@ const journeys = {
       for (const [from, next] of [['/portfolio', '/portfolio'], ['/macro', '/macro'], ['/today', '/macro'], ['/dashboard', '/macro'], ['/en/portfolio', '/portfolio'], ['/watchlist', '/watchlist'],
         // #208 return-destination sanitizing: arbitrary queries are dropped; only allowlisted
         // /intel/industries selectors survive (in fixed key order), also through the /en prefix.
-        ['/portfolio?s=00700.HK&token=x', '/portfolio'],
+        // #342: a single valid portfolio ticker `s` survives (normalized), other queries are dropped.
+        ['/portfolio?s=00700.HK&token=x', '/portfolio?s=00700.HK'],
+        ['/en/portfolio?s=000333.sz', '/portfolio?s=000333.SZ'],
+        ['/portfolio?s=00700.HK&s=NVDA', '/portfolio'],
         ['/intel/industries?metric=roe&scheme=sw2021&token=x', '/intel/industries?scheme=sw2021&metric=roe'],
         ['/en/intel/industries?view=table&level=9', '/intel/industries?view=table'],
         // Research hub and topics pages (#278/#273/#275) are protected (app) pages like the rest.
-        ['/intel', '/intel'], ['/intel/topics', '/intel/topics'], ['/intel/topics/ai-capex?asOf=x', '/intel/topics/ai-capex']]) {
+        ['/intel', '/intel'], ['/intel/topics', '/intel/topics'], ['/intel/topics/ai-capex?asOf=x', '/intel/topics/ai-capex'],
+        // Analyst report board (#341) is a protected (app) page.
+        ['/analyst/report', '/analyst/report']]) {
         await page.goto(BASE + from, { waitUntil: 'networkidle' });
         const u = new URL(page.url());
         check(`${from} → /login?next=${next}`, u.pathname === '/login' && u.searchParams.get('next') === next, page.url());
@@ -311,6 +329,20 @@ const journeys = {
         && new URL(page.url()).pathname === '/macro'
         && await page.getByRole('heading', { name: '宏观工作台', exact: true }).isVisible(), page.url());
       await shot(page, 'auth-today-guest');
+      // Guest (gate off): the SW2021 Chinese industry pages (#333/#335) fail closed to the licence-pending notice, no vendor numbers.
+      await page.goto(BASE + '/intel/industries?scheme=sw2021', { waitUntil: 'networkidle' });
+      check('guest /intel/industries?scheme=sw2021 shows the licence-pending notice', await page.getByText('中国行业数据授权待确认').first().isVisible(), page.url());
+      await shot(page, 'auth-industries-sw2021-guest');
+      // Guest (gate off): /analyst/report (#341) renders, its API answers 401, and the page asks to sign in with a link back.
+      // Not networkidle: the dev server keeps a connection open on this client page; wait for the alert instead.
+      await page.goto(BASE + '/analyst/report', { waitUntil: 'domcontentloaded', timeout: 120_000 });
+      // Next's route announcer is also role=alert, so wait on the board's own text, not on the role.
+      const loginText = page.getByText('请登录绑定的正式模拟账户查看报表。');
+      await loginText.waitFor({ timeout: 60_000 }).catch(() => {});
+      check('guest /analyst/report shows the sign-in alert linking /login?next=/analyst/report',
+        await loginText.isVisible().catch(() => false)
+        && await page.locator('[role="alert"] a[href="/login?next=/analyst/report"]').isVisible().catch(() => false), page.url());
+      await shot(page, 'auth-analyst-report-guest');
     }
     await ctx.close();
   },
