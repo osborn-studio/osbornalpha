@@ -17,6 +17,7 @@ from pathlib import Path
 
 import openpyxl
 
+import bitable
 import build
 import evaluate
 import gather
@@ -84,8 +85,10 @@ def main(argv=None):
         (out_dir / (name[:-5] + '.problems.txt')).write_text('\n'.join(problems), encoding='utf-8')
         print(json.dumps({'status': 'verify_failed', 'tradeDate': X.TRADE_DATE.isoformat(), 'problems': problems[:20]}, ensure_ascii=False))
         return 2
+    rows = out_dir / (name[:-5] + '.bitable.json')
+    rows.write_text(json.dumps(bitable.export(X, str(final)), ensure_ascii=False), encoding='utf-8')
     print(json.dumps({'status': 'ok', 'name': name, 'file': str(final.resolve()), 'tradeDate': X.TRADE_DATE.isoformat(),
-                      'groups': figures(str(final), X.ANALYSTS)}, ensure_ascii=False))
+                      'groups': figures(str(final), X.ANALYSTS), 'bitable': str(rows.resolve())}, ensure_ascii=False))
     return 0
 
 

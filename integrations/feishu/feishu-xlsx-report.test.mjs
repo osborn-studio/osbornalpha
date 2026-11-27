@@ -12,7 +12,7 @@ const groups = [
 ];
 const ok = file => ({code: 0, result: {status: 'ok', name: '2026-11-27.xlsx', file, tradeDate: '2026-11-27', groups}});
 
-function harness(t, {result, env = {}, at = '2026-11-27T08:40:00Z', delivery = hook} = {}) {
+function harness(t, {result, env = {}, at = '2026-11-27T08:40:00Z', delivery = hook, bitableCall} = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'xlsx-report-'));
   t.after(() => rmSync(dir, {recursive: true, force: true}));
   const file = join(dir, 'report.xlsx');
@@ -31,6 +31,7 @@ function harness(t, {result, env = {}, at = '2026-11-27T08:40:00Z', delivery = h
     readDelivery: () => delivery,
     now: () => clock,
     log: () => {},
+    ...(bitableCall && {bitableCall: () => bitableCall}),
   });
   return {reporter, calls, dir, setNow: value => { clock = new Date(value); }};
 }
@@ -123,4 +124,47 @@ test('only bound members addressing the bot start a report, once per event and m
   assert.equal(ask({eventId: 'ev2', senderId: 'ou_pm'}), true); // within a minute: acknowledged, not rerun
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(h.calls.python.length, 1);
+});
+
+test('mirrors the verified rows into the 多维表格 and adds its button, Excel link included', async t => {
+  const written = [];
+  const call = async (method, url, {data} = {}) => {
+    if (method === 'GET' && url.endsWith('/tables')) return {items: [], has_more: false};
+    if (method === 'POST' && url.endsWith('/tables')) return {table_id: 'tbl_' + data.table.name};
+    if (method === 'GET') return {items: [], has_more: false};
+    written.push({url, records: data.records});
+    return {};
+  };
+  const h = harness(t, {
+    env: {FEISHU_REPORT_BITABLE_URL: 'https://osborn.feishu.cn/base/bascnAbCdEfGhIjKlMn?table=tblx'},
+    bitableCall: call,
+    result: file => {
+      const rows = join(h.dir, 'rows.json');
+      writeFileSync(rows, JSON.stringify({reportDate: '2026-11-27', tables: [
+        {name: '每日汇总', key: '汇总键', replace: false, fields: [{field_name: '汇总键', type: 1}, {field_name: 'Excel', type: 15}], rows: [{汇总键: '2026-11-27 全组'}]},
+      ]}));
+      return {code: 0, result: {...ok(file).result, bitable: rows}};
+    },
+  });
+  assert.equal((await h.reporter.run()).status, 'sent');
+  assert.deepEqual(written, [{url: '/open-apis/bitable/v1/apps/bascnAbCdEfGhIjKlMn/tables/tbl_每日汇总/records/batch_create',
+    records: [{fields: {汇总键: '2026-11-27 全组', Excel: {text: '2026-11-27.xlsx', link: 'https://alpha.example/analyst/report/files/2026-11-27.xlsx'}}}]}]);
+  const buttons = h.calls.fetch.at(-1).body.card.body.elements.slice(1);
+  assert.deepEqual(buttons.map(b => b.text.content), ['下载 Excel', '查看多维表格', '打开正式站']);
+  assert.equal(buttons[1].behaviors[0].default_url, 'https://osborn.feishu.cn/base/bascnAbCdEfGhIjKlMn');
+});
+
+test('a failed 多维表格 update still sends the card, with a note', async t => {
+  const h = harness(t, {
+    env: {FEISHU_REPORT_BITABLE_URL: 'https://osborn.feishu.cn/base/bascnAbCdEfGhIjKlMn'},
+    bitableCall: async () => { throw Object.assign(Error('forbidden'), {code: 91403}); },
+    result: file => {
+      const rows = join(h.dir, 'rows.json');
+      writeFileSync(rows, JSON.stringify({reportDate: '2026-11-27', tables: []}));
+      return {code: 0, result: {...ok(file).result, bitable: rows}};
+    },
+  });
+  assert.equal((await h.reporter.run()).status, 'sent');
+  const content = h.calls.fetch.at(-1).body.card.body.elements[0].content;
+  assert.match(content, /多维表格本次未能更新，请以 Excel 为准。/u);
 });

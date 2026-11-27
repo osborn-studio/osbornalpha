@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import bitable
 import build
 import evaluate
 import gather
@@ -183,6 +184,44 @@ class WorkbookTest(unittest.TestCase):
                             {'ticker': '700 HK', 'shares': 1, 'avgCost': 1, 'realizedPnl': 0, 'attributedOnly': False}]
         _, problems, _ = self.pipeline(model.from_dict(raw))
         self.assertEqual(problems, ['formal position 300 HK avg cost: want 99.0, got 102.804'])
+
+
+class BitableTest(unittest.TestCase):
+    def test_rows_mirror_the_workbook_and_fit_the_schema(self):
+        data = model.load(HERE / 'fixtures' / 'example.json')
+        with tempfile.TemporaryDirectory() as tmp:
+            built, final = Path(tmp) / 'b.xlsx', Path(tmp) / 'f.xlsx'
+            build.build(data, str(built))
+            evaluate.evaluate(str(built), str(final))
+            payload = bitable.export(data, str(final))
+            groups = run.figures(str(final), data.ANALYSTS)
+        tables = {t['name']: t for t in payload['tables']}
+        self.assertEqual(list(tables), ['每日汇总', '当前持仓', '模拟成交', '建议台账'])
+        types = {1: str, 2: (int, float), 3: str, 5: int}
+        for t in payload['tables']:
+            declared = {f['field_name']: f['type'] for f in t['fields']}
+            self.assertEqual(t['fields'][0]['field_name'], t['key'])  # the key is the primary field
+            keys = [r[t['key']] for r in t['rows']]
+            self.assertEqual(len(keys), len(set(keys)), t['name'])
+            for r in t['rows']:
+                for field, value in r.items():
+                    self.assertIsInstance(value, types[declared[field]], (t['name'], field))
+        pooled = tables['每日汇总']['rows'][0]
+        self.assertEqual(pooled['汇总键'], '2026-11-26 全组')
+        self.assertAlmostEqual(pooled['Long（%）'], groups[0]['long'] * 100)
+        self.assertEqual((pooled['持仓只数'], pooled['已采纳'], pooled['模拟成交笔数']), (5, 9, 9))
+        self.assertEqual(len(tables['每日汇总']['rows']), 4)
+        held = {r['持仓键']: r for r in tables['当前持仓']['rows']}
+        self.assertNotIn('全组 NVDA US', held)  # closed positions are not current holdings
+        self.assertEqual((held['全组 1810 HK']['股数'], held['分析师A 1810 HK']['股数'], held['分析师C 1810 HK']['股数']), (30000, 20000, 10000))
+        self.assertEqual(len(tables['模拟成交']['rows']), 9)
+        sold = next(r for r in tables['模拟成交']['rows'] if r['成交编号'] == 't07')
+        self.assertEqual(sold['方向'], '卖出')
+        self.assertGreater(sold['已实现盈亏·分析师（元）'], 0)
+        recs = {r['建议编号']: r for r in tables['建议台账']['rows']}
+        self.assertEqual(recs['r10']['状态'], '已撤回')
+        self.assertNotIn('目标价', recs['r05'])  # '-' in the workbook stays blank
+        self.assertEqual(recs['r01']['提交时间'], bitable.ms(dt.datetime(2026, 10, 20, 10, 5)))
 
 
 if __name__ == '__main__':

@@ -63,10 +63,11 @@ FEISHU_LLM_FALLBACK_TIMEOUT_MS=10000
 - **数据。** 建议、PM 决策、成交和评分来自正式站 `/api/integrations/feishu/export`；收盘价和汇率来自本机 DataGateway（缺价时用正式站日线，缺汇率时用 `FEISHU_REPORT_FX`）；分母是 DaoPlatform 中 Fund 1 的规模（缺失时用 `FEISHU_REPORT_NAV`）。所用来源写在说明页。
 - **发送。** 报表存到正式站，群自定义机器人发一张卡片，带「下载 Excel」和「打开正式站」两个按钮，不占用应用接口额度。设置 `FEISHU_SHARED_LOGIN_URL` 后按钮经共享登录入口打开，群成员无需登录。
 - **正式站链接一律以模拟账户打开。** 设置 `FEISHU_SHARED_LOGIN_URL` 后，助手发出的每条消息里的 osbornalpha.com 页面链接（正式站、分析建议、我的投资等）都会改写成共享登录链接：打开时浏览器若登着别的账户，会切换为模拟账户再进入原页面。再设 `FEISHU_OPEN_LINKS_IN_FEISHU=true`，链接通过飞书 AppLink 在飞书独立窗口中打开（桌面端 7.5 及以上），不影响成员自己浏览器里的个人登录；手机端行为未经官方文档说明，启用前请实测。
+- **多维表格。** 设置 `FEISHU_REPORT_BITABLE_URL`（云空间中的多维表格链接，`…/base/<app_token>`）后，每份核对通过的报表同时写入该多维表格：每日汇总（按日期与范围累积）、当前持仓（每次覆盖）、模拟成交与建议台账（按编号更新）。数据从已核对的 Excel 中读出；首次运行自动建表建字段，之后只写有变化的记录，卡片增加「查看多维表格」按钮。应用需开通多维表格权限并被加为该多维表格的可编辑协作者；写入失败时卡片照常发送并注明以 Excel 为准。占比类字段以百分点保存四位小数（0.0042 即 0.0042%）。
 - **触发。** 已绑定的分析师或 PM 在群里 @助手「导出报表」，或每个交易日北京时间 16:30 后自动发送一次。手动执行 `npm run feishu:xlsx-report`。
 - **安装。** `sh integrations/feishu/xlsx-report/install.sh --schedule` 建立 Python 环境并安装定时任务。连接器环境中设置 `FEISHU_XLSX_REPORT_ENABLED=true` 后群内指令生效。
 
-`build/feishu/feishu-app.env` 中的相关设置：`DATAGATEWAY_TOKEN`、`DAOPLATFORM_FUND_SIZE_TOKEN`、`FEISHU_REPORT_FUND`（默认 `1`）、`FEISHU_REPORT_APPROVER_LABEL`（默认 `PM`）、`FEISHU_SHARED_LOGIN_URL`。正式站需设置 `FEISHU_SHARED_LOGIN_TOKEN`（至少 40 位随机字符）才开放共享登录；外泄时更换它，并调用 `POST /api/integrations/feishu/shared-login/revoke` 让已登录的浏览器全部下线。
+`build/feishu/feishu-app.env` 中的相关设置：`FEISHU_REPORT_BITABLE_URL`、`DATAGATEWAY_TOKEN`、`DAOPLATFORM_FUND_SIZE_TOKEN`、`FEISHU_REPORT_FUND`（默认 `1`）、`FEISHU_REPORT_APPROVER_LABEL`（默认 `PM`）、`FEISHU_SHARED_LOGIN_URL`。正式站需设置 `FEISHU_SHARED_LOGIN_TOKEN`（至少 40 位随机字符）才开放共享登录；外泄时更换它，并调用 `POST /api/integrations/feishu/shared-login/revoke` 让已登录的浏览器全部下线。
 
 ## 本机 OStag 群务
 

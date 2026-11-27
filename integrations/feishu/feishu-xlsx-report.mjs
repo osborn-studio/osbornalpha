@@ -6,6 +6,7 @@ import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {bitableTarget, larkBitableCall, syncBitable} from './feishu-bitable-report.mjs';
 import {readReportDelivery} from './feishu-report-delivery.mjs';
 import {createSiteLinks} from './feishu-shared-link.mjs';
 import {signWebhook, validFeishuWebhook} from './feishu-webhook.mjs';
@@ -31,7 +32,7 @@ const pct = (value, digits) => typeof value === 'number' ? (value * 100).toFixed
 const count = value => typeof value === 'number' ? String(Math.round(value)) : '—';
 const plain = text => String(text).replace(/[*_~`<>[\]]/gu, ' ');
 
-export function reportCard({tradeDate, groups}, {downloadUrl, siteUrl}) {
+export function reportCard({tradeDate, groups}, {downloadUrl, siteUrl, bitableUrl, bitableNote}) {
   const [pooled, ...analysts] = groups;
   const lines = [
     `**全组**　Long ${pct(pooled.long, 4)}｜持仓 ${count(pooled.held)} 只｜名义 ${money(pooled.notional)}`,
@@ -41,7 +42,8 @@ export function reportCard({tradeDate, groups}, {downloadUrl, siteUrl}) {
     '',
     ...analysts.map(a => `**${plain(a.label)}**　Long ${pct(a.long, 4)}｜持仓 ${count(a.held)} 只｜未实现 ${money(a.unrealized)}｜命中率 ${pct(a.hitRate, 1)}`),
     '',
-    '数据来自正式系统；Excel 含 summary、Trade、建议台账与说明页。',
+    '数据来自正式系统；Excel 含 summary、Trade、建议台账与说明页' + (bitableUrl ? '，多维表格按日累积汇总、持仓、成交与建议。' : '。'),
+    ...(bitableNote ? [bitableNote] : []),
   ];
   const button = (text, url, type) => ({tag: 'button', text: {tag: 'plain_text', content: text}, type,
     behaviors: [{type: 'open_url', default_url: url}]});
@@ -51,6 +53,7 @@ export function reportCard({tradeDate, groups}, {downloadUrl, siteUrl}) {
     body: {elements: [
       {tag: 'markdown', content: lines.join('\n')},
       button('下载 Excel', downloadUrl, 'primary'),
+      ...(bitableUrl ? [button('查看多维表格', bitableUrl, 'default')] : []),
       button('打开正式站', siteUrl, 'default'),
     ]},
   }};
@@ -83,7 +86,7 @@ function defaultRunPython(args, {env, python}) {
 }
 
 export function createXlsxReporter({directory, env = process.env, runPython = defaultRunPython, fetchImpl = fetch,
-  readDelivery = readReportDelivery, now = () => new Date(), log = console.log} = {}) {
+  readDelivery = readReportDelivery, now = () => new Date(), log = console.log, bitableCall = () => larkBitableCall(env)} = {}) {
   const outDir = resolve(env.FEISHU_REPORT_OUT_DIR || join(root, 'build', 'reports', 'xlsx'));
   const ledger = join(outDir, 'sent.json');
   const python = env.FEISHU_REPORT_PYTHON || join(root, 'build', 'feishu', 'xlsx-venv', 'bin', 'python');
@@ -118,6 +121,27 @@ export function createXlsxReporter({directory, env = process.env, runPython = de
     return {downloadUrl: origin + path, siteUrl: origin + '/analyst'};
   }
 
+  // The 多维表格 is a view of the same verified workbook; if it cannot be updated the card still goes out.
+  async function mirror(result, downloadUrl) {
+    let target;
+    try { target = bitableTarget(env); } catch (error) {
+      log('多维表格配置无效：' + error.message);
+      return {};
+    }
+    if (!target || !result.bitable) return {};
+    try {
+      const payload = JSON.parse(readFileSync(result.bitable, 'utf8'));
+      for (const table of payload.tables) {
+        if (table.name === '每日汇总') for (const row of table.rows) row.Excel = {text: result.name, link: downloadUrl};
+      }
+      await syncBitable({call: bitableCall(), appToken: target.appToken, payload, statePath: join(directory, 'feishu-bitable-state.json')});
+      return {bitableUrl: target.url};
+    } catch (error) {
+      log('多维表格同步失败：' + error.message);
+      return {bitableUrl: target.url, bitableNote: '多维表格本次未能更新，请以 Excel 为准。'};
+    }
+  }
+
   async function produce({scheduled, date}) {
     const config = webhook();
     const clock = beijingClock(now());
@@ -137,7 +161,8 @@ export function createXlsxReporter({directory, env = process.env, runPython = de
       return {status: result.status, error: reason};
     }
     const path = await upload(result.file, result.name);
-    await postWebhook(config, reportCard(result, links(path)), fetchImpl);
+    const card = {...links(path), ...await mirror(result, links(path).downloadUrl)};
+    await postWebhook(config, reportCard(result, card), fetchImpl);
     if (scheduled) markSent(result.tradeDate, result.name);
     log(`飞书模拟组合报告已发送：${result.name}`);
     return {status: 'sent', name: result.name};
