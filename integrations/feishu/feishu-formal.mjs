@@ -9,6 +9,9 @@ import { openFeishuRuntime, readFeishuBindings } from './feishu-runtime.mjs';
 import { validateAnalystAliases } from './feishu-pairing.mjs';
 import {createPublishedPromptReader} from './feishu-prompt.mjs';
 import {startFeishuModelWarmth} from './feishu-model-warmth.mjs';
+import {createFeishuNavigation} from './feishu-navigation.mjs';
+import {createSiteLinks, withSiteLinks} from './feishu-shared-link.mjs';
+import {createXlsxReporter} from './feishu-xlsx-report.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../../build/feishu/',import.meta.url));
 
@@ -31,16 +34,21 @@ export function createFormalFeishuWorkflow({sendMessage,wake,env = process.env,e
     console.error('正式查询的群播报配置无效，请重新配置后重启连接器。');
   }
   const queryFormal=reportConfig?.chatId===config.chatId ? createFormalReader(env) : undefined;
-  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,sendMessage:makeReportSender(sendMessage,reportConfig),
+  // Site links in every reply open as the simulation account once FEISHU_SHARED_LOGIN_URL is set.
+  const send = withSiteLinks(makeReportSender(sendMessage,reportConfig),createSiteLinks(env));
+  const workflow = openFeishuRuntime(directory,{assistantEnv:env,wake,navigation:createFeishuNavigation(env),sendMessage:send,
     queryFormal,syncFormal,extractWithModel:extractor,respondToChat:chat,
     ...(searchSecurity && {searchSecurity})});
   const stopWarmth = startFeishuModelWarmth(env);
   const close = () => { stopWarmth(); return workflow.close(); };
-  if (wake) return {...workflow,close,drainBackground:workflow.tickRecaps};
+  // 「@助手 导出报表」 starts the Excel report (posted by the group's custom bot) instead of a model reply.
+  const xlsx = env.FEISHU_XLSX_REPORT_ENABLED === 'true' ? createXlsxReporter({directory,env}) : null;
+  const receive = event => xlsx?.handle(event,readFeishuBindings(directory)) ? {accepted:true} : workflow.receive(event);
+  if (wake) return {...workflow,receive,close,drainBackground:workflow.tickRecaps};
   if (env.OSBORN_FEISHU_LOCAL_ASSISTANT === 'true') {
-    return {...workflow,close,async drainBackground() {
+    return {...workflow,receive,close,async drainBackground() {
       await Promise.all([workflow.drainChat(),workflow.drainDemo(),workflow.drainMembership(),workflow.tickRecaps()]);
     }};
   }
-  return {...workflow,close,...(chat && {drainBackground:workflow.drainChat})};
+  return {...workflow,receive,close,...(chat && {drainBackground:workflow.drainChat})};
 }

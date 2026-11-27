@@ -100,6 +100,21 @@ test('requires explicit gateway price basis, the requested security and a valid 
   assert.throws(() => parse({...closeData, adjustment:'qfq'}), /adjustment does not match/);
   assert.equal(parse({...closeData, adjustment:'raw'}).bars[0].close, 123.45);
   assert.throws(() => parseReplayGatewayHistory({...closeData, adjustment:'raw'}, 'none', ['MSFT']), /different security/);
+  const columns = {
+    adjustment:'raw',
+    data:{
+      fields:['date','symbol','open','high','low','close','volume','value'],
+      bars:[['2026-06-16','AAPL',122,125,121,123.45,2000,123.45]],
+    },
+  };
+  assert.equal(parse(columns).bars[0].open,122);
+  assert.throws(() => parseReplayGatewayHistory(columns,'none',['MSFT']),/different security/);
+  const keyed = {
+    adjustment:'raw',
+    data:{'2026-06-16':{symbol:'AAPL',open:122,high:125,low:121,close:123.45,volume:2000}},
+  };
+  assert.equal(parse(keyed).bars[0].open,122);
+  assert.throws(() => parseReplayGatewayHistory(keyed,'none',['MSFT']),/different security/);
   assert.throws(() => parse({adjustment:'raw', data:[...closeData.data, {date:'2026-06-17', value:null}]}), /missing or invalid close/);
 });
 
