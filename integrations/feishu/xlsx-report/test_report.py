@@ -93,6 +93,15 @@ class CodesTest(unittest.TestCase):
         self.assertEqual(gather.beijing('2026-11-26T16:00:44+08:00'), '2026-11-26 16:00:44')
 
 
+class DefaultDayTest(unittest.TestCase):
+    def test_uses_today_only_after_the_close(self):
+        at = lambda text: dt.datetime.fromisoformat(text).replace(tzinfo=gather.BJ)
+        self.assertEqual(run.default_day(at('2026-11-27 16:30')), '2026-11-27')
+        self.assertEqual(run.default_day(at('2026-11-27 11:30')), '2026-11-26')
+        self.assertEqual(run.default_day(at('2026-11-30 09:00')), '2026-11-27')  # Monday morning -> Friday
+        self.assertEqual(run.default_day(at('2026-11-29 20:00')), '2026-11-29')  # a scheduled run skips weekends itself
+
+
 class GatherTest(unittest.TestCase):
     day = dt.date(2026, 11, 27)
 

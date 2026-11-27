@@ -27,6 +27,19 @@ FIELDS = {5: 'long', 7: 'gross', 9: 'held', 10: 'notional', 11: 'unrealized', 12
           14: 'adopted', 15: 'withdrawn', 16: 'trades', 17: 'hitRate', 18: 'score'}
 
 
+def default_day(now):
+    """Report date: today once the A/HK sessions have closed (16:30 Beijing), else the previous weekday.
+
+    Before the close the daily bar of today is an intraday price, not a close.
+    """
+    day = now.date()
+    if now.hour * 60 + now.minute < 16 * 60 + 30:
+        day -= dt.timedelta(days=1)
+        while day.weekday() >= 5:
+            day -= dt.timedelta(days=1)
+    return day.isoformat()
+
+
 def figures(path, analysts):
     s = openpyxl.load_workbook(path, data_only=True)['summary']
     groups, _, _ = build.layout(analysts)
@@ -50,7 +63,7 @@ def main(argv=None):
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now(gather.BJ)
-    day = args.date or now.date().isoformat()
+    day = args.date or default_day(now)
     name = f'{day}.xlsx' if args.scheduled else f'{day}-{now:%H%M}.xlsx'
 
     data_path = Path(args.data) if args.data else out_dir / (name[:-5] + '.json')
