@@ -52,6 +52,17 @@ FEISHU_LLM_FALLBACK_TIMEOUT_MS=10000
 
 在连接器所在 Mac 的项目目录执行 `npm run feishu:report`，可通过现有只读接口生成 `build/reports/osborn-analyst-report.html` 与同名 Markdown 报告。HTML 可离线打开，包含生成时的群数据。快照中的总数覆盖完整历史，每位分析师每类最多列最近五条明细。再次执行命令即可取回最新数据。
 
+## Excel 模拟组合报告
+
+报表按基金 summary 表的版式汇总群内已绑定分析师的建议与模拟成交：summary（全组与各分析师的持仓、Exp、盈亏、命中率）、Trade（逐笔成交与正式系统同口径的移动平均成本）、建议台账与说明页。表内数字都是公式；生成后先缓存公式结果，再逐格独立重算，并与正式系统持仓核对，任何不一致都不发送。
+
+- **数据。** 建议、PM 决策、成交和评分来自正式站 `/api/integrations/feishu/export`；收盘价和汇率来自本机 DataGateway（缺价时用正式站日线，缺汇率时用 `FEISHU_REPORT_FX`）；分母是 DaoPlatform 中 Fund 1 的规模（缺失时用 `FEISHU_REPORT_NAV`）。所用来源写在说明页。
+- **发送。** 报表存到正式站，群自定义机器人发一张卡片，带「下载 Excel」和「打开正式站」两个按钮，不占用应用接口额度。设置 `FEISHU_SHARED_LOGIN_URL` 后按钮经共享登录入口打开，群成员无需登录。
+- **触发。** 已绑定的分析师或 PM 在群里 @助手「导出报表」，或每个交易日北京时间 16:30 后自动发送一次。手动执行 `npm run feishu:xlsx-report`。
+- **安装。** `sh integrations/feishu/xlsx-report/install.sh --schedule` 建立 Python 环境并安装定时任务。连接器环境中设置 `FEISHU_XLSX_REPORT_ENABLED=true` 后群内指令生效。
+
+`build/feishu/feishu-app.env` 中的相关设置：`DATAGATEWAY_TOKEN`、`DAOPLATFORM_FUND_SIZE_TOKEN`、`FEISHU_REPORT_FUND`（默认 `1`）、`FEISHU_REPORT_APPROVER_LABEL`（默认 `PM`）、`FEISHU_SHARED_LOGIN_URL`。正式站需设置 `FEISHU_SHARED_LOGIN_TOKEN`（至少 40 位随机字符）才开放共享登录；外泄时更换它，并调用 `POST /api/integrations/feishu/shared-login/revoke` 让已登录的浏览器全部下线。
+
 ## 本机 OStag 群务
 
 连接器的 `OSBORN_FEISHU_LOCAL_ASSISTANT=true` 启用本机群务。设置 `OSTAG_PROJECT_DIR` 为 OStag 仓库绝对路径、`OSTAG_PYTHON` 为本机 Python 3 解释器。连接器和本机 Demo 使用同一个 `REPLAY_DATA_DIR` 与 `REPLAY_PORT`。在 Demo 服务上设置 `REPLAY_FEISHU_CONNECTOR_DIR` 指向现役连接器的绑定与 SQLite 目录。新成员的绑定和登记保存在本机 Demo，已有正式成员按原绑定登记。OStag 通过本机标准输入读取单条指令，日常对话和建议继续使用连接器的模型。
